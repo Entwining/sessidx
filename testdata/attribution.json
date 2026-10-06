@@ -1,0 +1,21 @@
+{
+  "claude": [
+    {"type":"assistant","uuid":"delegated-first","sessionId":"delegated","isSidechain":true,"message":{"role":"assistant","model":"real-model","content":[{"type":"tool_use","id":"denied-call","name":"Bash","input":{"command":"rg safe src"}}]}},
+    {"type":"user","uuid":"denied-result","sessionId":"delegated","toolDenialKind":"automode-blocked","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"denied-call","is_error":true,"content":"synthetic classifier explanation"}]}},
+    {"type":"user","uuid":"hook-result","sessionId":"delegated","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"other-call","is_error":true,"content":"Error: PreToolUse:Bash hook error: DENIED: rg has no --include flag. Filter files with -g GLOB."}]}},
+    {"type":"user","uuid":"quoted-denial","sessionId":"delegated","message":{"role":"user","content":"Script error: Command blocked by PreToolUse hook: quoted user example"}}
+  ],
+  "codex": [
+    {"type":"session_meta","payload":{"id":"child-thread","session_id":"other-id","cwd":"/synthetic","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread"}}}}},
+    {"type":"response_item","payload":{"type":"message","id":"injected","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\nSynthetic fallback instructions"}]}},
+    {"type":"turn_context","payload":{"model":"context-model"}},
+    {"type":"response_item","metadata":{"guardian_sources":["synthetic-overlay"]},"payload":{"type":"message","id":"retry-one","role":"assistant","content":[{"type":"output_text","text":"same retry text"}]}},
+    {"type":"response_item","payload":{"type":"message","id":"retry-two","role":"assistant","content":[{"type":"output_text","text":"same retry text"}]}}
+  ],
+  "pi": [
+    {"type":"session","id":"pi-child","cwd":"/synthetic","parentSession":"pi-parent"},
+    {"type":"model_change","modelId":"pi-current"},
+    {"type":"message","id":"pi-result","parentId":"pi-parent-entry","message":{"role":"toolResult","toolCallId":"pi-call","isError":true,"content":[{"type":"text","text":"rg has no --include flag. Filter files with -g GLOB."}],"details":{"calls":[{"id":"nested-one","name":"bash","status":"error"}]},"nestedCalls":{"calls":[{"id":"nested-two","name":"bash","status":"error"}]}}},
+    {"type":"context_edit","id":"edit-record","parentId":"pi-parent-entry"}
+  ]
+}

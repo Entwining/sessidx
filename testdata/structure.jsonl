@@ -1,0 +1,6 @@
+{"type":"assistant","uuid":"fragment-one","sessionId":"claude-structure","message":{"id":"shared-message","role":"assistant","model":"claude-real","content":[{"type":"text","text":"first fragment"}]}}
+{"type":"assistant","uuid":"fragment-two","sessionId":"claude-structure","message":{"id":"shared-message","role":"assistant","model":"claude-real","content":[{"type":"tool_use","id":"struct-call","name":"Bash","input":{"command":"rg structure src"}}]}}
+{"type":"assistant","uuid":"empty","sessionId":"claude-structure","message":{"id":"empty-message","role":"assistant","model":"<synthetic>","content":[]}}
+{"type":"user","uuid":"compact","isCompactSummary":true,"sessionId":"claude-structure","message":{"role":"user","content":"synthetic summary context"}}
+{"type":"user","uuid":"actual-user","sessionId":"claude-structure","message":{"role":"user","content":"same text stays a separate attempt"}}
+{"type":"user","uuid":"other-user","sessionId":"claude-structure","message":{"role":"user","content":"same text stays a separate attempt"}}

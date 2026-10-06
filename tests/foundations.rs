@@ -59,7 +59,7 @@ fn pi_model_tool_call_and_camel_case_flag() {
             .count(),
         1
     );
-    assert_eq!(es.iter().filter(|e| e.ok.is_none()).count(), 2);
+    assert_eq!(es.iter().filter(|e| e.ok.is_none()).count(), 5);
 }
 
 fn snapshot(store: &Store) -> Vec<String> {
@@ -120,6 +120,15 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
         let mut clean = Store::open(&dir.path().join(format!("clean-{i}.db"))).unwrap();
         clean.refresh(&roots, true, None).unwrap();
         assert_eq!(got, snapshot(&clean));
+        let matches = sessidx::query::search(
+            &store.db,
+            "太长",
+            &sessidx::query::Filters::default(),
+            20,
+            0,
+        )
+        .unwrap();
+        assert_eq!(matches.len(), usize::from(data.contains("太长")));
         let raw = fs::read(&path).unwrap();
         let ranges: Vec<(usize, usize, usize)> = store
             .db
@@ -136,4 +145,108 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
             );
         }
     }
+}
+
+#[test]
+fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.jsonl");
+    let data = format!(
+        "{}\n",
+        serde_json::json!({"type":"message","message":{"role":"user","content":"oldword"},"padding":"x".repeat(5000)})
+    );
+    fs::write(&path, &data).unwrap();
+    let roots = [Root {
+        harness: "pi".into(),
+        path: dir.path().into(),
+    }];
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    store.refresh(&roots, false, None).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    fs::write(&path, data.replace("oldword", "newword")).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    store.refresh(&roots, false, None).unwrap();
+    let mut clean = Store::open(&dir.path().join("clean.db")).unwrap();
+    clean.refresh(&roots, true, None).unwrap();
+    assert_eq!(snapshot(&store), snapshot(&clean));
+}
+
+#[test]
+fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.jsonl");
+    let first = "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n";
+    let tail = "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"second\"}}";
+    fs::write(&path, format!("{first}{tail}")).unwrap();
+    let roots = [Root {
+        harness: "pi".into(),
+        path: dir.path().into(),
+    }];
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    let r = store.refresh(&roots, false, None).unwrap();
+    assert!(!r.stale);
+    assert_eq!(r.deferred_tails, 1);
+    assert_eq!(r.records, 1);
+    let r = store.refresh(&roots, false, None).unwrap();
+    assert_eq!(r.records, 0);
+    assert_eq!(r.deferred_tails, 1);
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"\n")
+        .unwrap();
+    let r = store.refresh(&roots, false, None).unwrap();
+    assert_eq!(r.records, 1);
+    assert_eq!(r.deferred_tails, 0);
+    assert!(!r.stale);
+    assert_eq!(
+        store
+            .db
+            .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
+    let raw = include_bytes!("../testdata/opaque.jsonl");
+    let original: serde_json::Value = serde_json::from_slice(raw).unwrap();
+    let filtered = sessidx::normalize::record_for_index(raw, "pi").unwrap();
+    let payload_fields: usize = filtered["message"]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(2)
+        .map(|b| b.as_object().unwrap().len() - 1)
+        .sum();
+    assert_eq!(payload_fields, 0);
+    let original = adapters::parse("pi", &original, &mut State::default());
+    let filtered = adapters::parse("pi", &filtered, &mut State::default());
+    let snapshot = |r: sessidx::model::Record| {
+        r.events
+            .into_iter()
+            .map(|e| (e.kind, e.role, e.text, e.command, e.sites.len()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(snapshot(original), snapshot(filtered));
+    let scalar = b"true";
+    assert_eq!(
+        sessidx::normalize::record_for_index(scalar, "pi").unwrap(),
+        serde_json::json!(true)
+    );
+    assert!(
+        sessidx::normalize::record_for_index(
+            b"{\"message\":{\"content\":[{\"type\":\"thinking\",\"thinkingSignature\":invalid}]}}",
+            "pi"
+        )
+        .is_err()
+    );
 }

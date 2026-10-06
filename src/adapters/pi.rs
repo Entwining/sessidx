@@ -45,6 +45,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 if e.ok.is_some() {
                     e.ok_source = "flag".into();
                 }
+                crate::outcomes::classify(&mut e, &m["content"], "pi");
                 e.native_id = string(v, "id");
                 e.ts = ts;
                 return Record {
@@ -53,14 +54,30 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 };
             }
             let mut events = Vec::new();
+            // Pi empty replies: tests/counting.rs::pi_empty_response_and_explicit_message_model_override.
+            if role == "assistant" || role == "user" || role == "system" {
+                let mut e = Event::new(role, "message", "message.role");
+                e.text = Some(if m["content"].is_string() {
+                    text(&m["content"])
+                } else {
+                    m["content"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|b| b["type"] == "text")
+                        .map(text)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
+                e.native_id = string(v, "id");
+                e.ts = ts.clone();
+                e.model = string(m, "model");
+                events.push(e);
+            }
             if let Some(blocks) = m["content"].as_array() {
                 for (i, b) in blocks.iter().enumerate() {
                     let mut e = match b["type"].as_str().unwrap_or("") {
-                        "text" => {
-                            let mut e = Event::new(role, "message", "message.role");
-                            e.text = Some(text(b));
-                            e
-                        }
+                        "text" => continue,
                         "toolCall" => {
                             let mut e = Event::new("assistant", "tool_call", "content.toolCall");
                             e.call_id = string(b, "id");
@@ -73,25 +90,25 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         _ => continue,
                     };
                     e.ts = ts.clone();
-                    e.native_id = string(v, "id").map(|id| format!("{id}:{i}"));
+                    e.native_id = e
+                        .call_id
+                        .as_ref()
+                        .map(|id| format!("call:{id}"))
+                        .or_else(|| string(v, "id").map(|id| format!("{id}:{i}")));
+                    e.model = string(m, "model");
                     events.push(e);
                 }
-            } else if m["content"].is_string() {
-                let mut e = Event::new(role, "message", "message.role");
-                e.text = Some(text(&m["content"]));
-                e.native_id = string(v, "id");
-                e.ts = ts;
-                events.push(e);
             }
             Record {
                 events,
-                known: true,
+                known: matches!(role, "assistant" | "user" | "system" | "bashExecution"),
             }
         }
         "thinking_level_change"
         | "compaction"
         | "branch_summary"
-        | "custom"
+        | "context_edit"
+        | "session_info"
         | "custom_message"
         | "label" => Record {
             events: vec![],

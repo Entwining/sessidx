@@ -41,6 +41,13 @@ fn lookup_cjk_latin_filters_and_show_references() {
             .len(),
         0
     );
+    let fts_body: Option<String> = store
+        .db
+        .query_row("SELECT text FROM fts WHERE fts MATCH 'Latin'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(fts_body.is_none());
     assert!(
         query::search(
             &store.db,
@@ -82,7 +89,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
             .unwrap()
             .0
             .len(),
-        3
+        6
     );
 }
 
@@ -231,15 +238,31 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         ],
         vec!["show", "canary-session", "--json"],
         vec!["search", "--scan", "needle"],
+        vec!["count", "--metric", "commands", "--json"],
+        vec!["count", "--metric", "failures", "--json"],
+        vec!["count", "--metric", "denials", "--json"],
+        vec!["doctor"],
+        vec!["sql", "SELECT * FROM events"],
+        vec!["sql", "SELECT * FROM commands"],
+        vec!["sql", "SELECT * FROM shapes"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_sessidx"))
             .arg("--db")
             .arg(&store.path)
             .arg("--root")
             .arg(format!("claude={}", roots[0].path.display()))
-            .args(args)
+            .args(&args)
             .output()
             .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if args == ["search", "--scan", "needle"] {
+                2
+            } else {
+                0
+            }),
+            "{args:?}"
+        );
         outputs.extend_from_slice(&output.stdout);
         outputs.extend_from_slice(&output.stderr);
     }
@@ -249,4 +272,125 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             "canary leaked to command output"
         );
     }
+    for name in ["index.db", "index.db-wal", "index.db-shm"] {
+        if let Ok(bytes) = fs::read(dir.path().join(name)) {
+            for v in &values {
+                assert!(
+                    !bytes.windows(v.len()).any(|b| b == v.as_bytes()),
+                    "canary leaked after commands to {name}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
+    let values: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/privacy.json")).unwrap();
+    let text = format!(
+        "needle {} Authorization: Basic {} password = \"{}\"",
+        values["hex"].as_str().unwrap(),
+        values["basic"].as_str().unwrap(),
+        values["passphrase"].as_str().unwrap()
+    );
+    let data=serde_json::json!({"type":"user","uuid":"privacy-user","sessionId":"privacy","message":{"role":"user","content":text}}).to_string()+"\n"+&serde_json::json!({"type":"assistant","uuid":"privacy-input","sessionId":"privacy","message":{"role":"assistant","content":[{"type":"tool_use","id":"privacy-call","name":"Bash","input":{"command":"printf needle","part_one":values["part_one"],"part_two":values["part_two"]}}]}}).to_string()+"\n";
+    let (dir, store, _) = setup("claude", &data);
+    let output = query::show(&store.db, "privacy", 0, 20, 0)
+        .unwrap()
+        .0
+        .into_iter()
+        .map(|h| h.snippet)
+        .collect::<Vec<_>>()
+        .join("\n");
+    for value in values
+        .as_object()
+        .unwrap()
+        .values()
+        .filter_map(|v| v.as_str())
+    {
+        assert!(
+            !output.contains(value),
+            "adversarial canary leaked on display"
+        );
+        for name in ["index.db", "index.db-wal", "index.db-shm"] {
+            if let Ok(bytes) = fs::read(dir.path().join(name)) {
+                assert!(
+                    !bytes.windows(value.len()).any(|b| b == value.as_bytes()),
+                    "adversarial canary leaked to {name}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn scan_matches_original_ranges_before_redacting_display() {
+    let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
+    let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";
+    let (_dir, store, _) = setup("claude", &data);
+    let (hits, c) = query::scan(
+        &store.db,
+        token,
+        &Filters {
+            session: Some("scan-private".into()),
+            ..Filters::default()
+        },
+        20,
+        0,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(!hits[0].snippet.contains(token));
+    assert!(!c.incomplete);
+}
+
+#[test]
+fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
+    let session = "00000000-0000-7000-8000-000000000001";
+    let cwd = "/synthetic/Code/GitHub/project-with-native-identifiers";
+    let data=serde_json::json!({"type":"session_meta","payload":{"id":session,"cwd":cwd}}).to_string()+"\n"+&serde_json::json!({"type":"turn_context","payload":{"model":"claude-haiku-4-5-20251001"}}).to_string()+"\n"+&serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}}).to_string()+"\n";
+    let (_, store, _) = setup("codex", &data);
+    let hits = query::search(
+        &store.db,
+        "needle",
+        &Filters {
+            session: Some(session.into()),
+            cwd: Some(cwd.into()),
+            ..Filters::default()
+        },
+        20,
+        0,
+    )
+    .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].model.as_deref(), Some("claude-haiku-4-5-20251001"));
+}
+
+#[test]
+fn initial_schema_creation_respects_the_writer_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("index.db");
+    let store = Store::open(&path).unwrap();
+    let lock = store.lock().unwrap().unwrap();
+    let mut second = Store::open(&path).unwrap();
+    let r = second.refresh(&[], false, None).unwrap();
+    assert!(r.writer_busy && r.stale);
+    assert_eq!(
+        second
+            .db
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    drop(lock);
+    second.refresh(&[], false, None).unwrap();
+    assert_eq!(
+        second
+            .db
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
 }

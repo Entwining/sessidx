@@ -1,0 +1,208 @@
+use crate::{
+    query::Filters,
+    redaction::{redact, redact_metadata},
+};
+use anyhow::Result;
+use rusqlite::{
+    Connection, params_from_iter,
+    types::{Value, ValueRef},
+};
+use serde_json::{Value as Json, json};
+use std::time::{Duration, Instant};
+
+pub fn count(
+    db: &Connection,
+    metric: &str,
+    by: &str,
+    program: Option<&str>,
+    filters: &Filters,
+) -> Result<Vec<Json>> {
+    anyhow::ensure!(
+        ["commands", "failures", "denials"].contains(&metric),
+        "metric must be commands, failures, or denials"
+    );
+    let mut keys = Vec::new();
+    let mut expressions = Vec::new();
+    for key in by.split(',').filter(|s| !s.is_empty()) {
+        let expression = match key {
+            "harness" => "f.harness",
+            "model" => "coalesce(e.model,'unknown')",
+            "role" => "e.role",
+            "week" => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
+            "kind" => "s.kind",
+            _ => anyhow::bail!("--by accepts harness,model,role,week,kind"),
+        };
+        anyhow::ensure!(!keys.contains(&key), "duplicate --by field");
+        keys.push(key);
+        expressions.push(expression);
+    }
+    let (clause, mut args) = filters.sql()?;
+    let selected = if let Some(program) = program {
+        args.push(Value::Text(program.into()));
+        match metric {
+            "commands" => "c.program=?PROGRAM",
+            "failures" => {
+                "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program=?PROGRAM)"
+            }
+            _ => {
+                "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program=?PROGRAM)"
+            }
+        }
+    } else {
+        "1=1"
+    };
+    let selected = selected.replace("?PROGRAM", &format!("?{}", args.len()));
+    let unknown_program = if program.is_none() {
+        "0"
+    } else if metric == "denials" {
+        "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))"
+    } else {
+        "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))"
+    };
+    let selected_denominator = format!("sum(CASE WHEN {selected} THEN 1 ELSE 0 END)");
+    let unknown_outcomes = format!(
+        "sum(CASE WHEN ({selected} AND o.ok IS NULL) OR {unknown_program} THEN 1 ELSE 0 END)"
+    );
+    let unknown_denials = format!(
+        "sum(CASE WHEN ({selected} AND EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id AND d.reason_id='unknown')) OR {unknown_program} THEN 1 ELSE 0 END)"
+    );
+    let (unit, numerator, denominator, unclassified, unclassified_unit, join, kind) = match metric {
+        "commands" => (
+            "static_shell_command_sites",
+            format!("sum(CASE WHEN c.parsed=1 AND {selected} THEN 1 ELSE 0 END)"),
+            "sum(c.parsed=1)",
+            "sum(c.parsed=0 OR c.program IS NULL)",
+            "shell_calls_or_sites_without_classification",
+            "JOIN commands c ON c.event_id=e.id",
+            "tool_call",
+        ),
+        "failures" => (
+            "tool_call_attempts",
+            format!("sum(CASE WHEN o.ok=0 AND {selected} THEN 1 ELSE 0 END)"),
+            selected_denominator.as_str(),
+            unknown_outcomes.as_str(),
+            "tool_call_attempts_without_outcome_or_program",
+            "LEFT JOIN call_outcomes o ON o.harness=f.harness AND o.session_id=e.session_id AND o.call_id=e.call_id",
+            "tool_call",
+        ),
+        _ => (
+            "tool_result_events",
+            format!(
+                "sum(CASE WHEN EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id) AND {selected} THEN 1 ELSE 0 END)"
+            ),
+            selected_denominator.as_str(),
+            unknown_denials.as_str(),
+            "tool_result_events_with_unknown_denial_reason_or_program",
+            "",
+            "tool_result",
+        ),
+    };
+    let prefix = if expressions.is_empty() {
+        String::new()
+    } else {
+        expressions.join(",") + ","
+    };
+    let group = if expressions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " GROUP BY {} ORDER BY {}",
+            expressions.join(","),
+            expressions.join(",")
+        )
+    };
+    let sql = format!(
+        "SELECT {prefix}coalesce({numerator},0),coalesce({denominator},0),coalesce({unclassified},0) FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id {join} WHERE {clause} AND e.kind='{kind}'{group}"
+    );
+    let values = db
+        .prepare(&sql)?
+        .query_map(params_from_iter(args), |r| {
+            let mut obj = serde_json::Map::new();
+            for (i, key) in keys.iter().enumerate() {
+                obj.insert(
+                    (*key).into(),
+                    json!(redact_metadata(&r.get::<_, String>(i)?)),
+                );
+            }
+            obj.insert("metric".into(), json!(metric));
+            obj.insert("unit".into(), json!(unit));
+            if let Some(program) = program {
+                obj.insert("program".into(), json!(redact(program)));
+            }
+            for (i, key) in ["numerator", "denominator", "unclassified"]
+                .iter()
+                .enumerate()
+            {
+                obj.insert((*key).into(), json!(r.get::<_, i64>(keys.len() + i)?));
+            }
+            obj.insert("unclassified_unit".into(), json!(unclassified_unit));
+            if metric == "commands" {
+                obj.insert("outcome_scope".into(), json!("call"));
+            }
+            Ok(Json::Object(obj))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(values)
+}
+
+pub fn doctor(db: &Connection) -> Result<Json> {
+    let scalar = |sql: &str| -> Result<i64> { Ok(db.query_row(sql, [], |r| r.get(0))?) };
+    let shapes = scalar("SELECT coalesce(sum(n),0) FROM shapes")?;
+    let unknown = scalar("SELECT coalesce(sum(n),0) FROM shapes WHERE known=0")?;
+    let shell = scalar("SELECT count(DISTINCT event_id) FROM commands")?;
+    let unparsed = scalar("SELECT count(DISTINCT event_id) FROM commands WHERE parsed=0")?;
+    let signatures:Vec<Json>=db.prepare("SELECT signature,sum(n) FROM shapes WHERE known=0 GROUP BY signature ORDER BY sum(n) DESC LIMIT 100")?.query_map([],|r|Ok(json!({"signature":redact(&r.get::<_,String>(0)?),"records":r.get::<_,i64>(1)?})))?.collect::<rusqlite::Result<_>>()?;
+    Ok(
+        json!({"files":scalar("SELECT count(*) FROM files")?,"sessions":scalar("SELECT count(DISTINCT harness||':'||session_id) FROM sessions")?,"events":scalar("SELECT count(*) FROM events")?,"canonical_events":scalar("SELECT count(*) FROM canonical_events")?,"unknown_shapes":{"numerator":unknown,"denominator":shapes,"rate":if shapes==0 {0.0}else {unknown as f64/shapes as f64},"signatures":signatures},"unparsed_shell_calls":{"numerator":unparsed,"denominator":shell,"rate":if shell==0 {0.0}else {unparsed as f64/shell as f64}},"parse_errors":scalar("SELECT coalesce(sum(parse_errors),0) FROM files")?,"incomplete_files":scalar("SELECT count(*) FROM files WHERE index_status!='ready'")?,"unknown_models":scalar("SELECT count(*) FROM events WHERE model IS NULL")?,"unknown_session_kinds":scalar("SELECT count(*) FROM sessions WHERE kind='unknown'")?,"unclassified_denials":scalar("SELECT count(*) FROM denials WHERE reason_id='unknown'")?}),
+    )
+}
+
+pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
+    db.execute_batch("PRAGMA query_only=ON;")?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    db.progress_handler(1000, Some(move || Instant::now() >= deadline));
+    let result = (|| {
+        let mut batch = rusqlite::Batch::new(db, sql);
+        let mut stmt = batch.next()?.ok_or_else(|| anyhow::anyhow!("empty SQL"))?;
+        anyhow::ensure!(batch.next()?.is_none(), "sql accepts exactly one statement");
+        anyhow::ensure!(stmt.readonly(), "sql accepts one read-only SELECT");
+        let first = sql
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        anyhow::ensure!(
+            first == "SELECT" || first == "WITH",
+            "sql accepts one read-only SELECT"
+        );
+        let names = stmt
+            .column_names()
+            .iter()
+            .map(|s| redact(s))
+            .collect::<Vec<_>>();
+        let mut rows = stmt.query([])?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            anyhow::ensure!(
+                result.len() < 10_000 && Instant::now() < deadline,
+                "SQL result exceeded 10000 rows or two seconds; add LIMIT or narrower predicates"
+            );
+            let mut obj = serde_json::Map::new();
+            for (i, name) in names.iter().enumerate() {
+                let value = match row.get_ref(i)? {
+                    ValueRef::Null => Json::Null,
+                    ValueRef::Integer(n) => json!(n),
+                    ValueRef::Real(n) => json!(n),
+                    ValueRef::Text(v) => json!(redact(&String::from_utf8_lossy(v))),
+                    ValueRef::Blob(_) => json!("[blob omitted]"),
+                };
+                obj.insert(name.clone(), value);
+            }
+            result.push(Json::Object(obj));
+        }
+        Ok(result)
+    })();
+    db.progress_handler(0, None::<fn() -> bool>);
+    db.execute_batch("PRAGMA query_only=OFF;")?;
+    result
+}

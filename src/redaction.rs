@@ -4,18 +4,48 @@ use std::{collections::HashMap, sync::LazyLock};
 static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
     r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
-    r"(?i)\bBearer\s+[A-Za-z0-9._~+/=\-]+",
+    r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]+",
     r"\b(?:sk-[A-Za-z0-9_\-]{8,}|(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9_\-]{8,})",
-    r#"(?i)(?:[A-Za-z0-9_\-]*(?:api[_-]?key|secret|password|passwd|access[_-]?token|auth[_-]?token|credential)[A-Za-z0-9_\-]*|authorization)\s*[=:]\s*["']?[^\s,"'<>}]+"#,
+    r#"(?i)["']?(?:[A-Za-z0-9_\-]*(?:api[_-]?key|secret|password|passwd|token|credential)[A-Za-z0-9_\-]*|authorization)["']?\s*[=:]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#,
 ].into_iter().map(|p| Regex::new(p).unwrap()).collect()
 });
-static RUNS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=\-]{24,}").unwrap());
+static RUNS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=.!@$%:?\-]{16,}").unwrap());
+static CREDENTIAL_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|credential|authorization)").unwrap()
+});
+
+pub fn redact_value(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::String(s) => *s = redact(s),
+        serde_json::Value::Array(a) => a.iter_mut().for_each(redact_value),
+        serde_json::Value::Object(m) => {
+            let old = std::mem::take(m);
+            for (key, mut value) in old {
+                if CREDENTIAL_NAME.is_match(&key) {
+                    value = serde_json::Value::String("[REDACTED]".into());
+                } else {
+                    redact_value(&mut value);
+                }
+                m.insert(redact(&key), value);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn redact_serialized(s: &str) -> String {
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(s) {
+        if v.is_object() || v.is_array() {
+            redact_value(&mut v);
+            return v.to_string();
+        }
+    }
+    redact(s)
+}
 
 pub fn redact(text: &str) -> String {
-    let mut out = text.to_owned();
-    for pattern in PATTERNS.iter() {
-        out = pattern.replace_all(&out, "[REDACTED]").into_owned();
-    }
+    let out = redact_metadata(text);
     RUNS.replace_all(&out, |caps: &regex::Captures<'_>| {
         let run = &caps[0];
         let mut counts = HashMap::new();
@@ -29,13 +59,21 @@ pub fn redact(text: &str) -> String {
                 -p * p.log2()
             })
             .sum();
-        if entropy >= 4.0 {
+        if entropy >= 3.5 {
             "[REDACTED]".to_owned()
         } else {
             run.to_owned()
         }
     })
     .into_owned()
+}
+
+pub fn redact_metadata(text: &str) -> String {
+    let mut out = text.to_owned();
+    for pattern in PATTERNS.iter() {
+        out = pattern.replace_all(&out, "[REDACTED]").into_owned();
+    }
+    out
 }
 
 pub fn spaced_cjk(text: &str) -> String {

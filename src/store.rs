@@ -3,7 +3,7 @@ use crate::{
     discovery::{self, Root},
     model::State,
     normalize::hash,
-    redaction::{redact, spaced_cjk},
+    redaction::{redact, redact_metadata, spaced_cjk},
 };
 use anyhow::{Context, Result};
 use fs2::FileExt;
@@ -22,6 +22,9 @@ pub const MAX_RECORD: usize = 16 * 1024 * 1024;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
+    pub deferred_tails: usize,
+    pub parse_errors: u64,
+    pub unknown_records: u64,
     pub files_changed: usize,
     pub records: usize,
     pub stale: bool,
@@ -36,6 +39,42 @@ pub struct Store {
 }
 
 pub struct WriterLock(File);
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FileCoverage {
+    Ready,
+    DeferredTail,
+    BudgetExhausted,
+}
+impl FileCoverage {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::DeferredTail => "deferred_tail",
+            Self::BudgetExhausted => "budget_exhausted",
+        }
+    }
+}
+struct IndexedFile {
+    changed: bool,
+    records: usize,
+    coverage: FileCoverage,
+}
+impl WriterLock {
+    fn acquire(path: &Path) -> Result<Option<Self>> {
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path.with_extension("lock"))?;
+        match f.try_lock_exclusive() {
+            Ok(()) => Ok(Some(Self(f))),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+}
 impl Drop for WriterLock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.0);
@@ -57,8 +96,6 @@ impl Store {
             .open(path)?;
         let db = Connection::open(path)?;
         db.busy_timeout(Duration::from_millis(50))?;
-        db.execute_batch("PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8192;")?;
-        db.execute_batch(include_str!("schema.sql"))?;
         Ok(Self {
             db,
             path: path.into(),
@@ -66,19 +103,20 @@ impl Store {
     }
 
     pub fn lock(&self) -> Result<Option<WriterLock>> {
-        let path = self.path.with_extension("lock");
-        let f = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)?;
-        match f.try_lock_exclusive() {
-            Ok(()) => Ok(Some(WriterLock(f))),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(e) => Err(e.into()),
+        WriterLock::acquire(&self.path)
+    }
+
+    fn initialize(&self, _lock: &WriterLock) -> Result<()> {
+        self.db.execute_batch(
+            "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8192;",
+        )?;
+        let version: i64 = self.db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        anyhow::ensure!(version == 0 || version == 1, "unsupported database version");
+        if version == 0 {
+            self.db.execute_batch("PRAGMA journal_mode=WAL;")?;
+            self.db.execute_batch(include_str!("schema.sql"))?;
         }
+        Ok(())
     }
 
     pub fn refresh(
@@ -95,6 +133,7 @@ impl Store {
                 ..Refresh::default()
             });
         };
+        self.initialize(&_lock)?;
         let (files, missing_roots) = discovery::files(roots)?;
         let mut report = Refresh {
             missing_roots,
@@ -102,7 +141,11 @@ impl Store {
         };
         report.stale = !report.missing_roots.is_empty();
         if full {
-            self.db.execute("DELETE FROM files", [])?;
+            let tx = self.db.transaction()?;
+            tx.execute_batch("DROP VIEW call_outcomes; DROP VIEW canonical_events; DROP TABLE commands; DROP TABLE denials; DROP TABLE events; DROP TABLE sessions; DROP TABLE shapes; DROP TABLE files; DROP TABLE fts;")?;
+            tx.execute_batch(include_str!("schema.sql"))?;
+            tx.commit()?;
+            self.db.execute_batch("VACUUM;")?;
         }
         let existing: Vec<(i64, String)> = self
             .db
@@ -122,20 +165,33 @@ impl Store {
         for (harness, path) in files {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 report.stale = true;
-                report.continuation = Some(redact(&path.to_string_lossy()));
+                report.continuation = Some(redact_metadata(&path.to_string_lossy()));
                 break;
             }
-            let result = self.index_file(&harness, &path, deadline)?;
-            report.files_changed += usize::from(result.0);
-            report.records += result.1;
-            if result.2 {
+            let result = self.index_file(&harness, &path, deadline, None)?;
+            report.files_changed += usize::from(result.changed);
+            report.records += result.records;
+            if result.coverage == FileCoverage::DeferredTail {
+                report.deferred_tails += 1;
+            }
+            if result.coverage == FileCoverage::BudgetExhausted {
                 report.stale = true;
-                report.continuation = Some(redact(&path.to_string_lossy()));
+                report.continuation = Some(redact_metadata(&path.to_string_lossy()));
                 if deadline.is_some_and(|d| Instant::now() >= d) {
                     break;
                 }
             }
         }
+        report.parse_errors =
+            self.db
+                .query_row("SELECT coalesce(sum(parse_errors),0) FROM files", [], |r| {
+                    r.get(0)
+                })?;
+        report.unknown_records = self.db.query_row(
+            "SELECT coalesce(sum(n),0) FROM shapes WHERE known=0",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(report)
     }
 
@@ -144,35 +200,52 @@ impl Store {
         harness: &str,
         path: &Path,
         deadline: Option<Instant>,
-    ) -> Result<(bool, usize, bool)> {
+        frozen_size: Option<u64>,
+    ) -> Result<IndexedFile> {
         let mut file = File::open(path).context("cannot open session file")?;
         let meta = file.metadata()?;
-        let mtime = format!("{}:{}", meta.mtime(), meta.mtime_nsec());
+        let source_size = frozen_size.unwrap_or(meta.len());
+        anyhow::ensure!(source_size <= meta.len(), "frozen file truncated");
+        let mtime = format!(
+            "{}:{}:{}:{}",
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec()
+        );
         let path_text = path.to_string_lossy();
-        let old = self.db.query_row("SELECT id,dev,inode,size,mtime,prefix_hash,prefix_len,bytes_indexed,lines_indexed,state_json,parse_errors FROM files WHERE path=?", [path_text.as_ref()], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, u64>(1)?, r.get::<_, u64>(2)?, r.get::<_, u64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, u64>(6)?, r.get::<_, u64>(7)?, r.get::<_, u64>(8)?, r.get::<_, String>(9)?, r.get::<_, u64>(10)?))
+        let old = self.db.query_row("SELECT id,dev,inode,size,mtime,prefix_hash,prefix_len,bytes_indexed,lines_indexed,state_json,parse_errors,index_status FROM files WHERE path=?", [path_text.as_ref()], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, u64>(1)?, r.get::<_, u64>(2)?, r.get::<_, u64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, u64>(6)?, r.get::<_, u64>(7)?, r.get::<_, u64>(8)?, r.get::<_, String>(9)?, r.get::<_, u64>(10)?,r.get::<_,String>(11)?))
         }).optional()?;
         if let Some(ref o) = old {
             if o.1 == meta.dev()
                 && o.2 == meta.ino()
-                && o.3 == meta.len()
+                && o.3 == source_size
                 && o.4 == mtime
-                && o.7 == meta.len()
+                && (o.7 == source_size || o.11 == "deferred_tail")
             {
-                return Ok((false, 0, false));
+                return Ok(IndexedFile {
+                    changed: false,
+                    records: 0,
+                    coverage: if o.11 == "deferred_tail" {
+                        FileCoverage::DeferredTail
+                    } else {
+                        FileCoverage::Ready
+                    },
+                });
             }
         }
-        let prefix_len = meta.len().min(4096);
+        let prefix_len = source_size.min(4096);
         let mut prefix = vec![0; prefix_len as usize];
         file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
         let append = old.as_ref().is_some_and(|o| {
             o.1 == meta.dev()
                 && o.2 == meta.ino()
-                && meta.len() >= o.3
+                && source_size >= o.3
                 && o.6 <= prefix_len
                 && hash(&prefix[..o.6 as usize]) == o.5
-                && (meta.len() > o.3 || o.4 == mtime)
+                && (source_size > o.3 || o.4 == mtime)
         });
         let (mut offset, mut line, mut state, mut errors) = if append {
             let o = old.as_ref().unwrap();
@@ -194,22 +267,27 @@ impl Store {
                 tx.execute("DELETE FROM files WHERE id=?", [o.0])?;
             }
         }
-        tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness, meta.dev(), meta.ino(), meta.len(), mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
+        tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
         let file_id: i64 = tx.query_row(
             "SELECT id FROM files WHERE path=?",
             [path_text.as_ref()],
             |r| r.get(0),
         )?;
         file.seek(SeekFrom::Start(offset))?;
-        let mut reader = BufReader::new(file.take(meta.len() - offset));
+        let mut reader = BufReader::new(file.take(source_size - offset));
         let mut buffer = Vec::new();
         let mut records = 0;
+        let mut coverage = FileCoverage::Ready;
         loop {
             if deadline.is_some_and(|d| Instant::now() >= d) {
+                coverage = FileCoverage::BudgetExhausted;
                 break;
             }
             let (length, complete, oversized) = read_record(&mut reader, &mut buffer)?;
             if length == 0 || !complete {
+                if length > 0 {
+                    coverage = FileCoverage::DeferredTail;
+                }
                 break;
             }
             line += 1;
@@ -217,32 +295,51 @@ impl Store {
             let parsed = if oversized {
                 None
             } else {
-                serde_json::from_slice::<serde_json::Value>(&buffer).ok()
+                crate::normalize::record_for_index(&buffer, harness).ok()
             };
             if let Some(v) = parsed {
                 let normalized = adapters::parse(harness, &v, &mut state);
                 let signature = shape(&v);
-                tx.execute("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1", params![file_id,signature,normalized.known])?;
+                let raw_hash = hash(&buffer);
+                tx.prepare_cached("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,signature,normalized.known])?;
                 for (ordinal, event) in normalized.events.into_iter().enumerate() {
-                    tx.execute("INSERT INTO events(file_id,session_id,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,role,role_source,kind,kind_source,model,model_source,text,tool,call_id,ok,ok_source,exit_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", params![file_id,state.session_id,event.native_id,line,offset,length,hash(&buffer),ordinal,event.ts,event.role,event.role_source,event.kind,"adapter",state.model,state.model_source,event.text,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code])?;
+                    tx.prepare_cached("INSERT INTO events(file_id,session_id,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,role,role_source,kind,kind_source,model,model_source,text,tool,call_id,ok,ok_source,exit_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")?.execute(params![file_id,state.session_id,event.native_id,line,offset,length,&raw_hash,ordinal,event.ts,event.role,event.role_source,event.kind,event.kind_source,event.model.as_ref().or(state.model.as_ref()),if event.model.is_some() { "message.model" } else { &state.model_source },event.text,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code])?;
                     let event_id = tx.last_insert_rowid();
+                    for (site, command) in event.sites.into_iter().enumerate() {
+                        tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
+                    }
+                    for (source, reason) in event.denials {
+                        tx.prepare_cached(
+                            "INSERT INTO denials(event_id,source,reason_id) VALUES (?,?,?)",
+                        )?
+                        .execute(params![event_id, source, reason])?;
+                    }
                     if let Some(text) = event.text {
-                        tx.execute(
-                            "INSERT INTO fts(rowid,text) VALUES (?,?)",
-                            params![event_id, spaced_cjk(&text)],
-                        )?;
+                        tx.prepare_cached("INSERT INTO fts(rowid,text) VALUES (?,?)")?
+                            .execute(params![event_id, spaced_cjk(&text)])?;
                     }
                 }
             } else {
                 errors += 1;
-                tx.execute("INSERT INTO shapes VALUES (?,?,0,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1", params![file_id,if oversized { "oversized_record" } else { "invalid_json" }])?;
+                tx.prepare_cached("INSERT INTO shapes VALUES (?,?,0,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,if oversized { "oversized_record" } else { "invalid_json" }])?;
             }
             offset += length;
         }
         tx.execute("INSERT INTO sessions(file_id,harness,session_id,cwd,parent_id,kind,kind_source,instruction_hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,cwd=excluded.cwd,parent_id=excluded.parent_id,kind=excluded.kind,kind_source=excluded.kind_source,instruction_hash=excluded.instruction_hash", params![file_id,harness,state.session_id,state.cwd,state.parent_id,state.kind,state.kind_source,state.instruction_hash])?;
-        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,complete=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,offset==meta.len(),file_id])?;
+        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=?,first_ts=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage.as_str(),state.first_ts,file_id])?;
         tx.commit()?;
-        Ok((true, records, offset < meta.len()))
+        Ok(IndexedFile {
+            changed: true,
+            records,
+            coverage,
+        })
+    }
+
+    pub fn index_frozen(&mut self, harness: &str, path: &Path, size: u64) -> Result<()> {
+        let _lock = self.lock()?.ok_or_else(|| anyhow::anyhow!("writer busy"))?;
+        self.initialize(&_lock)?;
+        self.index_file(harness, path, None, Some(size))?;
+        Ok(())
     }
 }
 
@@ -282,10 +379,13 @@ fn shape(v: &serde_json::Value) -> String {
         .map(|k| redact(k))
         .collect();
     keys.sort();
-    let typ = v.get("type").and_then(|s| s.as_str()).unwrap_or("unknown");
+    let typ = redact_metadata(v.get("type").and_then(|s| s.as_str()).unwrap_or("unknown"));
     let subtype = v
         .pointer("/payload/type")
+        .or_else(|| v.get("subtype"))
+        .or_else(|| v.pointer("/message/role"))
         .and_then(|s| s.as_str())
         .unwrap_or("");
-    redact(&format!("{typ}/{subtype}:{}", keys.join(",")))
+    let subtype = redact_metadata(subtype);
+    format!("{typ}/{subtype}:{}", keys.join(", "))
 }

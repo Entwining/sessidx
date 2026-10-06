@@ -20,8 +20,19 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     s.instruction_hash = Some(hash(content.as_bytes()));
                 }
             }
-            s.parent_id = string(p, "parent_thread_id").or_else(|| string(p, "forked_from_id"));
-            if s.parent_id.is_some() || p.pointer("/source/subagent").is_some() {
+            s.parent_id = string(p, "parent_thread_id")
+                .or_else(|| string(p, "forked_from_id"))
+                .or_else(|| {
+                    p.pointer("/source/subagent/thread_spawn/parent_thread_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .or_else(|| {
+                    p.pointer("/history_base/thread_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                });
+            if p.pointer("/source/subagent").is_some() {
                 s.kind = "delegated".into();
                 s.kind_source = "session_meta.ancestry".into();
             }
@@ -50,8 +61,10 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 "message" => {
                     let role = p["role"].as_str().unwrap_or("unknown");
                     let mut e = Event::new(role, "message", "payload.role");
+                    e.kind_source = "payload.type".into();
                     e.text = Some(text(&p["content"]));
-                    if role == "user"
+                    if s.instruction_hash.is_none()
+                        && role == "user"
                         && e.text
                             .as_deref()
                             .is_some_and(|t| t.starts_with("# AGENTS.md instructions"))
@@ -60,9 +73,10 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     }
                     e
                 }
-                "function_call" | "custom_tool_call" => {
+                "function_call" | "custom_tool_call" | "tool_search_call" => {
                     let mut e = Event::new("assistant", "tool_call", "payload.type");
-                    e.tool = string(p, "name");
+                    e.tool = string(p, "name")
+                        .or_else(|| (typ == "tool_search_call").then(|| "tool_search".into()));
                     e.call_id = string(p, "call_id");
                     let args = arguments(
                         p.get("arguments")
@@ -73,9 +87,20 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     e.text = Some(args.to_string());
                     e
                 }
-                "function_call_output" | "custom_tool_call_output" => {
+                "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
                     let mut e = Event::new("tool", "tool_result", "payload.type");
                     e.call_id = string(p, "call_id");
+                    // Codex text and structured outcomes: testdata/outcomes.jsonl.
+                    crate::outcomes::classify(&mut e, &p["output"], "codex");
+                    e
+                }
+                "agent_message" => {
+                    let mut e = Event::new(
+                        p["role"].as_str().unwrap_or("unknown"),
+                        "communication",
+                        "payload.type",
+                    );
+                    e.text = Some(text(&p["content"]));
                     e
                 }
                 "reasoning" | "compaction" | "web_search_call" => {
@@ -99,7 +124,11 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 known: true,
             }
         }
-        "event_msg" | "compacted" => Record {
+        "event_msg"
+        | "compacted"
+        | "inter_agent_communication_metadata"
+        | "token_usage_record"
+        | "world_state" => Record {
             events: vec![],
             known: true,
         },

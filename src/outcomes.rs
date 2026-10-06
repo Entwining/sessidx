@@ -1,0 +1,273 @@
+use crate::{model::Event, normalize::text};
+use regex::Regex;
+use serde_json::Value;
+use std::sync::LazyLock;
+
+static EXIT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(?:Process exited with code|Exit code:)\s*(-?\d+)\s*$").unwrap()
+});
+static PARTIAL_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""status"\s*:\s*"rejected"\s*,\s*"reason"\s*:\s*("(?:\\.|[^"\\])*")"#).unwrap()
+});
+pub fn classify(e: &mut Event, output: &Value, harness: &str) {
+    if harness != "codex" {
+        flag_denials(output, harness, e, &mut true);
+        return;
+    }
+    let mut texts = Vec::new();
+    structured(output, &mut texts, e, 0);
+    let mut codes = Vec::new();
+    let mut failed = e.ok == Some(false);
+    for s in &texts {
+        for capture in EXIT.captures_iter(s) {
+            if let Ok(code) = capture[1].parse::<i64>() {
+                codes.push(code);
+            }
+        }
+        if s.lines().any(|l| {
+            l.trim_start().starts_with("Script failed")
+                || l.trim_start().starts_with("Script error:")
+        }) {
+            failed = true;
+        }
+        denials(s, harness, e, true);
+    }
+    failed |= !e.denials.is_empty() || codes.iter().any(|n| *n != 0);
+    if e.ok_source == "none" && (failed || !codes.is_empty()) {
+        e.ok = Some(!failed);
+        e.ok_source = "text".into();
+    }
+    e.exit_code = codes
+        .iter()
+        .copied()
+        .find(|n| *n != 0)
+        .or_else(|| codes.first().copied());
+}
+
+fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
+    if depth > 32 {
+        return;
+    }
+    match v {
+        Value::Array(a) => {
+            for v in a {
+                structured(v, texts, e, depth + 1);
+            }
+        }
+        Value::Object(m) => {
+            if let Some(error) = m.get("isError").and_then(Value::as_bool) {
+                e.ok = Some(!error && e.ok != Some(false));
+                e.ok_source = "text".into();
+            }
+            // Codex Promise outcomes and shell transports: testdata/outcomes.jsonl.
+            if let Some(status) = m.get("status").and_then(Value::as_str) {
+                if status == "rejected" {
+                    let reason = m
+                        .get("reason")
+                        .or_else(|| m.get("error"))
+                        .map(|r| r.get("message").map(text).unwrap_or_else(|| text(r)))
+                        .unwrap_or_default();
+                    e.ok = Some(false);
+                    e.ok_source = "text".into();
+                    if reason.contains("Command blocked by PreToolUse hook:") {
+                        e.denials
+                            .push(("batch_hook".into(), reason_id(&reason).into()));
+                    }
+                } else if status == "fulfilled" {
+                    if let Some(v) = m.get("value") {
+                        structured(v, texts, e, depth + 1);
+                    }
+                }
+                return;
+            }
+            if let Some(n) = m.get("exit_code").and_then(Value::as_i64) {
+                texts.push(format!("Exit code: {n}"));
+                return;
+            }
+            if m.get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|t| t == "input_text" || t == "text")
+            {
+                if let Some(v) = m.get("text") {
+                    structured(v, texts, e, depth + 1);
+                }
+                return;
+            }
+            for key in ["content", "results", "items"] {
+                if let Some(v) = m.get(key) {
+                    structured(v, texts, e, depth + 1);
+                }
+            }
+        }
+        Value::String(s) => {
+            let mut candidate = s.trim();
+            let truncated = candidate.starts_with("Warning: truncated output");
+            if candidate.starts_with("Script completed")
+                || candidate.starts_with("Script failed")
+                || candidate.starts_with("Script error:")
+            {
+                texts.push(
+                    candidate
+                        .lines()
+                        .take_while(|l| *l != "Output:")
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+                if let Some((_, tail)) = candidate.split_once("\nOutput:\n") {
+                    candidate = tail.trim();
+                }
+            }
+            if candidate.starts_with("Warning: truncated output") {
+                if let Some((_, tail)) = candidate.split_once("\n\n") {
+                    candidate = tail.trim();
+                }
+            }
+            let mut values = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
+            let mut parsed = false;
+            while let Some(Ok(v)) = values.next() {
+                if matches!(v, Value::Object(_) | Value::Array(_)) {
+                    structured(&v, texts, e, depth + 1);
+                    parsed = true;
+                } else {
+                    break;
+                }
+            }
+            // Truncated Codex batches retain complete rejection values: testdata/truncated.jsonl.
+            if truncated {
+                for capture in PARTIAL_REJECTION.captures_iter(&candidate[values.byte_offset()..]) {
+                    if let Ok(reason) = serde_json::from_str::<Value>(&capture[1]) {
+                        structured(
+                            &serde_json::json!({"status":"rejected","reason":reason}),
+                            texts,
+                            e,
+                            depth + 1,
+                        );
+                    }
+                }
+            }
+            if !parsed {
+                texts.push(candidate.into());
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn reason_id(s: &str) -> &'static str {
+    for (prefix, id) in [
+        (
+            "The agent guard cannot inspect this shell syntax.",
+            "Syntax",
+        ),
+        (
+            "This reads a protected macOS app-data directory.",
+            "Appdata",
+        ),
+        ("A scan rooted at the home directory or ~/Library", "Broad"),
+        ("This reads a credential or environment file.", "File"),
+        (
+            "This inline code names a credential or environment file.",
+            "CodeFile",
+        ),
+        (
+            "A recursive search that includes hidden files",
+            "HiddenSearch",
+        ),
+        ("This dumps environment or shell variables", "Dump"),
+        (
+            "This prints the value of a credential variable.",
+            "Variable",
+        ),
+        ("This prints a Git hosting token.", "Token"),
+        (
+            "This extracts a password from the macOS Keychain.",
+            "Keychain",
+        ),
+        (
+            "This prints a stored secret or access token.",
+            "SecretPrint",
+        ),
+        ("curl verbose or trace output", "Trace"),
+        ("This sends the contents of a credential file.", "Upload"),
+        ("This reads private material under ~/.ssh.", "Ssh"),
+        ("Grep would search private ~/.ssh material.", "GrepSsh"),
+        (
+            "The agent guard could not complete its symlink check.",
+            "Symlink",
+        ),
+        ("rg -r means --replace.", "Replace"),
+        ("rg has no --include flag.", "Include"),
+        ("rg regex is not grep BRE:", "Bre"),
+    ] {
+        if s.contains(prefix) {
+            return id;
+        }
+    }
+    "unknown"
+}
+
+fn flag_denials(v: &Value, harness: &str, e: &mut Event, leading: &mut bool) {
+    match v {
+        Value::String(s) => {
+            denials(s, harness, e, *leading);
+            if !s.trim().is_empty() {
+                *leading = false;
+            }
+        }
+        Value::Array(a) => {
+            for v in a {
+                flag_denials(v, harness, e, leading);
+            }
+        }
+        Value::Object(m) => {
+            if let Some(v) = m.get("text").or_else(|| m.get("content")) {
+                flag_denials(v, harness, e, leading);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
+    for line in s.lines() {
+        let line = line.trim();
+        let source = if line.starts_with("Script error: Command blocked by PreToolUse hook:")
+            || harness == "codex"
+                && line.starts_with("Command blocked by PreToolUse hook:")
+                && s.trim_start().starts_with("Script error:")
+            || (line.starts_with("PreToolUse:") || line.starts_with("Error: PreToolUse:"))
+                && line.contains("DENIED:")
+        {
+            Some("hook")
+        } else if harness != "codex"
+            && e.ok == Some(false)
+            && (line.starts_with("DENIED:")
+                || line.starts_with("Command blocked by agent-guard:")
+                || line.starts_with("Blocked by agent-guard:"))
+        {
+            Some("guard")
+        } else if harness == "claude"
+            && e.ok == Some(false)
+            && (line.starts_with("Error: Permission to use ") && line.contains("denied")
+                || line.starts_with("Auto-mode classifier denied"))
+        {
+            Some("classifier")
+        } else if harness == "pi"
+            && leading
+            && e.ok == Some(false)
+            && s.trim_start().starts_with(line)
+            && reason_id(line) != "unknown"
+            && !line.contains("\"")
+        {
+            Some("guard")
+        } else {
+            None
+        };
+        if let Some(source) = source {
+            let denial = (source.into(), reason_id(line).into());
+            if !e.denials.contains(&denial) {
+                e.denials.push(denial);
+            }
+        }
+    }
+}

@@ -180,7 +180,7 @@ pub fn search(
         .collect::<rusqlite::Result<_>>()?)
 }
 
-pub fn raw_range(db: &Connection, item: &Hit) -> Result<String> {
+fn read_range(db: &Connection, item: &Hit) -> Result<Vec<u8>> {
     anyhow::ensure!(
         item.byte_len <= MAX_RECORD as u64,
         "source record exceeds display limit"
@@ -206,25 +206,14 @@ pub fn raw_range(db: &Connection, item: &Hit) -> Result<String> {
         crate::normalize::hash(&bytes) == expected.2,
         "source range changed; run sessidx index"
     );
-    let mut value: Json =
-        serde_json::from_slice(&bytes).context("source range changed; run sessidx index")?;
-    redact_value(&mut value);
-    Ok(serde_json::to_string(&value)?)
+    Ok(bytes)
 }
 
-pub fn redact_value(v: &mut Json) {
-    match v {
-        Json::String(s) => *s = redact(s),
-        Json::Array(a) => a.iter_mut().for_each(redact_value),
-        Json::Object(m) => {
-            let old = std::mem::take(m);
-            for (key, mut value) in old {
-                redact_value(&mut value);
-                m.insert(redact(&key), value);
-            }
-        }
-        _ => {}
-    }
+fn display_range(bytes: &[u8]) -> Result<String> {
+    let mut value: Json =
+        serde_json::from_slice(bytes).context("source range changed; run sessidx index")?;
+    crate::redaction::redact_value(&mut value);
+    Ok(serde_json::to_string(&value)?)
 }
 
 pub fn scan(
@@ -259,10 +248,10 @@ pub fn scan(
         }
         let mut item = row?;
         cursor = item.event_id;
-        match raw_range(db, &item) {
-            Ok(raw) => {
-                if pattern.is_match(&raw) {
-                    item.snippet = raw;
+        match read_range(db, &item) {
+            Ok(bytes) => {
+                if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
+                    item.snippet = display_range(&bytes)?;
                     hits.push(item);
                 }
             }
@@ -322,7 +311,7 @@ pub fn show(
         ..Coverage::default()
     };
     for item in &mut hits {
-        match raw_range(db, item) {
+        match read_range(db, item).and_then(|bytes| display_range(&bytes)) {
             Ok(raw) => item.snippet = raw,
             Err(_) => {
                 item.snippet = "[source range unavailable; run sessidx index]".into();

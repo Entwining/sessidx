@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct State {
+    pub first_ts: Option<String>,
     pub session_id: String,
     pub cwd: String,
     pub model: Option<String>,
@@ -16,13 +18,16 @@ pub struct State {
 pub struct Event {
     pub native_id: Option<String>,
     pub ts: Option<String>,
+    pub model: Option<String>,
     pub role: String,
     pub role_source: String,
     pub kind: String,
+    pub kind_source: String,
     pub text: Option<String>,
     pub tool: Option<String>,
     pub call_id: Option<String>,
     pub command: Option<String>,
+    pub sites: Vec<crate::shell::Site>,
     pub ok: Option<bool>,
     pub ok_source: String,
     pub exit_code: Option<i64>,
@@ -34,13 +39,16 @@ impl Event {
         Self {
             native_id: None,
             ts: None,
+            model: None,
             role: role.into(),
             role_source: source.into(),
             kind: kind.into(),
+            kind_source: source.into(),
             text: None,
             tool: None,
             call_id: None,
             command: None,
+            sites: Vec::new(),
             ok: None,
             ok_source: "none".into(),
             exit_code: None,

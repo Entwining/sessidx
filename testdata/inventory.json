@@ -1,0 +1,1087 @@
+[
+  {
+    "harness": "claude",
+    "shape": "agent-name / none",
+    "scope": "root",
+    "record": {
+      "type": "agent-name"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "ai-title / none",
+    "scope": "root",
+    "record": {
+      "type": "ai-title"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / none",
+    "scope": "root",
+    "record": {
+      "type": "assistant",
+      "uuid": "synthetic-id",
+      "parentUuid": "synthetic-parent",
+      "message": {
+        "role": "assistant",
+        "model": "synthetic-model",
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "atis-latch / none",
+    "scope": "root",
+    "record": {
+      "type": "atis-latch"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "attachment / none",
+    "scope": "root",
+    "record": {
+      "type": "attachment",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "continued-in / none",
+    "scope": "root",
+    "record": {
+      "type": "continued-in",
+      "sessionId": "synthetic-id"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "cost-state / none",
+    "scope": "root",
+    "record": {
+      "type": "cost-state"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "custom-title / none",
+    "scope": "root",
+    "record": {
+      "type": "custom-title"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "failed / none",
+    "scope": "root",
+    "record": {
+      "type": "failed"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "file-history-delta / none",
+    "scope": "root",
+    "record": {
+      "type": "file-history-delta",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "file-history-snapshot / none",
+    "scope": "root",
+    "record": {
+      "type": "file-history-snapshot"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "fork-context-ref / none",
+    "scope": "root",
+    "record": {
+      "type": "fork-context-ref"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "last-prompt / none",
+    "scope": "root",
+    "record": {
+      "type": "last-prompt"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "launched / none",
+    "scope": "root",
+    "record": {
+      "type": "launched"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "mode / none",
+    "scope": "root",
+    "record": {
+      "type": "mode"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "permission-mode / none",
+    "scope": "root",
+    "record": {
+      "type": "permission-mode"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "pr-link / none",
+    "scope": "root",
+    "record": {
+      "type": "pr-link",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "queue-operation / none",
+    "scope": "root",
+    "record": {
+      "type": "queue-operation",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "relocated / none",
+    "scope": "root",
+    "record": {
+      "type": "relocated"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "result / none",
+    "scope": "root",
+    "record": {
+      "type": "result"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "started / none",
+    "scope": "root",
+    "record": {
+      "type": "started"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / api_error",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "api_error",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / compact_boundary",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "compact_boundary",
+      "content": "synthetic-text"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / informational",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "informational"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / local_command",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "local_command",
+      "content": "synthetic-text"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / model_refusal_fallback",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "model_refusal_fallback"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / model_refusal_no_fallback",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "model_refusal_no_fallback"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / scheduled_task_fire",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "scheduled_task_fire"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / stop_hook_summary",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "stop_hook_summary",
+      "content": "synthetic-text"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "system / turn_duration",
+    "scope": "root",
+    "record": {
+      "type": "system",
+      "subtype": "turn_duration",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "user / none",
+    "scope": "root",
+    "record": {
+      "type": "user",
+      "uuid": "synthetic-id",
+      "parentUuid": "synthetic-parent",
+      "message": {
+        "role": "user",
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "worktree-state / none",
+    "scope": "root",
+    "record": {
+      "type": "worktree-state"
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / advisor_tool_result",
+    "scope": "block",
+    "record": {
+      "type": "assistant",
+      "message": {
+        "content": [
+          {
+            "type": "advisor_tool_result",
+            "content": "synthetic-text"
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / fallback",
+    "scope": "block",
+    "record": {
+      "type": "assistant",
+      "message": {
+        "content": [
+          {
+            "type": "fallback"
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / server_tool_use",
+    "scope": "block",
+    "record": {
+      "type": "assistant",
+      "message": {
+        "content": [
+          {
+            "type": "server_tool_use",
+            "id": "synthetic-call",
+            "name": "Bash",
+            "input": {
+              "command": "rg needle src"
+            },
+            "arguments": {
+              "command": "rg needle src"
+            }
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / text",
+    "scope": "block",
+    "record": {
+      "type": "assistant",
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "synthetic-text"
+          }
+        ],
+        "role": "user"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / thinking",
+    "scope": "block",
+    "record": {
+      "type": "assistant",
+      "message": {
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "synthetic-text"
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "assistant / tool_use",
+    "scope": "block",
+    "record": {
+      "type": "assistant",
+      "message": {
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "synthetic-call",
+            "name": "Bash",
+            "input": {
+              "command": "rg needle src"
+            },
+            "arguments": {
+              "command": "rg needle src"
+            }
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "user / image",
+    "scope": "block",
+    "record": {
+      "type": "user",
+      "message": {
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "synthetic-type",
+              "data": "synthetic-data"
+            }
+          }
+        ],
+        "role": "user"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "user / text",
+    "scope": "block",
+    "record": {
+      "type": "user",
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "synthetic-text"
+          }
+        ],
+        "role": "user"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "claude",
+    "shape": "user / tool_result",
+    "scope": "block",
+    "record": {
+      "type": "user",
+      "message": {
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "synthetic-id",
+            "content": "synthetic-text",
+            "is_error": false
+          }
+        ],
+        "role": "user"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "compacted / none",
+    "scope": "root",
+    "record": {
+      "type": "compacted",
+      "timestamp": "2026-10-01T00:00:00Z",
+      "payload": {}
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / item_completed",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "item_completed",
+        "turn_id": "synthetic-id"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / task_complete",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "task_complete",
+        "turn_id": "synthetic-id",
+        "error": "synthetic-text"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / task_started",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "task_started",
+        "turn_id": "synthetic-id"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / thread_goal_updated",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "thread_goal_updated",
+        "goal": {
+          "threadId": "synthetic-id",
+          "status": "synthetic-status"
+        }
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / thread_settings_applied",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "thread_settings_applied",
+        "thread_id": "synthetic-id",
+        "cwd": "synthetic-path"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / token_count",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "token_count"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "event_msg / turn_aborted",
+    "scope": "root",
+    "record": {
+      "type": "event_msg",
+      "payload": {
+        "type": "turn_aborted",
+        "turn_id": "synthetic-id",
+        "reason": "synthetic-text"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "inter_agent_communication_metadata / none",
+    "scope": "root",
+    "record": {
+      "type": "inter_agent_communication_metadata",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / agent_message",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "agent_message",
+        "id": "synthetic-id",
+        "recipient": "synthetic-name",
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / compaction",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "compaction",
+        "id": "synthetic-id"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / custom_tool_call",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call",
+        "id": "synthetic-id",
+        "call_id": "synthetic-call",
+        "name": "synthetic-name",
+        "input": {}
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / custom_tool_call_output",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "custom_tool_call_output",
+        "call_id": "synthetic-call",
+        "output": [
+          {
+            "type": "synthetic-block",
+            "text": "synthetic-text"
+          }
+        ]
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / function_call",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "function_call",
+        "id": "synthetic-id",
+        "call_id": "synthetic-call",
+        "name": "synthetic-name",
+        "arguments": {}
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / function_call_output",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "function_call_output",
+        "call_id": "synthetic-call",
+        "output": "synthetic-text"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / message",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "message",
+        "id": "synthetic-id",
+        "role": "synthetic-role",
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / reasoning",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "reasoning",
+        "id": "synthetic-id",
+        "summary": [],
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / tool_search_call",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "tool_search_call",
+        "id": "synthetic-id",
+        "call_id": "synthetic-call",
+        "arguments": {}
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "response_item / tool_search_output",
+    "scope": "root",
+    "record": {
+      "type": "response_item",
+      "payload": {
+        "type": "tool_search_output",
+        "call_id": "synthetic-call",
+        "tools": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "session_meta / none",
+    "scope": "root",
+    "record": {
+      "type": "session_meta",
+      "payload": {
+        "id": "synthetic-id",
+        "session_id": "synthetic-session",
+        "cwd": "synthetic-path",
+        "base_instructions": {
+          "text": "synthetic-text",
+          "provenance": {
+            "type": "synthetic-type",
+            "model": "synthetic-model"
+          }
+        }
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "token_usage_record / none",
+    "scope": "root",
+    "record": {
+      "type": "token_usage_record",
+      "payload": {
+        "session_id": "synthetic-id",
+        "thread_id": "synthetic-id",
+        "turn_id": "synthetic-id"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "turn_context / none",
+    "scope": "root",
+    "record": {
+      "type": "turn_context",
+      "payload": {
+        "model": "synthetic-model",
+        "turn_id": "synthetic-id",
+        "cwd": "synthetic-path"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "codex",
+    "shape": "world_state / none",
+    "scope": "root",
+    "record": {
+      "type": "world_state",
+      "payload": {
+        "state": {
+          "model": "synthetic-model",
+          "collaboration_mode": {},
+          "environments": {
+            "local": {
+              "cwd": "synthetic-path"
+            }
+          }
+        }
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "compaction / none",
+    "scope": "root",
+    "record": {
+      "type": "compaction",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "summary": "synthetic-text"
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "context_edit / none",
+    "scope": "root",
+    "record": {
+      "type": "context_edit",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "custom / none",
+    "scope": "root",
+    "record": {
+      "type": "custom",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "data": {
+        "synthetic-key": "synthetic-value"
+      }
+    },
+    "known": false
+  },
+  {
+    "harness": "pi",
+    "shape": "message / assistant",
+    "scope": "root",
+    "record": {
+      "type": "message",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "message": {
+        "role": "assistant",
+        "model": "synthetic-model",
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / bashExecution",
+    "scope": "root",
+    "record": {
+      "type": "message",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "message": {
+        "role": "bashExecution",
+        "output": "synthetic-text"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / system",
+    "scope": "root",
+    "record": {
+      "type": "message",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "message": {
+        "role": "system",
+        "content": "synthetic-text"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / toolResult",
+    "scope": "root",
+    "record": {
+      "type": "message",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "message": {
+        "role": "toolResult",
+        "toolCallId": "synthetic-call",
+        "toolName": "synthetic-name",
+        "isError": false,
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / user",
+    "scope": "root",
+    "record": {
+      "type": "message",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "message": {
+        "role": "user",
+        "content": []
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "model_change / none",
+    "scope": "root",
+    "record": {
+      "type": "model_change",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "provider": "synthetic-provider",
+      "modelId": "synthetic-model"
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "session / none",
+    "scope": "root",
+    "record": {
+      "type": "session",
+      "id": "synthetic-id",
+      "cwd": "synthetic-path",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "session_info / none",
+    "scope": "root",
+    "record": {
+      "type": "session_info",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "timestamp": "2026-10-01T00:00:00Z",
+      "name": "synthetic-name"
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "thinking_level_change / none",
+    "scope": "root",
+    "record": {
+      "type": "thinking_level_change",
+      "id": "synthetic-id",
+      "parentId": "synthetic-parent",
+      "timestamp": "2026-10-01T00:00:00Z"
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / image",
+    "scope": "block",
+    "record": {
+      "type": "message",
+      "message": {
+        "content": [
+          {
+            "type": "image",
+            "source": {
+              "type": "synthetic-type",
+              "data": "synthetic-data"
+            }
+          }
+        ],
+        "role": "user"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / text",
+    "scope": "block",
+    "record": {
+      "type": "message",
+      "message": {
+        "content": [
+          {
+            "type": "text",
+            "text": "synthetic-text"
+          }
+        ],
+        "role": "user"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / thinking",
+    "scope": "block",
+    "record": {
+      "type": "message",
+      "message": {
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "synthetic-text"
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  },
+  {
+    "harness": "pi",
+    "shape": "message / toolCall",
+    "scope": "block",
+    "record": {
+      "type": "message",
+      "message": {
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "synthetic-call",
+            "name": "bash",
+            "arguments": {
+              "command": "rg needle src"
+            },
+            "input": {}
+          }
+        ],
+        "role": "assistant"
+      }
+    },
+    "known": true
+  }
+]

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sessidx::{
+    counting,
     discovery::{self, Root},
     query::{self, Filters},
     redaction::redact,
@@ -52,10 +53,26 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         cursor: i64,
     },
+    Count {
+        #[arg(long, default_value = "harness,model,role,week")]
+        by: String,
+        #[arg(long, default_value = "commands")]
+        metric: String,
+        #[arg(long)]
+        program: Option<String>,
+        #[command(flatten)]
+        filters: Filters,
+        #[arg(long)]
+        json: bool,
+    },
+    Doctor,
+    Sql {
+        query: String,
+    },
 }
 
 fn notice(report: &Refresh) -> Result<()> {
-    if report.stale {
+    if report.stale || report.parse_errors > 0 || report.unknown_records > 0 {
         eprintln!(
             "{}",
             serde_json::json!({"type":"coverage","refresh":report,"notice":"index may be stale; run sessidx index to finish refresh"})
@@ -65,7 +82,18 @@ fn notice(report: &Refresh) -> Result<()> {
 }
 
 fn run() -> Result<i32> {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            let code = e.exit_code();
+            if code == 0 {
+                println!("{}", redact(&e.to_string()));
+            } else {
+                eprintln!("{}", redact(&e.to_string()));
+            }
+            return Ok(code);
+        }
+    };
     let home =
         PathBuf::from(std::env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME missing"))?);
     let path = cli
@@ -97,6 +125,17 @@ fn run() -> Result<i32> {
             filters.narrowed(),
             "--scan requires a narrowing filter: add --since, --until, --cwd, --session, --harness, or --file"
         );
+    }
+    if let Command::Sql { query } = &cli.command {
+        let db = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let rows = counting::sql(&db, query)?;
+        for row in &rows {
+            println!("{}", serde_json::to_string(row)?);
+        }
+        return Ok(if rows.is_empty() { 1 } else { 0 });
     }
     let mut store = Store::open(&path)?;
     match cli.command {
@@ -163,6 +202,26 @@ fn run() -> Result<i32> {
             query::emit_hits(&hits, json)?;
             Ok(if hits.is_empty() { 1 } else { 0 })
         }
+        Command::Count {
+            by,
+            metric,
+            program,
+            filters,
+            json: _,
+        } => {
+            notice(&store.refresh(&roots, false, Some(Duration::from_secs(2)))?)?;
+            let rows = counting::count(&store.db, &metric, &by, program.as_deref(), &filters)?;
+            for row in &rows {
+                println!("{}", serde_json::to_string(row)?);
+            }
+            Ok(if rows.is_empty() { 1 } else { 0 })
+        }
+        Command::Doctor => {
+            notice(&store.refresh(&roots, false, Some(Duration::from_secs(2)))?)?;
+            println!("{}", counting::doctor(&store.db)?);
+            Ok(0)
+        }
+        Command::Sql { .. } => unreachable!(),
     }
 }
 

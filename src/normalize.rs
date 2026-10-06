@@ -63,3 +63,58 @@ pub fn shell(tool: &str, args: &Value) -> Option<String> {
         _ => None,
     }
 }
+
+// Pi thinkingSignature and opaque image/thinking blocks: testdata/opaque.jsonl.
+pub fn record_for_index(bytes: &[u8], harness: &str) -> serde_json::Result<Value> {
+    use serde_json::value::RawValue;
+    use std::collections::BTreeMap;
+    if !matches!(harness, "claude" | "pi")
+        || bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{')
+    {
+        return serde_json::from_slice(bytes);
+    }
+    let fields: BTreeMap<String, &RawValue> = serde_json::from_slice(bytes)?;
+    let mut record = serde_json::Map::new();
+    for (key, raw) in fields {
+        let value = if key == "message" && raw.get().starts_with('{') {
+            let fields: BTreeMap<String, &RawValue> = serde_json::from_str(raw.get())?;
+            let mut message = serde_json::Map::new();
+            for (key, raw) in fields {
+                let value = if key == "content" && raw.get().starts_with('[') {
+                    let blocks: Vec<&RawValue> = serde_json::from_str(raw.get())?;
+                    let mut content = Vec::with_capacity(blocks.len());
+                    for raw in blocks {
+                        let mut opaque = None;
+                        if raw.get().starts_with('{') {
+                            let fields: BTreeMap<String, &RawValue> =
+                                serde_json::from_str(raw.get())?;
+                            if let Some(raw_type) = fields.get("type") {
+                                if let Ok(typ) = serde_json::from_str::<String>(raw_type.get()) {
+                                    if matches!(
+                                        typ.as_str(),
+                                        "thinking" | "redacted_thinking" | "image" | "fallback"
+                                    ) {
+                                        opaque = Some(serde_json::json!({"type":typ}));
+                                    }
+                                }
+                            }
+                        }
+                        content.push(match opaque {
+                            Some(v) => v,
+                            None => serde_json::from_str(raw.get())?,
+                        });
+                    }
+                    Value::Array(content)
+                } else {
+                    serde_json::from_str(raw.get())?
+                };
+                message.insert(key, value);
+            }
+            Value::Object(message)
+        } else {
+            serde_json::from_str(raw.get())?
+        };
+        record.insert(key, value);
+    }
+    Ok(Value::Object(record))
+}
