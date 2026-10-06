@@ -38,7 +38,7 @@ pub fn count(
     }
     let (clause, mut args) = filters.sql()?;
     let selected = if let Some(program) = program {
-        args.push(Value::Text(program.into()));
+        args.insert(0, Value::Text(program.into()));
         match metric {
             "commands" => "c.program=?PROGRAM",
             "failures" => {
@@ -51,7 +51,7 @@ pub fn count(
     } else {
         "1=1"
     };
-    let selected = selected.replace("?PROGRAM", &format!("?{}", args.len()));
+    let selected = selected.replace("?PROGRAM", "?1");
     let unknown_program = if program.is_none() {
         "0"
     } else if metric == "denials" {

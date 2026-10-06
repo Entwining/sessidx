@@ -1,5 +1,10 @@
 use sessidx::{
-    adapters, counting, discovery::Root, model::State, query::Filters, shell, store::Store,
+    adapters, counting,
+    discovery::Root,
+    model::State,
+    query::{Filters, Harness, Kind, Role},
+    shell,
+    store::Store,
 };
 use std::fs;
 
@@ -144,7 +149,7 @@ fn native_message_fragments_empty_replies_summary_and_history_dedup() {
 
 #[test]
 fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
-    let (_, store) = indexed("claude", include_str!("../testdata/claude.jsonl"));
+    let (dir, store) = indexed("claude", include_str!("../testdata/claude.jsonl"));
     let commands =
         counting::count(&store.db, "commands", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(commands[0]["unit"], "static_shell_command_sites");
@@ -154,6 +159,44 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(failures[0]["numerator"], 1);
     assert_eq!(failures[0]["denominator"], 1);
+    let sessions = [
+        "claude-fixture".to_owned(),
+        dir.path()
+            .join("logs/one.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+    for (metric, role, expected) in [
+        ("commands", Role::Assistant, commands),
+        ("failures", Role::Assistant, failures),
+        (
+            "denials",
+            Role::Tool,
+            counting::count(&store.db, "denials", "", Some("rg"), &Filters::default()).unwrap(),
+        ),
+    ] {
+        for session in &sessions {
+            let mut filters = Filters {
+                harness: vec![Harness::Claude, Harness::Pi],
+                role: Some(role),
+                kind: Some(Kind::Unknown),
+                session: Some(session.clone()),
+                since: Some("2026-10-01".into()),
+                until: Some("2026-10-02".into()),
+                cwd: Some("/synthetic".into()),
+            };
+            assert_eq!(
+                counting::count(&store.db, metric, "", Some("rg"), &filters).unwrap(),
+                expected,
+                "{metric} {session}"
+            );
+            filters.since = Some("2026-10-02".into());
+            let empty = counting::count(&store.db, metric, "", Some("rg"), &filters).unwrap();
+            assert_eq!(empty[0]["numerator"], 0);
+            assert_eq!(empty[0]["denominator"], 0);
+            assert_eq!(empty[0]["unclassified"], 0);
+        }
+    }
     assert!(counting::sql(&store.db, "DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "SELECT 1; DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
