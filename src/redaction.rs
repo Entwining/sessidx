@@ -6,13 +6,13 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
     r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]+",
     r"\b(?:sk-[A-Za-z0-9_\-]{8,}|(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9_\-]{8,})",
-    r#"(?i)["']?(?:[A-Za-z0-9_\-]*(?:api[_-]?key|secret|password|passwd|token|credential)[A-Za-z0-9_\-]*|authorization)["']?\s*[=:]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#,
+    r#"(?i)["']?(?:[A-Za-z0-9_\-]*(?:api[_-]?key|secret|password|passwd|token|credential)[A-Za-z0-9_\-]*|authorization|\bkey)["']?\s*[=:]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#,
 ].into_iter().map(|p| Regex::new(p).unwrap()).collect()
 });
-static RUNS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=.!@$%:?\-]{16,}").unwrap());
+static RUNS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=\-]{16,}").unwrap());
 static CREDENTIAL_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|credential|authorization)").unwrap()
+    Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|credential|authorization)|(?i)^key$")
+        .unwrap()
 });
 
 pub fn redact_value(v: &mut serde_json::Value) {
@@ -48,6 +48,19 @@ pub fn redact(text: &str) -> String {
     let out = redact_metadata(text);
     RUNS.replace_all(&out, |caps: &regex::Captures<'_>| {
         let run = &caps[0];
+        let hex = run
+            .strip_prefix("0x")
+            .or_else(|| run.strip_prefix("0X"))
+            .unwrap_or(run);
+        let uuid = run.len() == 36
+            && run
+                .split('-')
+                .zip([8, 4, 4, 4, 12])
+                .all(|(s, n)| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        // Body identifiers and credential-context controls: testdata/identifiers.jsonl.
+        if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || run.starts_with('/') {
+            return run.to_owned();
+        }
         let mut counts = HashMap::new();
         for byte in run.bytes() {
             *counts.entry(byte).or_insert(0usize) += 1;

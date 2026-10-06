@@ -64,10 +64,15 @@ rows.extend([
     ('codex_tool_search', 'src/adapters/codex.rs', '"function_call" | "custom_tool_call" | "tool_search_call"', '"function_call" | "custom_tool_call"', 'inventory_variants_are_classified_with_future_shape_negative_control', 'pi_model_tool_call_and_camel_case_flag'),
 ])
 rows.append(('guard_stdout_control', 'src/outcomes.rs', 'harness != "codex"\n            && e.ok == Some(false)', 'true', 'successful_stdout_guard_examples_are_not_denials', 'codex_context_arguments_and_telemetry'))
-rows.append(('credential_assignments', 'src/redaction.rs', '    r#"(?i)["\']?(?:[A-Za-z0-9_\\-]*(?:api[_-]?key|secret|password|passwd|token|credential)[A-Za-z0-9_\\-]*|authorization)["\']?\\s*[=:]\\s*(?:"(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\'|[^\\s,"\'<>}]+)"#,', '    r#"removed-credential-assignment-pattern"#,', 'adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed', 'codex_context_arguments_and_telemetry'))
+rows.append(('credential_assignments', 'src/redaction.rs', '    r#"(?i)["\']?(?:[A-Za-z0-9_\\-]*(?:api[_-]?key|secret|password|passwd|token|credential)[A-Za-z0-9_\\-]*|authorization|\\bkey)["\']?\\s*[=:]\\s*(?:"(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\'|[^\\s,"\'<>}]+)"#,', '    r#"removed-credential-assignment-pattern"#,', 'adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed', 'codex_context_arguments_and_telemetry'))
 rows.append(('harness_outcome_scope', 'src/counting.rs', 'o.harness=f.harness AND ', '', 'call_outcomes_are_isolated_by_harness', 'pi_model_tool_call_and_camel_case_flag'))
 rows.append(('mcp_transport_flag', 'src/outcomes.rs', 'if let Some(error) = m.get("isError").and_then(Value::as_bool) {', 'if let Some(error) = None::<bool> {', 'codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('opaque_payload', 'src/normalize.rs', 'if matches!(\n                                        typ.as_str(),\n                                        "thinking" | "redacted_thinking" | "image" | "fallback"\n                                    )', 'if false', 'opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved', 'codex_context_arguments_and_telemetry'))
+rows.extend([
+    ('body_identifiers', 'src/redaction.rs', "if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || run.starts_with('/') {", 'if false {', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
+    ('key_label', 'src/redaction.rs', r'|authorization|\bkey)', '|authorization)', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
+    ('key_field', 'src/redaction.rs', r'|(?i)^key$', '', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
+])
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

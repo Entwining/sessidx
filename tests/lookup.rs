@@ -293,7 +293,8 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
     let values: serde_json::Value =
         serde_json::from_str(include_str!("../testdata/privacy.json")).unwrap();
     let text = format!(
-        "needle {} Authorization: Basic {} password = \"{}\"",
+        "needle {} token={} Authorization: Basic {} password = \"{}\"",
+        values["unmarked"].as_str().unwrap(),
         values["hex"].as_str().unwrap(),
         values["basic"].as_str().unwrap(),
         values["passphrase"].as_str().unwrap()
@@ -322,6 +323,65 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 }
 
 #[test]
+fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
+    let (_, store, _) = setup("claude", include_str!("../testdata/identifiers.jsonl"));
+    for value in [
+        "0123456789abcdef1032547698badcfe89abcdef",
+        "0xabcdef0123456789abcdef0123456789abcdef01",
+        "01234567-89ab-cdef-0123-456789abcdef",
+        "/synthetic/long-project-directory/source.rs",
+    ] {
+        let hits = query::search(
+            &store.db,
+            &format!("identifierneedle {value}"),
+            &Filters::default(),
+            20,
+            0,
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].snippet.contains(value));
+    }
+    let context = query::search(&store.db, "contextneedle", &Filters::default(), 20, 0).unwrap();
+    assert_eq!(context.len(), 1);
+    for value in [
+        "0123456789abcdef1032547698badcfe89abcdef",
+        "0xabcdef0123456789abcdef0123456789abcdef01",
+        "01234567-89ab-cdef-0123-456789abcdef",
+        "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ",
+    ] {
+        assert!(!context[0].snippet.contains(value));
+    }
+    let input = query::search(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
+    assert!(
+        query::search(
+            &store.db,
+            "identifierinput 0xabcdef0123456789abcdef0123456789abcdef01",
+            &Filters::default(),
+            20,
+            0
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert!(
+        input[0]
+            .snippet
+            .contains("0123456789abcdef1032547698badcfe89abcdef")
+    );
+    assert!(
+        !input[0]
+            .snippet
+            .contains("0xabcdef0123456789abcdef0123456789abcdef01")
+    );
+    assert!(
+        !input[0]
+            .snippet
+            .contains("vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ")
+    );
+}
+
+#[test]
 fn scan_matches_original_ranges_before_redacting_display() {
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";
@@ -345,7 +405,7 @@ fn scan_matches_original_ranges_before_redacting_display() {
 
 #[test]
 fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
-    let session = "00000000-0000-7000-8000-000000000001";
+    let session = "rollout-2026-05-01T10-30-00-syntheticId7QwX9rTbM3k";
     let cwd = "/synthetic/Code/GitHub/project-with-native-identifiers";
     let data=serde_json::json!({"type":"session_meta","payload":{"id":session,"cwd":cwd}}).to_string()+"\n"+&serde_json::json!({"type":"turn_context","payload":{"model":"claude-haiku-4-5-20251001"}}).to_string()+"\n"+&serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}}).to_string()+"\n";
     let (_, store, _) = setup("codex", &data);

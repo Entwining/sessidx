@@ -23,7 +23,7 @@ sessidx doctor
 sessidx sql 'SELECT source,reason_id,count(*) FROM denials GROUP BY source,reason_id'
 ```
 
-FTS joins whitespace-separated terms with AND; quoted phrases preserve word order. Chinese character sequences use phrase matching, and Latin terms match whole words. FTS searches redacted message and tool-input text. Tool outputs are pointer-only and require `--scan` or `show`. Redaction can mask hashes, wallet addresses, and other high-entropy identifiers in body text; narrowed raw scanning matches original bytes before redacting its display.
+FTS joins whitespace-separated terms with AND; quoted phrases preserve word order. Chinese character sequences use phrase matching, and Latin terms match whole words. FTS searches redacted message and tool-input text. Tool outputs are pointer-only and require `--scan` or `show`. Pure hex, wallet addresses and UUIDs stay searchable unless credential context or a known secret prefix qualifies them for redaction. Narrowed raw scanning matches original bytes before redacting its display.
 
 Search filters are `--harness`, speaker `--role`, inclusive `--since`, exclusive `--until`, `--cwd` (directory or descendants), `--session`, and repeatable `--file`. Dates accept RFC 3339 or UTC `YYYY-MM-DD`. FTS defaults to 20 results, with `--limit` and `--offset`. Raw scanning requires at least one filter other than role, reads only indexed byte ranges, and reports incomplete coverage and an event `--cursor` after its two-second deadline. `show` defaults to 100 records and supports `--cursor`.
 
