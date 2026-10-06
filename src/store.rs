@@ -203,7 +203,7 @@ impl Store {
         for (harness, path) in files {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 report.stale = true;
-                report.continuation = Some(redact_metadata(&path.to_string_lossy()));
+                report.continuation = Some(path.to_string_lossy().into_owned());
                 break;
             }
             let result = self.index_file(&harness, &path, deadline, None)?;
@@ -214,7 +214,7 @@ impl Store {
             }
             if result.coverage == FileCoverage::BudgetExhausted {
                 report.stale = true;
-                report.continuation = Some(redact_metadata(&path.to_string_lossy()));
+                report.continuation = Some(path.to_string_lossy().into_owned());
                 if deadline.is_some_and(|d| Instant::now() >= d) {
                     break;
                 }

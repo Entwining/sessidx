@@ -168,8 +168,12 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
         .unwrap();
     assert!(busy.stale && busy.writer_busy);
     drop(lock);
+    let location = roots[0].path.join("token=synthetic-location-key.jsonl");
+    fs::rename(roots[0].path.join("session.jsonl"), &location).unwrap();
     let budget = store.refresh(&roots, false, Some(Duration::ZERO)).unwrap();
     assert!(budget.stale && budget.continuation.is_some());
+    assert_eq!(budget.continuation.as_deref(), location.to_str());
+    assert!(!store.refresh(&roots, false, None).unwrap().stale);
     let missing = store
         .refresh(
             &[Root {
@@ -295,11 +299,14 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
     let values: serde_json::Value =
         serde_json::from_str(include_str!("../testdata/privacy.json")).unwrap();
     let text = format!(
-        "needle {} token={} Authorization: Basic {} password = \"{}\"",
+        "needle {} token={} Authorization: Basic {} password = \"{}\" https://example.invalid/?token={} https://example.invalid/?page=2&key={} https://example.invalid/?access_token={}",
         values["unmarked"].as_str().unwrap(),
         values["hex"].as_str().unwrap(),
         values["basic"].as_str().unwrap(),
-        values["passphrase"].as_str().unwrap()
+        values["passphrase"].as_str().unwrap(),
+        values["query_short"].as_str().unwrap(),
+        values["query_short"].as_str().unwrap(),
+        values["query_short"].as_str().unwrap()
     );
     let data=serde_json::json!({"type":"user","uuid":"privacy-user","sessionId":"privacy","message":{"role":"user","content":text}}).to_string()+"\n"+&serde_json::json!({"type":"assistant","uuid":"privacy-input","sessionId":"privacy","message":{"role":"assistant","content":[{"type":"tool_use","id":"privacy-call","name":"Bash","input":{"command":"printf needle","part_one":values["part_one"],"part_two":values["part_two"]}}]}}).to_string()+"\n";
     let (dir, store, _) = setup("claude", &data);
@@ -610,6 +617,24 @@ fn initial_schema_creation_respects_the_writer_lock() {
     let mut second = Store::open(&path).unwrap();
     let r = second.refresh(&[], false, None).unwrap();
     assert!(r.writer_busy && r.stale);
+    let out = Command::new(env!("CARGO_BIN_EXE_sessidx"))
+        .arg("--db")
+        .arg(&path)
+        .arg("--root")
+        .arg(format!("codex={}", dir.path().display()))
+        .arg("index")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    let rows: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows[0]["type"], "index");
+    assert_eq!(rows[0]["writer_busy"], true);
+    assert_eq!(rows[0]["stale"], true);
+    assert!(rows.last().unwrap().get("error").is_none());
     assert_eq!(
         second
             .db

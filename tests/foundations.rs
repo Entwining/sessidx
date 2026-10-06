@@ -271,7 +271,7 @@ fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
     let path = dir.path().join("one.jsonl");
     let data = format!(
         "{}\n",
-        serde_json::json!({"type":"message","message":{"role":"user","content":"oldword"},"padding":"x".repeat(5000)})
+        serde_json::json!({"a_padding":"x".repeat(5000),"type":"message","message":{"role":"user","content":"oldword"}})
     );
     fs::write(&path, &data).unwrap();
     let roots = [Root {
@@ -281,7 +281,10 @@ fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     store.refresh(&roots, false, None).unwrap();
     let modified = fs::metadata(&path).unwrap().modified().unwrap();
-    fs::write(&path, data.replace("oldword", "newword")).unwrap();
+    let replaced = data.replace("oldword", "newword");
+    assert_eq!(data.len(), replaced.len());
+    assert_eq!(&data.as_bytes()[..4096], &replaced.as_bytes()[..4096]);
+    fs::write(&path, replaced).unwrap();
     fs::File::options()
         .write(true)
         .open(&path)
@@ -310,6 +313,26 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
     assert!(!r.stale);
     assert_eq!(r.deferred_tails, 1);
     assert_eq!(r.records, 1);
+    assert!(r.continuation.is_none());
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sessidx"))
+        .arg("--db")
+        .arg(&store.path)
+        .arg("--root")
+        .arg(format!("pi={}", dir.path().display()))
+        .arg("index")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let rows: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows[0]["type"], "index");
+    assert_eq!(rows[0]["deferred_tails"], 1);
+    assert_eq!(rows[0]["stale"], false);
+    assert!(rows[0]["continuation"].is_null());
+    assert_eq!(rows.last().unwrap()["complete"], true);
     let r = store.refresh(&roots, false, None).unwrap();
     assert_eq!(r.records, 0);
     assert_eq!(r.deferred_tails, 1);

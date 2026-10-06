@@ -264,6 +264,7 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
 fn cli_writer_contention_returns_stale_without_waiting() {
     let (_dir, store, roots) = fixture();
     let _lock = store.lock().unwrap().unwrap();
+    store.db.execute_batch("BEGIN IMMEDIATE;").unwrap();
     let start = Instant::now();
     let mut child = command(&store, &roots, &["search", "sharedneedle"])
         .stdout(Stdio::piped())
