@@ -22,6 +22,7 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `codex_text_outcome` | `testdata/outcomes.jsonl` | Codex has no error flag; anchored transport status supplies text evidence. | `codex_text_array_batch_failures_and_quoted_negative_control` |
 | `batch_rejection` | `testdata/outcomes.jsonl` | A completed wrapper can contain rejected Promise items; the native call result still failed. | `codex_text_array_batch_failures_and_quoted_negative_control` |
 | `hook_prefix` | `testdata/outcomes.jsonl` | Only result envelopes with native hook prefixes qualify; transport stdout quotations do not. | `codex_text_array_batch_failures_and_quoted_negative_control` |
+| `newline_hook` | `testdata/inventory.json[53]`, `testdata/truncated.jsonl:1,3` | Codex input_text blocks can start with Script error: followed by a newline and Command blocked by PreToolUse hook:. Preserve the hook denial without treating a successful transport's quoted output as a refusal. | `split_script_error_and_truncated_batch_are_denials_with_transport_quote_control` |
 | `pi_model` | `testdata/pi.jsonl` | model_change.modelId carries into following messages. | `inherited_models_change_retrospective_group_counts` |
 | `pi_message_model` | `tests/counting.rs::pi_empty_response_and_explicit_message_model_override` | Explicit message model overrides the previous model_change for following attempts. | `pi_empty_response_and_explicit_message_model_override` |
 | `pi_message` | `tests/counting.rs::pi_empty_response_and_explicit_message_model_override` | An empty errored assistant response is still an attempt; a retry is a separate message. | `pi_empty_response_and_explicit_message_model_override` |
@@ -48,15 +49,27 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `initial_writer_lock` | `tests/lookup.rs::initial_schema_creation_respects_the_writer_lock` | Schema setup is a writer too and must wait until the owning lock permits it. | `initial_schema_creation_respects_the_writer_lock` |
 | `codex_telemetry_coverage` | `testdata/inventory.json` | event_msg aliases affect known/unknown record coverage. Removing the alias does not create a logical message and is not claimed to do so. | `inventory_variants_are_classified_with_future_shape_negative_control` |
 | `codex_tool_search` | `testdata/inventory.json` | The tool_search_call discriminator is a native attempt, separate from inter-agent communication. | `inventory_variants_are_classified_with_future_shape_negative_control` |
-
 | `guard_stdout_control` | `tests/counting.rs::successful_stdout_guard_examples_are_not_denials` | Successful stdout can print a guard example; generic guard prefixes require a Claude/Pi failure flag. | `successful_stdout_guard_examples_are_not_denials` |
-
 | `credential_assignments` | `testdata/privacy.json` | Quoted credential values can contain spaces; replacing only the first word leaks the remaining passphrase. | `adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed` |
-
 | `harness_outcome_scope` | `tests/counting.rs::call_outcomes_are_isolated_by_harness` | Equal native call/session IDs in different harnesses must not share outcomes. | `call_outcomes_are_isolated_by_harness` |
-
 | `mcp_transport_flag` | `tests/counting.rs::codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control` | Codex output can serialize an MCP isError flag; preserve it as transport text evidence, with failure winning over later success and stdout remaining a negative control. | `codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control` |
 | `opaque_payload` | `testdata/opaque.jsonl` | Pi thinkingSignature can contain 10-16 MiB strings that the adapter ignores. Borrowing discarded thinking/image blocks avoids materializing them while preserving message and call counts. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
+
+## Codex output variants
+
+The inventory's output-marker categories overlap and do not count distinct failed calls. Its hook example places Script error: and the hook prefix on one line; the verified witness has a newline between them, now represented explicitly in inventory fixture entry 53. The existing same-line fixture remains a separate supported form. Native Codex results have no error Boolean; decoded MCP transport isError remains text-derived evidence.
+
+| Output variant | Synthetic fixture | Owning rule |
+| --- | --- | --- |
+| Nonzero Process exited with code N | `testdata/outcomes.jsonl:1` | `codex_text_outcome` |
+| Serialized nonzero exit_code | `testdata/outcomes.jsonl:3` | `codex_text_outcome` |
+| Script failed in an input_text array | `testdata/truncated.jsonl:1`, `testdata/inventory.json[53]` | `codex_text_outcome` |
+| Script error: with a newline before the hook prefix | `testdata/truncated.jsonl:1`, `testdata/inventory.json[53]` | `newline_hook` |
+| Same-line Script error: and hook prefix | `testdata/outcomes.jsonl:2` | `hook_prefix` |
+| Serialized batch rejection | `testdata/outcomes.jsonl:3` | `batch_rejection` |
+| Exit zero alongside quoted failure markers | `testdata/outcomes.jsonl:4`, `testdata/truncated.jsonl:3` | `codex_text_outcome` |
+| String output | `testdata/outcomes.jsonl:1,5,6` | `codex_text_outcome` |
+| input_text array output | `testdata/outcomes.jsonl:2,3`, `testdata/truncated.jsonl:1,2` | `codex_text_outcome`, `newline_hook` |
 
 ## Inventory variants
 

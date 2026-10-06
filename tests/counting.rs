@@ -245,20 +245,38 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
 #[test]
 fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_control() {
     let (_, store) = indexed("codex", include_str!("../testdata/truncated.jsonl"));
-    let count: i64 = store
+    let mut stmt = store
         .db
-        .query_row(
-            "SELECT count(*) FROM denials WHERE reason_id='Include'",
-            [],
-            |r| r.get(0),
+        .prepare(
+            "SELECT source,count(*) FROM denials WHERE reason_id='Include' GROUP BY source ORDER BY source",
         )
         .unwrap();
-    assert_eq!(count, 3);
-    let count: i64 = store
-        .db
-        .query_row("SELECT count(*) FROM events WHERE ok=0", [], |r| r.get(0))
+    let denials = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
-    assert_eq!(count, 3);
+    assert_eq!(denials, [("batch_hook".into(), 2), ("hook".into(), 1)]);
+    let mut stmt = store
+        .db
+        .prepare("SELECT ok,ok_source FROM events WHERE kind='tool_result' ORDER BY line_no")
+        .unwrap();
+    let outcomes = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, Option<bool>>(0)?, r.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        outcomes,
+        [
+            (Some(false), "text".into()),
+            (Some(false), "text".into()),
+            (Some(true), "text".into()),
+            (Some(false), "text".into()),
+        ]
+    );
 }
 
 #[test]
