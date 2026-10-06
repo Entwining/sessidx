@@ -86,11 +86,19 @@ fn previous_schema_requires_explicit_locked_rebuild() {
             .output()
             .unwrap();
         assert_eq!(out.status.code(), Some(2));
-        assert!(out.stdout.is_empty());
+        let rows: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+            .unwrap()
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["type"], "end");
+        assert_eq!(rows[0]["complete"], false);
         assert_eq!(
-            String::from_utf8(out.stderr).unwrap().trim(),
-            "sessidx: database schema changed; run sessidx index --full"
+            rows[0]["error"],
+            "database schema changed; run sessidx index --full"
         );
+        assert!(out.stderr.is_empty());
     }
     assert!(Store::open(&path).is_err());
     let root = dir.path().join("logs");

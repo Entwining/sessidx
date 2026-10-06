@@ -480,7 +480,7 @@ fn call_outcomes_are_isolated_by_harness() {
         "",
         None,
         &Filters {
-            harness: Some("codex".into()),
+            harness: vec![sessidx::query::Harness::Codex],
             ..Filters::default()
         },
     )

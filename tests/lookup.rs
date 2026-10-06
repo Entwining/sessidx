@@ -69,7 +69,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
             &store.db,
             "Latin",
             &Filters {
-                harness: Some("pi".into()),
+                harness: vec![sessidx::query::Harness::Pi],
                 ..filters.clone()
             },
             20,
@@ -125,7 +125,7 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
     );
     let filters = Filters {
         session: Some("codex-fixture".into()),
-        role: Some("tool".into()),
+        role: Some(sessidx::query::Role::Tool),
         ..Filters::default()
     };
     let path = dir.path().join("logs/session.jsonl");
@@ -170,7 +170,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     assert_eq!(missing.missing_roots, ["pi"]);
     assert!(missing.stale);
     let filters = Filters {
-        harness: Some("codex".into()),
+        harness: vec![sessidx::query::Harness::Codex],
         ..Filters::default()
     };
     let (hits, c) = query::scan(&store.db, ".", &filters, 1, 0, Duration::from_secs(2)).unwrap();
@@ -237,20 +237,13 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
     let mut outputs = Vec::new();
     for args in [
         vec!["index"],
-        vec!["search", "needle", "--json"],
-        vec![
-            "search",
-            "--scan",
-            "needle",
-            "--session",
-            "canary-session",
-            "--json",
-        ],
-        vec!["show", "canary-session", "--json"],
-        vec!["search", "--scan", "needle"],
-        vec!["count", "--metric", "commands", "--json"],
-        vec!["count", "--metric", "failures", "--json"],
-        vec!["count", "--metric", "denials", "--json"],
+        vec!["search", "needle"],
+        vec!["grep", "needle", "--session", "canary-session"],
+        vec!["show", "canary-session"],
+        vec!["grep", "needle"],
+        vec!["count", "commands"],
+        vec!["count", "failures"],
+        vec!["count", "denials"],
         vec!["doctor"],
         vec!["sql", "SELECT * FROM events"],
         vec!["sql", "SELECT * FROM commands"],
@@ -266,11 +259,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             .unwrap();
         assert_eq!(
             output.status.code(),
-            Some(if args == ["search", "--scan", "needle"] {
-                2
-            } else {
-                0
-            }),
+            Some(if args == ["grep", "needle"] { 2 } else { 0 }),
             "{args:?}"
         );
         outputs.extend_from_slice(&output.stdout);
@@ -411,7 +400,11 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
             &store.db,
             "tailoutside",
             &Filters {
-                harness: Some(h.into()),
+                harness: vec![match h {
+                    "claude" => sessidx::query::Harness::Claude,
+                    "codex" => sessidx::query::Harness::Codex,
+                    _ => sessidx::query::Harness::Pi,
+                }],
                 ..Filters::default()
             },
             20,

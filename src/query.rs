@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
-use clap::Args;
+use clap::{Args, ValueEnum};
 use regex::Regex;
 use rusqlite::{Connection, params_from_iter, types::Value};
 use serde::Serialize;
@@ -15,46 +15,94 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Args, Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Harness {
+    Claude,
+    Codex,
+    Pi,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Assistant,
+    Tool,
+    System,
+    Developer,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Unknown,
+    Delegated,
+}
+
+#[derive(Args, Clone, Debug, Default, Serialize)]
 pub struct Filters {
-    #[arg(long)]
-    pub harness: Option<String>,
-    #[arg(long)]
-    pub role: Option<String>,
+    #[arg(long, value_enum)]
+    pub harness: Vec<Harness>,
+    #[arg(long, value_enum)]
+    pub role: Option<Role>,
+    #[arg(long, value_enum)]
+    pub kind: Option<Kind>,
     #[arg(long)]
     pub since: Option<String>,
     #[arg(long)]
     pub until: Option<String>,
     #[arg(long)]
     pub cwd: Option<String>,
+    /// Native session ID or session file path
     #[arg(long)]
     pub session: Option<String>,
-    #[arg(long = "file")]
-    pub files: Vec<String>,
 }
 
 impl Filters {
     pub fn narrowed(&self) -> bool {
-        self.harness.is_some()
+        !self.harness.is_empty()
             || self.since.is_some()
             || self.until.is_some()
             || self.cwd.is_some()
             || self.session.is_some()
-            || !self.files.is_empty()
     }
 
     pub fn sql(&self) -> Result<(String, Vec<Value>)> {
         let mut conditions = vec!["1=1".to_owned()];
         let mut args = Vec::new();
+        if !self.harness.is_empty() {
+            conditions.push(format!(
+                "f.harness IN ({})",
+                vec!["?"; self.harness.len()].join(",")
+            ));
+            args.extend(
+                self.harness
+                    .iter()
+                    .map(|h| Value::Text(h.to_possible_value().unwrap().get_name().into())),
+            );
+        }
         for (field, value) in [
-            ("f.harness", &self.harness),
-            ("e.role", &self.role),
-            ("e.session_id", &self.session),
+            (
+                "e.role",
+                self.role
+                    .map(|r| r.to_possible_value().unwrap().get_name().to_owned()),
+            ),
+            (
+                "s.kind",
+                self.kind
+                    .map(|k| k.to_possible_value().unwrap().get_name().to_owned()),
+            ),
         ] {
             if let Some(value) = value {
                 conditions.push(format!("{field}=?"));
-                args.push(Value::Text(value.clone()));
+                args.push(Value::Text(value));
             }
+        }
+        if let Some(session) = &self.session {
+            conditions.push("(e.session_id=? OR f.path=?)".into());
+            args.extend([Value::Text(session.clone()), Value::Text(session.clone())]);
         }
         for (op, value) in [(">=", &self.since), ("<", &self.until)] {
             if let Some(value) = value {
@@ -67,13 +115,6 @@ impl Filters {
             for _ in 0..3 {
                 args.push(Value::Text(cwd.trim_end_matches('/').to_owned()));
             }
-        }
-        if !self.files.is_empty() {
-            conditions.push(format!(
-                "f.path IN ({})",
-                vec!["?"; self.files.len()].join(",")
-            ));
-            args.extend(self.files.iter().cloned().map(Value::Text));
         }
         Ok((conditions.join(" AND "), args))
     }
@@ -118,6 +159,8 @@ pub struct Coverage {
     pub incomplete: bool,
     pub continuation: Option<i64>,
     pub unavailable_ranges: usize,
+    pub records: usize,
+    pub bytes: u64,
 }
 
 const SELECT: &str = "SELECT f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,coalesce(e.text,''),e.byte_off,e.byte_len,e.id,e.text_truncated FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
@@ -127,11 +170,7 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     let session_id: String = row.get(1)?;
     let path: String = row.get(2)?;
     let line_no: u64 = row.get(3)?;
-    let reference = if harness == "codex" {
-        format!("codex://threads/{session_id}")
-    } else {
-        format!("{path}:{line_no}")
-    };
+    let reference = format!("{path}:{line_no}");
     Ok(Hit {
         harness,
         session_id,
@@ -228,9 +267,9 @@ pub fn scan(
 ) -> Result<(Vec<Hit>, Coverage)> {
     anyhow::ensure!(
         filters.narrowed(),
-        "--scan requires a narrowing filter: add --since, --until, --cwd, --session, --harness, or --file"
+        "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --harness"
     );
-    let pattern = Regex::new(pattern).context("invalid scan regex")?;
+    let pattern = Regex::new(pattern).context("invalid grep regex")?;
     let (clause, mut args) = filters.sql()?;
     args.push(Value::Integer(after));
     let sql = format!(
@@ -250,8 +289,10 @@ pub fn scan(
         }
         let mut item = row?;
         cursor = item.event_id;
+        coverage.records += 1;
         match read_range(db, &item) {
             Ok(bytes) => {
+                coverage.bytes += bytes.len() as u64;
                 if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
                     item.snippet = display_range(&bytes)?;
                     item.truncated = false;
@@ -313,8 +354,12 @@ pub fn show(
         },
         ..Coverage::default()
     };
+    coverage.records = hits.len();
     for item in &mut hits {
-        match read_range(db, item).and_then(|bytes| display_range(&bytes)) {
+        match read_range(db, item).and_then(|bytes| {
+            coverage.bytes += bytes.len() as u64;
+            display_range(&bytes)
+        }) {
             Ok(raw) => {
                 item.snippet = raw;
                 item.truncated = false;
@@ -327,24 +372,4 @@ pub fn show(
         }
     }
     Ok((hits, coverage))
-}
-
-pub fn emit_hits(hits: &[Hit], json: bool) -> Result<()> {
-    for item in hits {
-        if json {
-            println!("{}", serde_json::to_string(item)?);
-        } else {
-            println!(
-                "{}:{} [{} {} {}] {}\n{}",
-                redact(&item.path),
-                item.line_no,
-                item.harness,
-                item.role,
-                item.model.as_deref().unwrap_or("unknown"),
-                redact(&item.snippet.chars().take(1200).collect::<String>()),
-                redact(&item.reference)
-            );
-        }
-    }
-    Ok(())
 }
