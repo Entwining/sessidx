@@ -76,6 +76,7 @@ rows.extend([
 rows.extend([
     ('tool_output_prefix', 'src/normalize.rs', 'pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {', 'pub fn output_prefix(e: &mut crate::model::Event, output: &Value) { return;', 'tool_output_prefix_is_bounded_and_raw_tail_remains_reachable', 'pi_empty_response_and_explicit_message_model_override'),
     ('attachment_output', 'src/adapters/claude.rs', 'if typ == "attachment"', 'if false', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'),
+    ('pi_sections', 'src/adapters/pi.rs', 'if let Some(sections) = m["sections"].as_object()', 'if let Some(sections) = None::<&serde_json::Map<String, serde_json::Value>>', 'pi_sections_share_the_native_message_and_are_redacted', 'claude_blocks_flags_and_synthetic_model'),
 ])
 results = []
 if len(sys.argv) > 2:

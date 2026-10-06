@@ -1,0 +1,2 @@
+{"type":"session","id":"sections-session","cwd":"/synthetic/project"}
+{"type":"message","id":"system-sections","timestamp":"2026-10-01T00:00:00Z","message":{"role":"system","content":"contentneedle","sections":{"policy":"sectionneedle TypeSafe","skills":"sectiontail","credential":"key=Q8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB"}}}

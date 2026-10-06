@@ -472,6 +472,26 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
 }
 
 #[test]
+fn pi_sections_share_the_native_message_and_are_redacted() {
+    let (dir, store, _) = setup("pi", include_str!("../testdata/pi-sections.jsonl"));
+    for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
+        let hits = query::search(&store.db, term, &Filters::default(), 20, 0).unwrap();
+        assert_eq!(hits.len(), 1, "{term}");
+        assert_eq!(hits[0].role, "system");
+    }
+    let messages: i64 = store
+        .db
+        .query_row(
+            "SELECT count(*) FROM canonical_events WHERE kind='message'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(messages, 1);
+    assert_canaries_absent_from_storage(dir.path(), &["Q8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB"]);
+}
+
+#[test]
 fn scan_matches_original_ranges_before_redacting_display() {
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";

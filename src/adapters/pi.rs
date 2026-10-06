@@ -70,6 +70,16 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         .collect::<Vec<_>>()
                         .join("\n")
                 });
+                // Pi system sections: testdata/pi-sections.jsonl.
+                if let Some(sections) = m["sections"].as_object() {
+                    let body = e.text.as_mut().unwrap();
+                    for section in sections.values().map(text).filter(|s| !s.is_empty()) {
+                        if !body.is_empty() {
+                            body.push('\n');
+                        }
+                        body.push_str(&section);
+                    }
+                }
                 e.native_id = string(v, "id");
                 e.ts = ts.clone();
                 e.model = string(m, "model");
