@@ -4,12 +4,12 @@ A local Rust index for Claude Code, Codex, and Pi JSONL sessions. Raw logs remai
 
 ```sh
 cargo test
-cargo install --path . --root ~/.local
+cargo install --locked --path . --root ~/.local
 ~/.local/bin/sessidx index
 sessidx search 太长 --harness codex --since 2026-10-01 --json
 ```
 
-The default database is `~/.cache/sessidx/index.db`. Discovery reads only `~/.claude/projects`, `~/.codex/sessions`, and `~/.pi/agent/sessions`, without following symlinks. `index --full` replaces the derived index. An unterminated final record is deferred until its newline arrives. `--db PATH --root codex=PATH` selects an isolated database and explicit input root; repeat `--root` for multiple harnesses.
+The default database is `~/.cache/sessidx/index.db`. Discovery reads only `~/.claude/projects`, `~/.codex/sessions`, and `~/.pi/agent/sessions`, without following symlinks. `index --full` replaces the derived index. An older schema fails with `run sessidx index --full`; rebuilding requires the writer lock. An unterminated final record is deferred until its newline arrives. `--db PATH --root codex=PATH` selects an isolated database and explicit input root; repeat `--root` for multiple harnesses.
 
 ```sh
 sessidx search 'commit "instruction hash"' --cwd /path/to/project --json

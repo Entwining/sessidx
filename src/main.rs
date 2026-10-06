@@ -131,13 +131,18 @@ fn run() -> Result<i32> {
             &path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
+        Store::require_schema(&db)?;
         let rows = counting::sql(&db, query)?;
         for row in &rows {
             println!("{}", serde_json::to_string(row)?);
         }
         return Ok(if rows.is_empty() { 1 } else { 0 });
     }
-    let mut store = Store::open(&path)?;
+    let mut store = if matches!(cli.command, Command::Index { full: true }) {
+        Store::open_for_rebuild(&path)?
+    } else {
+        Store::open(&path)?
+    };
     match cli.command {
         Command::Index { full } => {
             let report = store.refresh(&roots, full, None)?;

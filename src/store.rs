@@ -7,10 +7,10 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use fs2::FileExt;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -19,6 +19,7 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
+pub const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -83,6 +84,23 @@ impl Drop for WriterLock {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_mode(path, false)
+    }
+
+    pub fn open_for_rebuild(path: &Path) -> Result<Self> {
+        Self::open_mode(path, true)
+    }
+
+    pub fn require_schema(db: &Connection) -> Result<()> {
+        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        anyhow::ensure!(
+            version == SCHEMA_VERSION,
+            "database schema changed; run sessidx index --full"
+        );
+        Ok(())
+    }
+
+    fn open_mode(path: &Path, rebuilding: bool) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             if !parent.exists() {
                 fs::create_dir_all(parent)?;
@@ -96,6 +114,11 @@ impl Store {
             .open(path)?;
         let db = Connection::open(path)?;
         db.busy_timeout(Duration::from_millis(50))?;
+        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        anyhow::ensure!(
+            version == 0 || version == SCHEMA_VERSION || rebuilding && version == 1,
+            "database schema changed; run sessidx index --full"
+        );
         Ok(Self {
             db,
             path: path.into(),
@@ -106,15 +129,33 @@ impl Store {
         WriterLock::acquire(&self.path)
     }
 
-    fn initialize(&self, _lock: &WriterLock) -> Result<()> {
+    fn initialize(&mut self, _lock: &WriterLock, full: bool) -> Result<()> {
         self.db.execute_batch(
             "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA cache_size=-8192;",
         )?;
         let version: i64 = self.db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        anyhow::ensure!(version == 0 || version == 1, "unsupported database version");
+        anyhow::ensure!(
+            version == 0 || version == SCHEMA_VERSION || full && version == 1,
+            "database schema changed; run sessidx index --full"
+        );
         if version == 0 {
             self.db.execute_batch("PRAGMA journal_mode=WAL;")?;
             self.db.execute_batch(include_str!("schema.sql"))?;
+        }
+        if full && version != 0 {
+            let tx = self.db.transaction()?;
+            tx.execute_batch("DROP VIEW call_outcomes; DROP VIEW canonical_events; DROP TABLE commands; DROP TABLE denials;")?;
+            if version == 1 {
+                tx.execute_batch("DROP TABLE events;")?;
+            } else {
+                tx.execute_batch("DROP VIEW events; DROP TABLE event_details; DROP TABLE locations; DROP TABLE strings;")?;
+            }
+            tx.execute_batch(
+                "DROP TABLE sessions; DROP TABLE shapes; DROP TABLE files; DROP TABLE fts;",
+            )?;
+            tx.execute_batch(include_str!("schema.sql"))?;
+            tx.commit()?;
+            self.db.execute_batch("VACUUM;")?;
         }
         Ok(())
     }
@@ -133,20 +174,13 @@ impl Store {
                 ..Refresh::default()
             });
         };
-        self.initialize(&_lock)?;
         let (files, missing_roots) = discovery::files(roots)?;
+        self.initialize(&_lock, full)?;
         let mut report = Refresh {
             missing_roots,
             ..Refresh::default()
         };
         report.stale = !report.missing_roots.is_empty();
-        if full {
-            let tx = self.db.transaction()?;
-            tx.execute_batch("DROP VIEW call_outcomes; DROP VIEW canonical_events; DROP TABLE commands; DROP TABLE denials; DROP TABLE events; DROP TABLE sessions; DROP TABLE shapes; DROP TABLE files; DROP TABLE fts;")?;
-            tx.execute_batch(include_str!("schema.sql"))?;
-            tx.commit()?;
-            self.db.execute_batch("VACUUM;")?;
-        }
         let existing: Vec<(i64, String)> = self
             .db
             .prepare("SELECT id,path FROM files")?
@@ -277,6 +311,7 @@ impl Store {
         let mut reader = BufReader::new(file.take(source_size - offset));
         let mut buffer = Vec::new();
         let mut records = 0;
+        let mut strings = HashMap::new();
         let mut coverage = FileCoverage::Ready;
         loop {
             if deadline.is_some_and(|d| Instant::now() >= d) {
@@ -303,8 +338,37 @@ impl Store {
                 let raw_hash = hash(&buffer);
                 tx.prepare_cached("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,signature,normalized.known])?;
                 for (ordinal, event) in normalized.events.into_iter().enumerate() {
-                    tx.prepare_cached("INSERT INTO events(file_id,session_id,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,role,role_source,kind,kind_source,model,model_source,text,tool,call_id,ok,ok_source,exit_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")?.execute(params![file_id,state.session_id,event.native_id,line,offset,length,&raw_hash,ordinal,event.ts,event.role,event.role_source,event.kind,event.kind_source,event.model.as_ref().or(state.model.as_ref()),if event.model.is_some() { "message.model" } else { &state.model_source },event.text,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code])?;
+                    let session = intern(&tx, &mut strings, &state.session_id)?;
+                    let model = event
+                        .model
+                        .as_deref()
+                        .or(state.model.as_deref())
+                        .map(|v| intern(&tx, &mut strings, v))
+                        .transpose()?;
+                    let model_source = intern(
+                        &tx,
+                        &mut strings,
+                        if event.model.is_some() {
+                            "message.model"
+                        } else {
+                            &state.model_source
+                        },
+                    )?;
+                    tx.prepare_cached("INSERT INTO locations(file_id,session_ref,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,model_ref,model_source_ref) VALUES (?,?,unhex(?),?,?,?,unhex(?),?,?,?,?)")?.execute(params![file_id,session,event.native_id,line,offset,length,&raw_hash,ordinal,event.ts,model,model_source])?;
                     let event_id = tx.last_insert_rowid();
+                    if event.kind != "context" {
+                        let role = intern(&tx, &mut strings, &event.role)?;
+                        let role_source = intern(&tx, &mut strings, &event.role_source)?;
+                        let kind = intern(&tx, &mut strings, &event.kind)?;
+                        let kind_source = intern(&tx, &mut strings, &event.kind_source)?;
+                        let tool = event
+                            .tool
+                            .as_deref()
+                            .map(|v| intern(&tx, &mut strings, v))
+                            .transpose()?;
+                        let ok_source = intern(&tx, &mut strings, &event.ok_source)?;
+                        tx.prepare_cached("INSERT INTO event_details(event_id,session_ref,role_ref,role_source_ref,kind_ref,kind_source_ref,text,tool_ref,call_id,ok,ok_source_ref,exit_code) VALUES (?,?,?,?,?,?,?,?,unhex(?),?,?,?)")?.execute(params![event_id,session,role,role_source,kind,kind_source,event.text,tool,event.call_id,event.ok,ok_source,event.exit_code])?;
+                    }
                     for (site, command) in event.sites.into_iter().enumerate() {
                         tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
                     }
@@ -337,10 +401,23 @@ impl Store {
 
     pub fn index_frozen(&mut self, harness: &str, path: &Path, size: u64) -> Result<()> {
         let _lock = self.lock()?.ok_or_else(|| anyhow::anyhow!("writer busy"))?;
-        self.initialize(&_lock)?;
+        self.initialize(&_lock, false)?;
         self.index_file(harness, path, None, Some(size))?;
         Ok(())
     }
+}
+
+fn intern(tx: &Transaction<'_>, values: &mut HashMap<String, i64>, value: &str) -> Result<i64> {
+    if let Some(id) = values.get(value) {
+        return Ok(*id);
+    }
+    tx.prepare_cached("INSERT INTO strings(value) VALUES (?) ON CONFLICT(value) DO NOTHING")?
+        .execute([value])?;
+    let id = tx
+        .prepare_cached("SELECT id FROM strings WHERE value=?")?
+        .query_row([value], |r| r.get(0))?;
+    values.insert(value.into(), id);
+    Ok(id)
 }
 
 pub fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> Result<(u64, bool, bool)> {

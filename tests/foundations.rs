@@ -68,6 +68,93 @@ fn snapshot(store: &Store) -> Vec<String> {
 }
 
 #[test]
+fn previous_schema_requires_explicit_locked_rebuild() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    let old = rusqlite::Connection::open(&path).unwrap();
+    old.execute_batch(include_str!("../testdata/schema-v1.sql"))
+        .unwrap();
+    for args in [
+        vec!["search", "needle"],
+        vec!["sql", "SELECT 1"],
+        vec!["index"],
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sessidx"))
+            .arg("--db")
+            .arg(&path)
+            .args(args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(out.stderr).unwrap().trim(),
+            "sessidx: database schema changed; run sessidx index --full"
+        );
+    }
+    assert!(Store::open(&path).is_err());
+    let root = dir.path().join("logs");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("one.jsonl"),
+        include_str!("../testdata/codex.jsonl"),
+    )
+    .unwrap();
+    let roots = [Root {
+        harness: "codex".into(),
+        path: root,
+    }];
+    let mut upgrade = Store::open_for_rebuild(&path).unwrap();
+    let lock = upgrade.lock().unwrap().unwrap();
+    let report = upgrade.refresh(&roots, true, None).unwrap();
+    assert!(report.writer_busy && report.stale);
+    assert_eq!(
+        old.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    drop(lock);
+    assert!(!upgrade.refresh(&roots, true, None).unwrap().stale);
+    assert_eq!(
+        upgrade
+            .db
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        sessidx::store::SCHEMA_VERSION
+    );
+    let mut clean = Store::open(&dir.path().join("clean.db")).unwrap();
+    clean.refresh(&roots, true, None).unwrap();
+    assert_eq!(snapshot(&upgrade), snapshot(&clean));
+    assert_eq!(upgrade.db.query_row("SELECT count(*) FROM locations WHERE typeof(raw_hash)!='blob' OR length(raw_hash)!=32 OR (native_id IS NOT NULL AND length(native_id)!=32)", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(upgrade.db.query_row("SELECT count(*) FROM event_details WHERE call_id IS NOT NULL AND (typeof(call_id)!='blob' OR length(call_id)!=32)", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(
+        upgrade
+            .db
+            .query_row("SELECT count(*) FROM locations", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        upgrade
+            .db
+            .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0))
+            .unwrap()
+    );
+    assert_eq!(
+        upgrade
+            .db
+            .query_row("SELECT count(*) FROM event_details", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        upgrade
+            .db
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind!='context'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap()
+    );
+}
+
+#[test]
 fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");

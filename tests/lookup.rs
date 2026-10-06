@@ -19,6 +19,22 @@ fn setup(harness: &str, content: &str) -> (tempfile::TempDir, Store, Vec<Root>) 
     (dir, store, roots)
 }
 
+fn assert_canaries_absent_from_storage(dir: &std::path::Path, values: &[&str]) {
+    for name in ["index.db", "index.db-wal", "index.db-shm"] {
+        let bytes = match fs::read(dir.join(name)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && name != "index.db" => continue,
+            Err(e) => panic!("cannot check {name}: {e}"),
+        };
+        for value in values {
+            assert!(
+                !bytes.windows(value.len()).any(|b| b == value.as_bytes()),
+                "canary leaked to {name}"
+            );
+        }
+    }
+}
+
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
     let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
@@ -214,16 +230,10 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         );
     }
     let (dir, store, roots) = setup("claude", &data);
-    for name in ["index.db", "index.db-wal", "index.db-shm"] {
-        if let Ok(bytes) = fs::read(dir.path().join(name)) {
-            for v in &values {
-                assert!(
-                    !bytes.windows(v.len()).any(|b| b == v.as_bytes()),
-                    "canary leaked to {name}"
-                );
-            }
-        }
-    }
+    assert_canaries_absent_from_storage(
+        dir.path(),
+        &values.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
     let mut outputs = Vec::new();
     for args in [
         vec!["index"],
@@ -272,16 +282,10 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             "canary leaked to command output"
         );
     }
-    for name in ["index.db", "index.db-wal", "index.db-shm"] {
-        if let Ok(bytes) = fs::read(dir.path().join(name)) {
-            for v in &values {
-                assert!(
-                    !bytes.windows(v.len()).any(|b| b == v.as_bytes()),
-                    "canary leaked after commands to {name}"
-                );
-            }
-        }
-    }
+    assert_canaries_absent_from_storage(
+        dir.path(),
+        &values.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
 }
 
 #[test]
@@ -313,14 +317,7 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
             !output.contains(value),
             "adversarial canary leaked on display"
         );
-        for name in ["index.db", "index.db-wal", "index.db-shm"] {
-            if let Ok(bytes) = fs::read(dir.path().join(name)) {
-                assert!(
-                    !bytes.windows(value.len()).any(|b| b == value.as_bytes()),
-                    "adversarial canary leaked to {name}"
-                );
-            }
-        }
+        assert_canaries_absent_from_storage(dir.path(), &[value]);
     }
 }
 
@@ -391,6 +388,6 @@ fn initial_schema_creation_respects_the_writer_lock() {
             .db
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        1
+        sessidx::store::SCHEMA_VERSION
     );
 }
