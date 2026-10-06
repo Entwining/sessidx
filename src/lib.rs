@@ -24,5 +24,6 @@ pub mod adapters;
 pub mod discovery;
 pub mod model;
 pub mod normalize;
+pub mod query;
 pub mod redaction;
 pub mod store;

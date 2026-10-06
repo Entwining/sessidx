@@ -10,6 +10,7 @@ use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use std::{
+    collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -108,10 +109,12 @@ impl Store {
             .prepare("SELECT id,path FROM files")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
+        let discovered: HashSet<_> = files.iter().map(|(_, p)| p.as_path()).collect();
         for (id, path) in existing {
-            if !files
+            if roots
                 .iter()
-                .any(|(_, p)| p.as_os_str() == Path::new(&path).as_os_str())
+                .any(|r| r.path.exists() && Path::new(&path).starts_with(&r.path))
+                && !discovered.contains(Path::new(&path))
             {
                 self.db.execute("DELETE FROM files WHERE id=?", [id])?;
             }
@@ -221,7 +224,7 @@ impl Store {
                 let signature = shape(&v);
                 tx.execute("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1", params![file_id,signature,normalized.known])?;
                 for (ordinal, event) in normalized.events.into_iter().enumerate() {
-                    tx.execute("INSERT INTO events(file_id,session_id,native_id,line_no,byte_off,byte_len,ordinal,ts,role,role_source,kind,kind_source,model,model_source,text,tool,call_id,ok,ok_source,exit_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", params![file_id,state.session_id,event.native_id,line,offset,length,ordinal,event.ts,event.role,event.role_source,event.kind,"adapter",state.model,state.model_source,event.text,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code])?;
+                    tx.execute("INSERT INTO events(file_id,session_id,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,role,role_source,kind,kind_source,model,model_source,text,tool,call_id,ok,ok_source,exit_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", params![file_id,state.session_id,event.native_id,line,offset,length,hash(&buffer),ordinal,event.ts,event.role,event.role_source,event.kind,"adapter",state.model,state.model_source,event.text,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code])?;
                     let event_id = tx.last_insert_rowid();
                     if let Some(text) = event.text {
                         tx.execute(

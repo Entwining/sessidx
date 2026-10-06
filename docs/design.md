@@ -14,7 +14,9 @@ Explicit indexing is unbounded. Query refresh receives a two-second deadline, co
 
 ## Privacy
 
-Message and tool-input text is redacted before storage. Redaction recognizes PEM private keys, Bearer authorization, common token prefixes, credential assignments/headers, and long runs with Shannon entropy at least 4 bits per character. Tool outputs are never copied into SQLite. Display applies redaction again. Heuristics cannot identify every secret; ordinary prose, short low-entropy secrets, and credentials split across separate fields remain potential limitations. Raw logs are the user's existing source, not copied fixtures.
+Message and tool-input text is redacted before storage. Redaction recognizes PEM private keys, Bearer authorization, common token prefixes, credential assignments/headers, and long runs with Shannon entropy at least 4 bits per character. Tool outputs are never copied into SQLite. Display decodes JSON and redacts string values and keys again, so escaped newlines cannot hide PEM blocks. Scanning matches this redacted representation. Heuristics cannot identify every secret; ordinary prose, short low-entropy secrets, and credentials split across separate fields remain potential limitations. Raw logs are the user's existing source, not copied fixtures.
+
+Each event includes a SHA-256 digest of its original byte range. Display checks device/inode, length, and that digest without reading a prefix or unrelated ranges. A replaced, truncated, or rewritten record becomes unavailable coverage. Lookup canaries cover both shaped and unmarked high-entropy secrets in user messages, tool arguments, and tool outputs; tests byte-search SQLite, live WAL/SHM, stdout, and stderr.
 
 ## Dependencies
 

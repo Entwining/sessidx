@@ -18,7 +18,7 @@ CREATE INDEX IF NOT EXISTS sessions_id ON sessions(session_id);
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
  session_id TEXT NOT NULL, native_id TEXT, line_no INTEGER NOT NULL, byte_off INTEGER NOT NULL,
- byte_len INTEGER NOT NULL, ordinal INTEGER NOT NULL, ts TEXT, role TEXT NOT NULL,
+ byte_len INTEGER NOT NULL, raw_hash TEXT NOT NULL, ordinal INTEGER NOT NULL, ts TEXT, role TEXT NOT NULL,
  role_source TEXT NOT NULL, kind TEXT NOT NULL, kind_source TEXT NOT NULL,
  model TEXT, model_source TEXT NOT NULL, text TEXT, tool TEXT, call_id TEXT,
  ok INTEGER, ok_source TEXT NOT NULL, exit_code INTEGER,
