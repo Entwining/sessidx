@@ -33,7 +33,7 @@ fn codex_text_array_batch_failures_and_quoted_negative_control() {
         es.iter()
             .filter(|e| e.ok == Some(false) && e.ok_source == "text")
             .count(),
-        3
+        5
     );
     assert_eq!(
         es.iter()
@@ -47,12 +47,17 @@ fn codex_text_array_batch_failures_and_quoted_negative_control() {
             .flat_map(|e| &e.denials)
             .filter(|(s, _)| s == "batch_hook")
             .count(),
-        1
+        2
     );
     assert!(es[3].denials.is_empty());
     assert_eq!(es[3].ok, Some(true));
     assert_eq!(es[4].ok, None);
     assert_eq!(es[5].ok, Some(true));
+    assert_eq!(es[6].ok, Some(false));
+    assert_eq!(es[6].ok_source, "text");
+    assert_eq!(es[6].exit_code, Some(2));
+    assert_eq!(es[7].ok, Some(false));
+    assert_eq!(es[7].exit_code, Some(2));
 }
 
 #[test]
@@ -356,6 +361,30 @@ fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
         counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(result[0]["denominator"], 1);
     assert_eq!(result[0]["unclassified"], 1);
+}
+
+#[test]
+fn claude_hook_check_errors_respect_native_success_flags() {
+    let (_, store) = indexed("claude", include_str!("../testdata/hook-check.jsonl"));
+    let mut stmt = store
+        .db
+        .prepare("SELECT source,reason_id FROM denials ORDER BY id")
+        .unwrap();
+    let denials = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(denials, [("hook".into(), "unknown".into())]);
+    let flags: (i64, i64) = store
+        .db
+        .query_row(
+            "SELECT sum(ok=0 AND ok_source='flag'),sum(ok=1 AND ok_source='flag') FROM events WHERE kind='tool_result'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flags, (1, 1));
 }
 
 #[test]

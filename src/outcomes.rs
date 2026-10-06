@@ -33,7 +33,8 @@ pub fn classify(e: &mut Event, output: &Value, harness: &str) {
         denials(s, harness, e, true);
     }
     failed |= !e.denials.is_empty() || codes.iter().any(|n| *n != 0);
-    if e.ok_source == "none" && (failed || !codes.is_empty()) {
+    // Mixed shell/MCP outcomes: testdata/outcomes.jsonl.
+    if failed || e.ok_source == "none" && !codes.is_empty() {
         e.ok = Some(!failed);
         e.ok_source = "text".into();
     }
@@ -93,7 +94,8 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                 }
                 return;
             }
-            for key in ["content", "results", "items"] {
+            // Codex {i,result}/{index,result} envelopes: testdata/outcomes.jsonl.
+            for key in ["content", "results", "items", "result"] {
                 if let Some(v) = m.get(key) {
                     structured(v, texts, e, depth + 1);
                 }
@@ -229,6 +231,10 @@ fn flag_denials(v: &Value, harness: &str, e: &mut Event, leading: &mut bool) {
 }
 
 fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
+    // Native success and hook-check errors: testdata/hook-check.jsonl.
+    if harness != "codex" && e.ok == Some(true) {
+        return;
+    }
     for line in s.lines() {
         let line = line.trim();
         let source = if line.starts_with("Script error: Command blocked by PreToolUse hook:")
@@ -236,7 +242,7 @@ fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
                 && line.starts_with("Command blocked by PreToolUse hook:")
                 && s.trim_start().starts_with("Script error:")
             || (line.starts_with("PreToolUse:") || line.starts_with("Error: PreToolUse:"))
-                && line.contains("DENIED:")
+                && (line.contains("DENIED:") || e.ok == Some(false) && line.contains("hook error:"))
         {
             Some("hook")
         } else if harness != "codex"

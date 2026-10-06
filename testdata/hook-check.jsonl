@@ -1,0 +1,2 @@
+{"type":"user","uuid":"hook-check-error","toolDenialKind":"permission-rule","message":{"content":[{"type":"tool_result","is_error":true,"content":"PreToolUse:Bash hook error: synthetic check unavailable\nsynthetic recovery detail"}]}}
+{"type":"user","uuid":"hook-check-quote","message":{"content":[{"type":"tool_result","is_error":false,"content":"PreToolUse:Bash hook error: DENIED: rg has no --include flag."}]}}

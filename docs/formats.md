@@ -21,6 +21,10 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `codex_injected_instructions` | `testdata/attribution.json` | Injected AGENTS.md text supplies a hash only when base instructions are absent. | `attribution_native_denials_instructions_children_and_retry_negative_control` |
 | `codex_text_outcome` | `testdata/outcomes.jsonl` | Codex has no error flag; anchored transport status supplies text evidence. | `codex_text_array_batch_failures_and_quoted_negative_control` |
 | `batch_rejection` | `testdata/outcomes.jsonl` | A completed wrapper can contain rejected Promise items; the native call result still failed. | `codex_text_array_batch_failures_and_quoted_negative_control` |
+| `result_container` | `testdata/outcomes.jsonl:7` | Codex can print complete JSON values whose i/index field labels a Promise result under result. Decode that immediate container while retaining the transport stdout boundary. | `codex_text_array_batch_failures_and_quoted_negative_control` |
+| `mixed_outcome_failure` | `testdata/outcomes.jsonl:8` | A successful MCP item cannot erase a nonzero shell exit in the same native result. Failure evidence wins across transport types. | `codex_text_array_batch_failures_and_quoted_negative_control` |
+| `native_hook_flag` | `testdata/hook-check.jsonl:2` | A native successful result can quote a hook denial. Its success Boolean excludes text-derived denial inference. | `claude_hook_check_errors_respect_native_success_flags` |
+| `hook_check_error` | `testdata/hook-check.jsonl:1` | Claude marks a failed PreToolUse hook check as permission-rule, but its anchored hook error identifies the hook source even without DENIED. Its unknown reason stays explicit. | `claude_hook_check_errors_respect_native_success_flags` |
 | `hook_prefix` | `testdata/outcomes.jsonl` | Only result envelopes with native hook prefixes qualify; transport stdout quotations do not. | `codex_text_array_batch_failures_and_quoted_negative_control` |
 | `newline_hook` | `testdata/inventory.json[53]`, `testdata/truncated.jsonl:1,3` | Codex input_text blocks can start with Script error: followed by a newline and Command blocked by PreToolUse hook:. Preserve the hook denial without treating a successful transport's quoted output as a refusal. | `split_script_error_and_truncated_batch_are_denials_with_transport_quote_control` |
 | `pi_model` | `testdata/pi.jsonl` | model_change.modelId carries into following messages. | `inherited_models_change_retrospective_group_counts` |
@@ -67,6 +71,7 @@ The inventory's output-marker categories overlap and do not count distinct faile
 | Script error: with a newline before the hook prefix | `testdata/truncated.jsonl:1`, `testdata/inventory.json[53]` | `newline_hook` |
 | Same-line Script error: and hook prefix | `testdata/outcomes.jsonl:2` | `hook_prefix` |
 | Serialized batch rejection | `testdata/outcomes.jsonl:3` | `batch_rejection` |
+| i/index wrapper containing a Promise result | `testdata/outcomes.jsonl:7` | `result_container` |
 | Exit zero alongside quoted failure markers | `testdata/outcomes.jsonl:4`, `testdata/truncated.jsonl:3` | `codex_text_outcome` |
 | String output | `testdata/outcomes.jsonl:1,5,6` | `codex_text_outcome` |
 | input_text array output | `testdata/outcomes.jsonl:2,3`, `testdata/truncated.jsonl:1,2` | `codex_text_outcome`, `newline_hook` |
