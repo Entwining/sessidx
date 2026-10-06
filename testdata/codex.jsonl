@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-10-01T00:00:00Z","payload":{"id":"codex-fixture","cwd":"/synthetic/project","base_instructions":{"text":"Synthetic instruction"}}}
+{"type":"turn_context","payload":{"model":"gpt-fixture","cwd":"/synthetic/project"}}
+{"type":"response_item","timestamp":"2026-10-01T00:00:01Z","payload":{"type":"function_call","name":"exec_command","call_id":"call-x","arguments":"{\"cmd\":\"rg word src\"}"}}
+{"type":"response_item","timestamp":"2026-10-01T00:00:02Z","payload":{"type":"function_call_output","call_id":"call-x","output":"Process exited with code 1"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"你这条太长了"}]}}
+{"type":"event_msg","payload":{"type":"user_message","message":"你这条太长了"}}

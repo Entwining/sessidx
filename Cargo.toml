@@ -1,0 +1,22 @@
+[package]
+name = "sessidx"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[dependencies]
+brush-parser = "=0.4.0"
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
+serde_json = "=1.0.151"
+serde = { version = "=1.0.228", features = ["derive"] }
+anyhow = "=1.0.100"
+regex = "=1.12.2"
+chrono = { version = "=0.4.42", default-features = false, features = ["std", "clock"] }
+sha2 = "=0.10.9"
+walkdir = "=2.5.0"
+fs2 = "=0.4.3"
+clap = { version = "=4.5.54", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "=3.23.0"

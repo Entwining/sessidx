@@ -1,0 +1,5 @@
+{"type":"session","id":"pi-fixture","cwd":"/synthetic/project"}
+{"type":"model_change","modelId":"pi-model","provider":"synthetic"}
+{"type":"message","id":"p1","timestamp":"2026-10-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-p","name":"bash","arguments":{"command":"rg word src"}}]}}
+{"type":"message","id":"p2","message":{"role":"toolResult","toolCallId":"call-p","toolName":"bash","isError":true,"content":[{"type":"text","text":"failed"}]}}
+{"type":"message","id":"p3","message":{"role":"user","content":"negative control plain text"}}

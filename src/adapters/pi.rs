@@ -1,0 +1,105 @@
+use crate::{
+    model::{Event, Record, State},
+    normalize::{arguments, shell, string, text, timestamp},
+};
+use serde_json::Value;
+
+pub fn parse(v: &Value, s: &mut State) -> Record {
+    match v["type"].as_str().unwrap_or("") {
+        "session" => {
+            if let Some(id) = string(v, "id") {
+                s.session_id = id;
+            }
+            if let Some(cwd) = string(v, "cwd") {
+                s.cwd = cwd;
+            }
+            s.parent_id = string(v, "parentSession");
+            Record {
+                events: vec![],
+                known: true,
+            }
+        }
+        "model_change" => {
+            // Pi model changes precede messages: testdata/pi.jsonl.
+            s.model = string(v, "modelId");
+            s.model_source = "model_change.modelId".into();
+            Record {
+                events: vec![],
+                known: true,
+            }
+        }
+        "message" => {
+            let m = &v["message"];
+            let role = m["role"].as_str().unwrap_or("unknown");
+            if let Some(model) = string(m, "model") {
+                s.model = Some(model);
+                s.model_source = "message.model".into();
+            }
+            let ts = timestamp(v).or_else(|| timestamp(m));
+            if role == "toolResult" {
+                let mut e = Event::new("tool", "tool_result", "message.role");
+                e.call_id = string(m, "toolCallId");
+                e.tool = string(m, "toolName");
+                // Pi flags have camel case: testdata/pi.jsonl.
+                e.ok = m.get("isError").and_then(Value::as_bool).map(|v| !v);
+                if e.ok.is_some() {
+                    e.ok_source = "flag".into();
+                }
+                e.native_id = string(v, "id");
+                e.ts = ts;
+                return Record {
+                    events: vec![e],
+                    known: true,
+                };
+            }
+            let mut events = Vec::new();
+            if let Some(blocks) = m["content"].as_array() {
+                for (i, b) in blocks.iter().enumerate() {
+                    let mut e = match b["type"].as_str().unwrap_or("") {
+                        "text" => {
+                            let mut e = Event::new(role, "message", "message.role");
+                            e.text = Some(text(b));
+                            e
+                        }
+                        "toolCall" => {
+                            let mut e = Event::new("assistant", "tool_call", "content.toolCall");
+                            e.call_id = string(b, "id");
+                            e.tool = string(b, "name");
+                            let args = arguments(&b["arguments"]);
+                            e.command = e.tool.as_deref().and_then(|t| shell(t, &args));
+                            e.text = Some(args.to_string());
+                            e
+                        }
+                        _ => continue,
+                    };
+                    e.ts = ts.clone();
+                    e.native_id = string(v, "id").map(|id| format!("{id}:{i}"));
+                    events.push(e);
+                }
+            } else if m["content"].is_string() {
+                let mut e = Event::new(role, "message", "message.role");
+                e.text = Some(text(&m["content"]));
+                e.native_id = string(v, "id");
+                e.ts = ts;
+                events.push(e);
+            }
+            Record {
+                events,
+                known: true,
+            }
+        }
+        "thinking_level_change"
+        | "compaction"
+        | "branch_summary"
+        | "custom"
+        | "custom_message"
+        | "label" => Record {
+            events: vec![],
+            known: true,
+        },
+        _ => Record {
+            events: vec![],
+            known: false,
+        },
+    }
+}
