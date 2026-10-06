@@ -40,7 +40,6 @@ CREATE TABLE IF NOT EXISTS event_details (
  kind_ref INTEGER NOT NULL REFERENCES strings(id), kind_source_ref INTEGER NOT NULL REFERENCES strings(id),
  text TEXT, tool_ref INTEGER REFERENCES strings(id), call_id BLOB,
  ok INTEGER, ok_source_ref INTEGER NOT NULL REFERENCES strings(id), exit_code INTEGER,
- text_truncated INTEGER NOT NULL DEFAULT 0,
  CHECK(call_id IS NULL OR length(call_id)=32)
 );
 CREATE INDEX IF NOT EXISTS events_call ON event_details(session_ref,call_id,kind_ref) WHERE call_id IS NOT NULL;
@@ -52,7 +51,7 @@ CREATE VIEW IF NOT EXISTS events AS
  coalesce(kind.value,'context') AS kind,coalesce(kind_source.value,'root.type') AS kind_source,
  model.value AS model,model_source.value AS model_source,d.text,tool.value AS tool,
  CASE WHEN d.call_id IS NULL THEN NULL ELSE lower(hex(d.call_id)) END AS call_id,
- d.ok,coalesce(ok_source.value,'none') AS ok_source,d.exit_code,coalesce(d.text_truncated,0) AS text_truncated
+ d.ok,coalesce(ok_source.value,'none') AS ok_source,d.exit_code
  FROM locations l JOIN strings session ON session.id=l.session_ref
  JOIN strings model_source ON model_source.id=l.model_source_ref
  LEFT JOIN strings model ON model.id=l.model_ref
@@ -96,4 +95,4 @@ CREATE VIEW IF NOT EXISTS call_outcomes AS
       WHEN sum(ok_source='flag')>0 THEN 'flag'
       WHEN sum(ok_source='text')>0 THEN 'text' ELSE 'none' END AS ok_source
  FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id;
-PRAGMA user_version=3;
+PRAGMA user_version=2;

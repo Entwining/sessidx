@@ -16,6 +16,31 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
         s.kind_source = "isSidechain".into();
     }
     let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
+    // Claude diagnostic attachments: testdata/output-prefix.json.
+    if typ == "attachment"
+        && v.pointer("/attachment/type").and_then(Value::as_str) == Some("diagnostics")
+    {
+        let messages: Vec<Value> = v
+            .pointer("/attachment/files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .flat_map(|f| f["diagnostics"].as_array().into_iter().flatten())
+            .filter_map(|d| d.get("message"))
+            .filter(|m| m.as_str().is_some_and(|s| !s.trim().is_empty()))
+            .cloned()
+            .collect();
+        if !messages.is_empty() {
+            let mut e = Event::new("tool", "tool_output", "attachment.type");
+            crate::normalize::output_prefix(&mut e, &Value::Array(messages));
+            e.native_id = string(v, "uuid");
+            e.ts = timestamp(v);
+            return Record {
+                events: vec![e],
+                known: true,
+            };
+        }
+    }
     if !matches!(typ, "user" | "assistant") {
         return Record {
             events: Vec::new(),
@@ -137,6 +162,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         e.ok_source = "flag".into();
                     }
                     crate::outcomes::classify(&mut e, &b["content"], "claude");
+                    crate::normalize::output_prefix(&mut e, &b["content"]);
                     if let Some(kind) = v.get("toolDenialKind").and_then(Value::as_str) {
                         let source = match kind {
                             "classifier" | "automode-blocked" => "classifier",

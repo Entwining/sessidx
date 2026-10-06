@@ -102,6 +102,7 @@ pub struct Hit {
     pub role: String,
     pub model: Option<String>,
     pub snippet: String,
+    pub truncated: bool,
     #[serde(rename = "ref")]
     pub reference: String,
     #[serde(skip)]
@@ -119,7 +120,7 @@ pub struct Coverage {
     pub unavailable_ranges: usize,
 }
 
-const SELECT: &str = "SELECT f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,coalesce(e.text,''),e.byte_off,e.byte_len,e.id FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
+const SELECT: &str = "SELECT f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,coalesce(e.text,''),e.byte_off,e.byte_len,e.id,e.text_truncated FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     let harness: String = row.get(0)?;
@@ -140,6 +141,7 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
         role: row.get(5)?,
         model: row.get(6)?,
         snippet: redact(&row.get::<_, String>(7)?),
+        truncated: row.get(11)?,
         reference,
         byte_off: row.get(8)?,
         byte_len: row.get(9)?,
@@ -252,6 +254,7 @@ pub fn scan(
             Ok(bytes) => {
                 if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
                     item.snippet = display_range(&bytes)?;
+                    item.truncated = false;
                     hits.push(item);
                 }
             }
@@ -312,7 +315,10 @@ pub fn show(
     };
     for item in &mut hits {
         match read_range(db, item).and_then(|bytes| display_range(&bytes)) {
-            Ok(raw) => item.snippet = raw,
+            Ok(raw) => {
+                item.snippet = raw;
+                item.truncated = false;
+            }
             Err(_) => {
                 item.snippet = "[source range unavailable; run sessidx index]".into();
                 coverage.unavailable_ranges += 1;

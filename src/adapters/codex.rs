@@ -92,6 +92,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     e.call_id = string(p, "call_id");
                     // Codex text and structured outcomes: testdata/outcomes.jsonl.
                     crate::outcomes::classify(&mut e, &p["output"], "codex");
+                    crate::normalize::output_prefix(&mut e, &p["output"]);
                     e
                 }
                 "agent_message" => {

@@ -25,7 +25,7 @@ fn claude_blocks_flags_and_synthetic_model() {
     assert!(
         es.iter()
             .filter(|e| e.kind == "tool_result")
-            .all(|e| e.text.is_none())
+            .all(|e| e.text.as_ref().is_some_and(|s| !s.is_empty()))
     );
 }
 
@@ -44,7 +44,7 @@ fn codex_context_arguments_and_telemetry() {
     assert!(
         es.iter()
             .filter(|e| e.kind == "tool_result")
-            .all(|e| e.text.is_none())
+            .all(|e| e.text.as_ref().is_some_and(|s| !s.is_empty()))
     );
 }
 
@@ -152,6 +152,29 @@ fn previous_schema_requires_explicit_locked_rebuild() {
             )
             .unwrap()
     );
+}
+
+#[test]
+fn previous_compact_schema_rebuilds_without_reading_new_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old-compact.db");
+    let old = rusqlite::Connection::open(&path).unwrap();
+    old.execute_batch(include_str!("../testdata/schema-v2.sql"))
+        .unwrap();
+    assert!(Store::open(&path).is_err());
+    assert!(Store::require_schema(&old).is_err());
+    let mut upgrade = Store::open_for_rebuild(&path).unwrap();
+    upgrade.refresh(&[], true, None).unwrap();
+    Store::require_schema(&upgrade.db).unwrap();
+    let n: i64 = upgrade
+        .db
+        .query_row(
+            "SELECT count(*) FROM events WHERE text_truncated=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(n, 0);
 }
 
 #[test]

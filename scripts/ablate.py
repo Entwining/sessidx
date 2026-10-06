@@ -73,6 +73,10 @@ rows.extend([
     ('key_label', 'src/redaction.rs', r'|authorization|\bkey)', '|authorization)', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
     ('key_field', 'src/redaction.rs', r'|(?i)^key$', '', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
 ])
+rows.extend([
+    ('tool_output_prefix', 'src/normalize.rs', 'pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {', 'pub fn output_prefix(e: &mut crate::model::Event, output: &Value) { return;', 'tool_output_prefix_is_bounded_and_raw_tail_remains_reachable', 'pi_empty_response_and_explicit_message_model_override'),
+    ('attachment_output', 'src/adapters/claude.rs', 'if typ == "attachment"', 'if false', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'),
+])
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

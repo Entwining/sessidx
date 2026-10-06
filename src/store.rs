@@ -19,7 +19,7 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -116,7 +116,9 @@ impl Store {
         db.busy_timeout(Duration::from_millis(50))?;
         let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         anyhow::ensure!(
-            version == 0 || version == SCHEMA_VERSION || rebuilding && version == 1,
+            version == 0
+                || version == SCHEMA_VERSION
+                || rebuilding && (1..SCHEMA_VERSION).contains(&version),
             "database schema changed; run sessidx index --full"
         );
         Ok(Self {
@@ -135,7 +137,9 @@ impl Store {
         )?;
         let version: i64 = self.db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         anyhow::ensure!(
-            version == 0 || version == SCHEMA_VERSION || full && version == 1,
+            version == 0
+                || version == SCHEMA_VERSION
+                || full && (1..SCHEMA_VERSION).contains(&version),
             "database schema changed; run sessidx index --full"
         );
         if version == 0 {
@@ -367,7 +371,7 @@ impl Store {
                             .map(|v| intern(&tx, &mut strings, v))
                             .transpose()?;
                         let ok_source = intern(&tx, &mut strings, &event.ok_source)?;
-                        tx.prepare_cached("INSERT INTO event_details(event_id,session_ref,role_ref,role_source_ref,kind_ref,kind_source_ref,text,tool_ref,call_id,ok,ok_source_ref,exit_code) VALUES (?,?,?,?,?,?,?,?,unhex(?),?,?,?)")?.execute(params![event_id,session,role,role_source,kind,kind_source,event.text,tool,event.call_id,event.ok,ok_source,event.exit_code])?;
+                        tx.prepare_cached("INSERT INTO event_details(event_id,session_ref,role_ref,role_source_ref,kind_ref,kind_source_ref,text,tool_ref,call_id,ok,ok_source_ref,exit_code,text_truncated) VALUES (?,?,?,?,?,?,?,?,unhex(?),?,?,?,?)")?.execute(params![event_id,session,role,role_source,kind,kind_source,event.text,tool,event.call_id,event.ok,ok_source,event.exit_code,event.text_truncated])?;
                     }
                     for (site, command) in event.sites.into_iter().enumerate() {
                         tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;

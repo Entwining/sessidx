@@ -382,6 +382,96 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
 }
 
 #[test]
+fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
+    let prefix = format!("outputneedle {}", "x".repeat(2047 - "outputneedle ".len()));
+    let text = format!("{prefix}太tailoutside");
+    for f in fixture.as_array().unwrap().iter().take(3) {
+        let h = f["harness"].as_str().unwrap();
+        let mut record = f["record"].clone();
+        let field = match h {
+            "claude" => "/message/content/0/content",
+            "codex" => "/payload/output/0/text",
+            _ => "/message/content/0/text",
+        };
+        *record.pointer_mut(field).unwrap() = serde_json::json!(text);
+        let (_dir, store, _) = setup(h, &(record.to_string() + "\n"));
+        let hits = query::search(&store.db, "outputneedle", &Filters::default(), 20, 0).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].role, "tool");
+        assert!(hits[0].truncated);
+        assert_eq!(hits[0].snippet, prefix);
+        assert!(
+            query::search(&store.db, "tailoutside", &Filters::default(), 20, 0)
+                .unwrap()
+                .is_empty()
+        );
+        let (raw, c) = query::scan(
+            &store.db,
+            "tailoutside",
+            &Filters {
+                harness: Some(h.into()),
+                ..Filters::default()
+            },
+            20,
+            0,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert_eq!(raw.len(), 1);
+        assert!(!c.incomplete && !raw[0].truncated);
+        assert!(raw[0].snippet.contains("tailoutside"));
+        let (shown, c) = query::show(&store.db, &format!("{}:1", hits[0].path), 0, 20, 0).unwrap();
+        assert_eq!(shown.len(), 1);
+        assert!(!c.incomplete && !shown[0].truncated);
+        assert!(shown[0].snippet.contains("tailoutside"));
+    }
+    let mut s = sessidx::model::State::default();
+    let mut record = fixture[0]["record"].clone();
+    record["message"]["content"][0]["content"] = serde_json::json!("key=a ".repeat(341));
+    let event = sessidx::adapters::parse("claude", &record, &mut s)
+        .events
+        .remove(0);
+    assert!(event.text.as_ref().unwrap().len() <= 2048);
+    assert!(event.text_truncated);
+}
+
+#[test]
+fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
+    let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
+    let (_dir, store, _) = setup("claude", &data);
+    let hits = query::search(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].role, "tool");
+    assert!(!hits[0].truncated);
+    assert_eq!(
+        store
+            .db
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind='tool_result'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .db
+            .query_row(
+                "SELECT count(*) FROM events WHERE kind='context'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn scan_matches_original_ranges_before_redacting_display() {
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";

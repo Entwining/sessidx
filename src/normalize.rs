@@ -48,6 +48,67 @@ pub fn arguments(v: &Value) -> Value {
     }
 }
 
+pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
+    const LIMIT: usize = 2048;
+    fn boundary(s: &str, limit: usize) -> usize {
+        let mut n = s.len().min(limit);
+        while !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        n
+    }
+    fn append(v: &Value, text: &mut String, truncated: &mut bool) {
+        if *truncated {
+            return;
+        }
+        match v {
+            Value::String(s) if !s.is_empty() => {
+                if !text.is_empty() {
+                    if text.len() == LIMIT {
+                        *truncated = true;
+                        return;
+                    }
+                    text.push('\n');
+                }
+                let end = boundary(s, LIMIT - text.len());
+                text.push_str(&s[..end]);
+                *truncated = end < s.len();
+            }
+            Value::Array(a) => {
+                for v in a {
+                    append(v, text, truncated);
+                    if *truncated {
+                        break;
+                    }
+                }
+            }
+            Value::Object(m) => {
+                if let Some(v) = m
+                    .get("text")
+                    .or_else(|| m.get("content"))
+                    .or_else(|| m.get("output"))
+                {
+                    append(v, text, truncated);
+                } else {
+                    append(&Value::String(v.to_string()), text, truncated);
+                }
+            }
+            _ => {}
+        }
+    }
+    // Tool output and UTF-8 clipping: tests/lookup.rs::tool_output_prefix_is_bounded_and_raw_tail_remains_reachable.
+    let mut text = String::with_capacity(LIMIT);
+    append(output, &mut text, &mut e.text_truncated);
+    let redacted = crate::redaction::redact_serialized(&text);
+    let end = boundary(&redacted, LIMIT);
+    e.text_truncated |= end < redacted.len();
+    e.text = if end == 0 {
+        None
+    } else {
+        Some(redacted[..end].into())
+    };
+}
+
 pub fn shell(tool: &str, args: &Value) -> Option<String> {
     match tool.rsplit('.').next().unwrap_or(tool) {
         "Bash" | "bash" | "exec_command" | "shell_command" => {

@@ -46,6 +46,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     e.ok_source = "flag".into();
                 }
                 crate::outcomes::classify(&mut e, &m["content"], "pi");
+                crate::normalize::output_prefix(&mut e, &m["content"]);
                 e.native_id = string(v, "id");
                 e.ts = ts;
                 return Record {
