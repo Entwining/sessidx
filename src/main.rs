@@ -248,19 +248,21 @@ fn run(cli: Cli) -> Result<i32> {
             page,
         } => {
             anyhow::ensure!((1..=1000).contains(&page.limit), "--limit must be 1..1000");
-            let request = json!(["search", path, query, filters]);
+            let request = json!(["search_sessions", path, query, filters]);
             let offset = position(&db, page.cursor.as_deref(), &request)?;
-            let mut hits = query::search(&db, &query, &filters, page.limit + 1, offset as usize)?;
-            let records = hits.len();
-            let more = records > page.limit;
-            hits.truncate(page.limit);
-            for hit in &hits {
-                emit(
-                    "session",
-                    json!({"harness":hit.harness,"session_id":hit.session_id,"ts":hit.ts,"hits":[hit]}),
-                )?;
+            let mut sessions =
+                query::search(&db, &query, &filters, page.limit + 1, offset as usize)?;
+            let records = sessions.iter().map(|s| s.hits.len()).sum();
+            let more = sessions.len() > page.limit;
+            sessions.truncate(page.limit);
+            for session in &sessions {
+                emit("session", serde_json::to_value(session)?)?;
             }
-            let cursor = next(&db, more.then_some(offset + hits.len() as i64), &request)?;
+            let cursor = next(
+                &db,
+                more.then_some(offset + sessions.len() as i64),
+                &request,
+            )?;
             end(
                 Some(&refresh),
                 &Coverage {
@@ -269,10 +271,10 @@ fn run(cli: Cli) -> Result<i32> {
                     ..Coverage::default()
                 },
                 cursor,
-                "indexed_hits",
-                hits.len(),
+                "session_hits",
+                sessions.len(),
             )?;
-            Ok(if hits.is_empty() { 1 } else { 0 })
+            Ok(if sessions.is_empty() { 1 } else { 0 })
         }
         Command::Grep {
             pattern,

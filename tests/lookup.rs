@@ -19,6 +19,19 @@ fn setup(harness: &str, content: &str) -> (tempfile::TempDir, Store, Vec<Root>) 
     (dir, store, roots)
 }
 
+fn search_hits(
+    db: &rusqlite::Connection,
+    query: &str,
+    filters: &Filters,
+    limit: usize,
+    offset: usize,
+) -> anyhow::Result<Vec<query::Hit>> {
+    Ok(query::search(db, query, filters, limit, offset)?
+        .into_iter()
+        .flat_map(|s| s.hits)
+        .collect())
+}
+
 fn assert_canaries_absent_from_storage(dir: &std::path::Path, values: &[&str]) {
     for name in ["index.db", "index.db-wal", "index.db-shm"] {
         let bytes = match fs::read(dir.join(name)) {
@@ -40,19 +53,19 @@ fn lookup_cjk_latin_filters_and_show_references() {
     let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
     let filters = Filters::default();
     assert_eq!(
-        query::search(&store.db, "太长", &filters, 20, 0)
+        search_hits(&store.db, "太长", &filters, 20, 0)
             .unwrap()
             .len(),
         1
     );
     assert_eq!(
-        query::search(&store.db, "Latin", &filters, 20, 0)
+        search_hits(&store.db, "Latin", &filters, 20, 0)
             .unwrap()
             .len(),
         1
     );
     assert_eq!(
-        query::search(&store.db, "Lat", &filters, 20, 0)
+        search_hits(&store.db, "Lat", &filters, 20, 0)
             .unwrap()
             .len(),
         0
@@ -65,7 +78,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
         .unwrap();
     assert!(fts_body.is_none());
     assert!(
-        query::search(
+        search_hits(
             &store.db,
             "Latin",
             &Filters {
@@ -78,7 +91,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
         .unwrap()
         .is_empty()
     );
-    let hits = query::search(
+    let hits = search_hits(
         &store.db,
         "Latin",
         &Filters {
@@ -320,7 +333,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "01234567-89ab-cdef-0123-456789abcdef",
         "/synthetic/long-project-directory/source.rs",
     ] {
-        let hits = query::search(
+        let hits = search_hits(
             &store.db,
             &format!("identifierneedle {value}"),
             &Filters::default(),
@@ -331,7 +344,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.contains(value));
     }
-    let context = query::search(&store.db, "contextneedle", &Filters::default(), 20, 0).unwrap();
+    let context = search_hits(&store.db, "contextneedle", &Filters::default(), 20, 0).unwrap();
     assert_eq!(context.len(), 1);
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
@@ -341,9 +354,9 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
     ] {
         assert!(!context[0].snippet.contains(value));
     }
-    let input = query::search(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
+    let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
     assert!(
-        query::search(
+        search_hits(
             &store.db,
             "identifierinput 0xabcdef0123456789abcdef0123456789abcdef01",
             &Filters::default(),
@@ -386,13 +399,13 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         };
         *record.pointer_mut(field).unwrap() = serde_json::json!(text);
         let (_dir, store, _) = setup(h, &(record.to_string() + "\n"));
-        let hits = query::search(&store.db, "outputneedle", &Filters::default(), 20, 0).unwrap();
+        let hits = search_hits(&store.db, "outputneedle", &Filters::default(), 20, 0).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].role, "tool");
         assert!(hits[0].truncated);
         assert_eq!(hits[0].snippet, prefix);
         assert!(
-            query::search(&store.db, "tailoutside", &Filters::default(), 20, 0)
+            search_hits(&store.db, "tailoutside", &Filters::default(), 20, 0)
                 .unwrap()
                 .is_empty()
         );
@@ -436,7 +449,7 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
         serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
     let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
     let (_dir, store, _) = setup("claude", &data);
-    let hits = query::search(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
+    let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].role, "tool");
     assert!(!hits[0].truncated);
@@ -468,7 +481,7 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
 fn pi_sections_share_the_native_message_and_are_redacted() {
     let (dir, store, _) = setup("pi", include_str!("../testdata/pi-sections.jsonl"));
     for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
-        let hits = query::search(&store.db, term, &Filters::default(), 20, 0).unwrap();
+        let hits = search_hits(&store.db, term, &Filters::default(), 20, 0).unwrap();
         assert_eq!(hits.len(), 1, "{term}");
         assert_eq!(hits[0].role, "system");
     }
@@ -482,6 +495,66 @@ fn pi_sections_share_the_native_message_and_are_redacted() {
         .unwrap();
     assert_eq!(messages, 1);
     assert_canaries_absent_from_storage(dir.path(), &["Q8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB"]);
+}
+
+#[test]
+fn ranked_search_pages_sessions_before_selecting_best_hits() {
+    let message = |session: &str, id: usize, ts: &str, text: &str| {
+        serde_json::json!({"type":"user","uuid":format!("{session}-{id}"),"sessionId":session,"timestamp":ts,"message":{"role":"user","content":text}}).to_string()+"\n"
+    };
+    let data = (0..25)
+        .map(|i| message("crowded", i, "2026-10-02T00:00:00Z", "groupneedle"))
+        .collect::<String>();
+    let (dir, mut store, mut roots) = setup("claude", &data);
+    fs::write(
+        roots[0].path.join("older.jsonl"),
+        message("older", 0, "2026-10-01T00:00:00Z", "groupneedle"),
+    )
+    .unwrap();
+    fs::write(
+        roots[0].path.join("weaker.jsonl"),
+        message(
+            "weaker",
+            0,
+            "2026-10-03T00:00:00Z",
+            &format!("groupneedle {}", "filler ".repeat(100)),
+        ),
+    )
+    .unwrap();
+    store.refresh(&roots, false, None).unwrap();
+    let page = query::search(&store.db, "groupneedle", &Filters::default(), 2, 0).unwrap();
+    assert_eq!(
+        page.iter()
+            .map(|s| &s.session_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        2
+    );
+    assert_eq!(
+        page.iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["crowded", "older"]
+    );
+    let next = query::search(&store.db, "groupneedle", &Filters::default(), 2, 2).unwrap();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].session_id, "weaker");
+    assert_eq!(page[0].matched_hits, 25);
+    assert_eq!(page[0].hits.len(), 3);
+    assert_eq!(page[0].hits[0].line_no, 25);
+    let (shown, coverage) = query::show(&store.db, &page[0].hits[0].reference, 0, 20, 0).unwrap();
+    assert!(!coverage.incomplete);
+    assert!(shown[0].snippet.contains("crowded-24"));
+    let codex = dir.path().join("codex.jsonl");
+    fs::write(&codex, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"crowded\"}}\n{\"type\":\"response_item\",\"timestamp\":\"2026-10-02T00:00:00Z\",\"payload\":{\"type\":\"message\",\"id\":\"same-session-other-harness\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"groupneedle\"}]}}\n").unwrap();
+    roots.push(Root {
+        harness: "codex".into(),
+        path: codex,
+    });
+    store.refresh(&roots, false, None).unwrap();
+    let all = query::search(&store.db, "groupneedle", &Filters::default(), 20, 0).unwrap();
+    assert_eq!(all.len(), 4);
+    assert_eq!(all.iter().filter(|s| s.session_id == "crowded").count(), 2);
 }
 
 #[test]
@@ -512,7 +585,7 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
     let cwd = "/synthetic/Code/GitHub/project-with-native-identifiers";
     let data=serde_json::json!({"type":"session_meta","payload":{"id":session,"cwd":cwd}}).to_string()+"\n"+&serde_json::json!({"type":"turn_context","payload":{"model":"claude-haiku-4-5-20251001"}}).to_string()+"\n"+&serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}}).to_string()+"\n";
     let (_, store, _) = setup("codex", &data);
-    let hits = query::search(
+    let hits = search_hits(
         &store.db,
         "needle",
         &Filters {

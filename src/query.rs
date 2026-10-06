@@ -163,7 +163,8 @@ pub struct Coverage {
     pub bytes: u64,
 }
 
-const SELECT: &str = "SELECT f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,coalesce(e.text,''),e.byte_off,e.byte_len,e.id,e.text_truncated FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
+const COLUMNS: &str = "f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,coalesce(e.text,''),e.byte_off,e.byte_len,e.id,e.text_truncated";
+const FROM: &str = "FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     let harness: String = row.get(0)?;
@@ -201,24 +202,72 @@ pub fn fts_query(query: &str) -> Result<String> {
         .join(" AND "))
 }
 
+#[derive(Debug, Serialize)]
+pub struct Session {
+    pub harness: String,
+    pub session_id: String,
+    pub path: String,
+    pub ts: Option<String>,
+    pub matched_hits: usize,
+    pub hits: Vec<Hit>,
+}
+
 pub fn search(
     db: &Connection,
     query: &str,
     filters: &Filters,
     limit: usize,
     offset: usize,
-) -> Result<Vec<Hit>> {
+) -> Result<Vec<Session>> {
     let (clause, mut args) = filters.sql()?;
     args.push(Value::Text(fts_query(query)?));
     args.push(Value::Integer(limit as i64));
     args.push(Value::Integer(offset as i64));
+    // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
     let sql = format!(
-        "{SELECT} JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ? ORDER BY bm25(fts),e.ts DESC,e.id DESC LIMIT ? OFFSET ?"
+        "WITH matches AS MATERIALIZED (
+          SELECT f.harness,e.session_id,e.id,e.ts,bm25(fts) AS score {FROM}
+          JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ?
+        ), heads AS MATERIALIZED (
+          SELECT harness,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n
+          FROM matches GROUP BY harness,session_id
+          ORDER BY score,ts DESC,harness,session_id LIMIT ? OFFSET ?
+        ), ranked AS (
+          SELECT m.id,row_number() OVER (
+            PARTITION BY m.harness,m.session_id ORDER BY m.score,m.ts DESC,m.id DESC
+          ) AS n FROM matches m JOIN heads h USING(harness,session_id)
+        )
+        SELECT {COLUMNS},h.ts,h.n {FROM}
+        JOIN ranked r ON r.id=e.id JOIN heads h ON h.harness=f.harness AND h.session_id=e.session_id
+        WHERE r.n<=3 ORDER BY h.score,h.ts DESC,h.harness,h.session_id,r.n"
     );
-    Ok(db
-        .prepare(&sql)?
-        .query_map(params_from_iter(args), hit)?
-        .collect::<rusqlite::Result<_>>()?)
+    let mut stmt = db.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args), |r| {
+        Ok((
+            hit(r)?,
+            r.get::<_, Option<String>>(12)?,
+            r.get::<_, usize>(13)?,
+        ))
+    })?;
+    let mut sessions: Vec<Session> = Vec::new();
+    for row in rows {
+        let (hit, ts, matched_hits) = row?;
+        if !sessions
+            .last()
+            .is_some_and(|s| s.harness == hit.harness && s.session_id == hit.session_id)
+        {
+            sessions.push(Session {
+                harness: hit.harness.clone(),
+                session_id: hit.session_id.clone(),
+                path: hit.path.clone(),
+                ts,
+                matched_hits,
+                hits: Vec::new(),
+            });
+        }
+        sessions.last_mut().unwrap().hits.push(hit);
+    }
+    Ok(sessions)
 }
 
 fn read_range(db: &Connection, item: &Hit) -> Result<Vec<u8>> {
@@ -273,7 +322,7 @@ pub fn scan(
     let (clause, mut args) = filters.sql()?;
     args.push(Value::Integer(after));
     let sql = format!(
-        "{SELECT} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(e2.ordinal) FROM events e2 WHERE e2.file_id=e.file_id AND e2.line_no=e.line_no AND e2.role=e.role) ORDER BY e.id"
+        "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(e2.ordinal) FROM events e2 WHERE e2.file_id=e.file_id AND e2.line_no=e.line_no AND e2.role=e.role) ORDER BY e.id"
     );
     let mut stmt = db.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args), hit)?;
@@ -338,7 +387,7 @@ pub fn show(
     };
     args.push(Value::Integer(after));
     args.push(Value::Integer((limit + 1) as i64));
-    let sql = format!("{SELECT} WHERE {clause} AND e.id>? ORDER BY e.id LIMIT ?");
+    let sql = format!("SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? ORDER BY e.id LIMIT ?");
     let mut hits = db
         .prepare(&sql)?
         .query_map(params_from_iter(args), hit)?

@@ -58,6 +58,9 @@ fn stream(out: &Output, exit: i32) -> Vec<Value> {
         .collect();
     assert!(!records.is_empty());
     assert!(records.iter().all(|v| v["type"].is_string()));
+    for record in records.iter().filter(|v| v["type"] == "session") {
+        assert_eq!(record["path"], record["hits"][0]["path"]);
+    }
     assert_eq!(records.iter().filter(|v| v["type"] == "end").count(), 1);
     assert_eq!(records.last().unwrap()["type"], "end");
     assert!(records.last().unwrap().get("searched").is_some());
@@ -117,7 +120,7 @@ fn cli_validates_enum_values_and_unions_harnesses() {
         0,
     );
     let data = &rows[..rows.len() - 1];
-    assert_eq!(data.len(), 4);
+    assert_eq!(data.len(), 2);
     assert!(
         data.iter()
             .all(|v| v["harness"] == "claude" || v["harness"] == "pi")
@@ -145,9 +148,9 @@ fn cli_validates_enum_values_and_unions_harnesses() {
         .unwrap(),
         0,
     );
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 2);
     assert!(
-        rows[..2]
+        rows[..1]
             .iter()
             .all(|r| r["hits"][0]["path"] == roots[0].path.to_str().unwrap())
     );
