@@ -188,6 +188,10 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
             .iter()
             .map(|s| redact(s))
             .collect::<Vec<_>>();
+        anyhow::ensure!(
+            names.iter().collect::<std::collections::HashSet<_>>().len() == names.len(),
+            "duplicate SQL column names after redaction; alias each column uniquely"
+        );
         let mut rows = stmt.query([])?;
         let mut result = Vec::new();
         while let Some(row) = rows.next()? {

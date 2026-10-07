@@ -178,18 +178,15 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         assert_eq!(grouped[0][key], expected);
     }
     assert_eq!(grouped[0]["numerator"], 1);
-    assert!(
-        counting::count(
-            &store.db,
-            "commands",
-            "model,model",
-            None,
-            &Filters::default()
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("duplicate")
+    let duplicate = counting::count(
+        &store.db,
+        "commands",
+        "model,model",
+        None,
+        &Filters::default(),
     );
+    assert!(duplicate.is_err());
+    assert!(duplicate.unwrap_err().to_string().contains("duplicate"));
     assert!(
         counting::count(&store.db, "commands", "invalid", None, &Filters::default())
             .unwrap_err()
@@ -237,6 +234,19 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
     assert!(counting::sql(&store.db, "DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "SELECT 1; DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
+    for sql in [
+        "SELECT 1 AS id, 2 AS id",
+        "SELECT 1 AS \"token=abc\", 2 AS \"[REDACTED]\"",
+    ] {
+        let duplicate = counting::sql(&store.db, sql);
+        assert!(duplicate.is_err());
+        assert!(
+            duplicate
+                .unwrap_err()
+                .to_string()
+                .contains("alias each column")
+        );
+    }
     assert_eq!(counting::doctor(&store.db).unwrap()["parse_errors"], 0);
 }
 
@@ -272,7 +282,12 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
     assert_eq!(d["unparsed_shell_calls"]["numerator"], 1);
     assert_eq!(d["unparsed_shell_calls"]["denominator"], 1);
     assert_eq!(d["unparsed_shell_calls"]["rate"], 1.0);
-    assert!(counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n").unwrap_err().to_string().contains("10000 rows"));
+    let excess = counting::sql(
+        &store.db,
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n",
+    );
+    assert!(excess.is_err());
+    assert!(excess.unwrap_err().to_string().contains("10000 rows"));
     let start = std::time::Instant::now();
     let err = counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
     assert!(err.to_string().contains("interrupted"), "{err}");

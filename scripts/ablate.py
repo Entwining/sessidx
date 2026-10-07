@@ -110,6 +110,10 @@ rows.extend([
     ('session_access', 'src/query.rs', 'SELECT id FROM locations WHERE {column}=?', 'SELECT id FROM locations WHERE +{column}=?', 'session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step', 'codex_context_arguments_and_telemetry'),
     ('grep_sqlite_deadline', 'src/query.rs', 'db.progress_handler(1000,', 'db.progress_handler(0,', 'session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step', 'codex_context_arguments_and_telemetry'),
 ])
+rows.extend([
+    ('sql_duplicate_columns', 'src/counting.rs', 'names.iter().collect::<std::collections::HashSet<_>>().len() == names.len()', 'true', 'counts_state_units_denominators_unknowns_and_sql_is_read_only', 'codex_context_arguments_and_telemetry'),
+    ('sql_writer_coverage', 'src/main.rs', 'let _read_lock = Store::read_lock(&path)?;', 'let _read_lock = Some(std::fs::File::open(path.with_extension("lock"))?);', 'cli_writer_contention_returns_stale_without_waiting', 'codex_context_arguments_and_telemetry'),
+])
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

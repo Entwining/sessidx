@@ -174,6 +174,12 @@ fn run(cli: Cli) -> Result<i32> {
         .db
         .unwrap_or_else(|| home.join(".cache/sessidx/index.db"));
     if let Command::Sql { query } = &cli.command {
+        let _read_lock = Store::read_lock(&path)?;
+        let refresh = Refresh {
+            stale: _read_lock.is_none(),
+            writer_busy: _read_lock.is_none(),
+            ..Refresh::default()
+        };
         let db = rusqlite::Connection::open_with_flags(
             &path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -185,7 +191,7 @@ fn run(cli: Cli) -> Result<i32> {
             emit("row", json!({"data":row}))?;
         }
         end(
-            None,
+            Some(&refresh),
             &Coverage {
                 records: rows.len(),
                 ..Coverage::default()

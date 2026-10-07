@@ -62,7 +62,7 @@ struct IndexedFile {
     coverage: FileCoverage,
 }
 impl WriterLock {
-    fn acquire(path: &Path) -> Result<Option<Self>> {
+    fn acquire(path: &Path, shared: bool) -> Result<Option<Self>> {
         let f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -70,7 +70,11 @@ impl WriterLock {
             .truncate(false)
             .mode(0o600)
             .open(path.with_extension("lock"))?;
-        match f.try_lock() {
+        match if shared {
+            f.try_lock_shared()
+        } else {
+            f.try_lock()
+        } {
             Ok(()) => Ok(Some(Self { _file: f })),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(e) => Err(e.into()),
@@ -124,7 +128,11 @@ impl Store {
     }
 
     pub fn lock(&self) -> Result<Option<WriterLock>> {
-        WriterLock::acquire(&self.path)
+        WriterLock::acquire(&self.path, false)
+    }
+
+    pub fn read_lock(path: &Path) -> Result<Option<WriterLock>> {
+        WriterLock::acquire(path, true)
     }
 
     fn initialize(&mut self, _lock: &WriterLock, full: bool) -> Result<()> {

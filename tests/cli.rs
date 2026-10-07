@@ -293,4 +293,12 @@ fn cli_writer_contention_returns_stale_without_waiting() {
     assert_eq!(end["stale"], true);
     assert_eq!(end["complete"], false);
     assert_eq!(end["refresh"]["writer_busy"], true);
+    let rows = stream(
+        &command(&store, &roots, &["sql", "SELECT count(*) AS n FROM events"])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert_eq!(rows.last().unwrap()["stale"], true);
+    assert_eq!(rows.last().unwrap()["complete"], false);
 }
