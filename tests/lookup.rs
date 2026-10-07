@@ -71,7 +71,8 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
         .collect::<rusqlite::Result<Vec<_>>>()
         .unwrap();
     assert!(
-        plan.iter().any(|s| s.contains("events_session")),
+        plan.iter()
+            .any(|s| s.starts_with("SEARCH ") && s.contains("events_session")),
         "{plan:?}"
     );
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO locations(file_id,session_ref,line_no,byte_off,byte_len,raw_hash,ordinal,model_source_ref) SELECT l.file_id,l.session_ref,n.i+100,l.byte_off,l.byte_len,l.raw_hash,0,l.model_source_ref FROM n JOIN locations l ON l.id=1;").unwrap();
