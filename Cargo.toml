@@ -19,4 +19,3 @@ clap = { version = "=4.5.54", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "=3.23.0"
-libc = "=0.2.190"

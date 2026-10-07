@@ -962,7 +962,6 @@ dependencies = [
  "brush-parser",
  "chrono",
  "clap",
- "libc",
  "regex",
  "rusqlite",
  "serde",
