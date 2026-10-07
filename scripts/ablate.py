@@ -136,6 +136,7 @@ rows.extend([
     ('code_mode_quoted_control', 'src/code_mode.rs', 'if matches!(c, \'\\\'\' | \'"\' | \'`\')', 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
     ('code_mode_regex_control', 'src/code_mode.rs', "if c == '/' && regex_allowed", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
 ])
+rows.append(('diagnostic_source', 'src/adapters/claude.rs', 'd.get("source")', 'd.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

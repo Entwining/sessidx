@@ -26,9 +26,21 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             .into_iter()
             .flatten()
             .flat_map(|f| f["diagnostics"].as_array().into_iter().flatten())
-            .filter_map(|d| d.get("message"))
-            .filter(|m| m.as_str().is_some_and(|s| !s.trim().is_empty()))
-            .cloned()
+            .filter_map(|d| {
+                let message = d
+                    .get("message")?
+                    .as_str()
+                    .filter(|s| !s.trim().is_empty())?;
+                let source = d
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty());
+                Some(Value::String(
+                    source
+                        .map(|s| format!("{s}: {message}"))
+                        .unwrap_or_else(|| message.into()),
+                ))
+            })
             .collect();
         if !messages.is_empty() {
             let mut e = Event::new("tool", "tool_output", "attachment.type");

@@ -581,6 +581,12 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
     let (_dir, store, _) = setup("claude", &data);
     let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
     assert_eq!(hits.len(), 1);
+    assert_eq!(
+        search_hits(&store.db, "cSpell", &Filters::default(), 20, 0)
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(hits[0].role, "tool");
     assert!(!hits[0].truncated);
     assert_eq!(
