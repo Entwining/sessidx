@@ -57,10 +57,9 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             // Pi empty replies: tests/counting.rs::pi_empty_response_and_explicit_message_model_override.
             if role == "assistant" || role == "user" || role == "system" {
                 let mut e = Event::new(role, "message", "message.role");
-                e.text = Some(message_text(&m["content"]));
+                let mut body = message_text(&m["content"]);
                 // Pi system sections: testdata/pi-sections.jsonl.
                 if let Some(sections) = m["sections"].as_object() {
-                    let body = e.text.as_mut().unwrap();
                     for section in sections.values().map(text).filter(|s| !s.is_empty()) {
                         if !body.is_empty() {
                             body.push('\n');
@@ -68,6 +67,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         body.push_str(&section);
                     }
                 }
+                e.text = Some(body);
                 e.native_id = string(v, "id");
                 e.ts = ts.clone();
                 e.model = string(m, "model");

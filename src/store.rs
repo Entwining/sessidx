@@ -315,7 +315,7 @@ impl Store {
         let mut prefix = vec![0; prefix_len as usize];
         file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
-        let append = old.as_ref().is_some_and(|o| {
+        let appended = old.as_ref().filter(|o| {
             o.12 == harness
                 && o.1 == meta.dev()
                 && o.2 == meta.ino()
@@ -324,8 +324,7 @@ impl Store {
                 && hash(&prefix[..o.6 as usize]) == o.5
                 && (source_size > o.3 || o.4 == mtime)
         });
-        let (mut offset, mut line, mut state, mut errors) = if append {
-            let o = old.as_ref().unwrap();
+        let (mut offset, mut line, mut state, mut errors) = if let Some(o) = appended {
             (o.7, o.8, serde_json::from_str::<State>(&o.9)?, o.10)
         } else {
             let state = State {
@@ -341,7 +340,9 @@ impl Store {
             (0, 0, state, 0)
         };
         let tx = self.db.transaction()?;
-        if !append && let Some(ref o) = old {
+        if appended.is_none()
+            && let Some(ref o) = old
+        {
             delete_file(&tx, o.0)?;
         }
         tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;

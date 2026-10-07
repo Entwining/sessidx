@@ -15,7 +15,7 @@ static CODE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r#"(?P<call>\btools\s*\.\s*exec_command\s*\(\s*\{{(?P<body>(?:[^{{}}"'`]|{STRING}|{object})*)\}}\s*,?\s*\))|{STRING}|{COMMENTS}|{REGEX}|(?P<shell>\b(?:exec_command|shell_command)\b|\[\s*["'](?:exec_command|shell_command)["']\s*\]\s*\()"#
     ))
-    .unwrap()
+    .expect("static regex is valid")
 });
 static FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     let object = nested_object();
@@ -23,9 +23,10 @@ static FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(
         r#"(?P<key>(?:^|,)\s*(?:cmd|"cmd"|'cmd')\s*:)|(?P<override>(?:^|,)\s*(?:(?:{COMMENTS})\s*)*(?:\.\.\.|\[))|{object}|{array}|{STRING}|{COMMENTS}|{REGEX}"#
     ))
-    .unwrap()
+    .expect("static regex is valid")
 });
-static LITERAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(STRING).unwrap());
+static LITERAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(STRING).expect("static regex is valid"));
 
 fn command(body: &str) -> Option<&str> {
     let mut cmd = None;

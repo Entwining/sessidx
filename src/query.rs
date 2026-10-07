@@ -3,7 +3,7 @@ use crate::{
     store::MAX_RECORD,
 };
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use clap::{Args, ValueEnum};
 use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value};
@@ -12,6 +12,7 @@ use serde_json::Value as Json;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
+    sync::LazyLock,
     time::{Duration, Instant},
 };
 
@@ -88,22 +89,33 @@ impl Filters {
                 "f.harness IN ({})",
                 vec!["?"; self.harness.len()].join(",")
             ));
-            args.extend(
-                self.harness
-                    .iter()
-                    .map(|h| Value::Text(h.to_possible_value().unwrap().get_name().into())),
-            );
+            args.extend(self.harness.iter().map(|h| {
+                Value::Text(
+                    h.to_possible_value()
+                        .expect("ValueEnum variants are not skipped")
+                        .get_name()
+                        .into(),
+                )
+            }));
         }
         for (field, value) in [
             (
                 "e.role",
-                self.role
-                    .map(|r| r.to_possible_value().unwrap().get_name().to_owned()),
+                self.role.map(|r| {
+                    r.to_possible_value()
+                        .expect("ValueEnum variants are not skipped")
+                        .get_name()
+                        .to_owned()
+                }),
             ),
             (
                 "s.kind",
-                self.kind
-                    .map(|k| k.to_possible_value().unwrap().get_name().to_owned()),
+                self.kind.map(|k| {
+                    k.to_possible_value()
+                        .expect("ValueEnum variants are not skipped")
+                        .get_name()
+                        .to_owned()
+                }),
             ),
         ] {
             if let Some(value) = value {
@@ -155,8 +167,7 @@ pub fn date(s: &str) -> Result<String> {
     } else {
         NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .context("date must be RFC 3339 or YYYY-MM-DD")?
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
+            .and_time(NaiveTime::MIN)
             .and_utc()
     };
     Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
@@ -218,13 +229,19 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     })
 }
 
+static SEARCH_TOKENS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""([^"]+)"|(\S+)"#).expect("static regex is valid"));
+
 pub fn fts_query(query: &str) -> Result<String> {
     anyhow::ensure!(!query.trim().is_empty(), "search query is empty");
-    let tokens = Regex::new(r#""([^"]+)"|(\S+)"#).unwrap();
-    Ok(tokens
+    Ok(SEARCH_TOKENS
         .captures_iter(query)
         .map(|c| {
-            let term = c.get(1).or_else(|| c.get(2)).unwrap().as_str();
+            let term = c
+                .get(1)
+                .or_else(|| c.get(2))
+                .expect("one token alternative matched")
+                .as_str();
             format!("\"{}\"", spaced_cjk(term).replace('"', "\"\""))
         })
         .collect::<Vec<_>>()
@@ -313,20 +330,19 @@ pub fn search(
     let mut sessions: Vec<Session> = Vec::new();
     for row in rows {
         let (hit, ts, matched_hits) = row?;
-        if !sessions
-            .last()
-            .is_some_and(|s| s.harness == hit.harness && s.session_id == hit.session_id)
-        {
-            sessions.push(Session {
+        match sessions.last_mut() {
+            Some(s) if s.harness == hit.harness && s.session_id == hit.session_id => {
+                s.hits.push(hit);
+            }
+            _ => sessions.push(Session {
                 harness: hit.harness.clone(),
                 session_id: hit.session_id.clone(),
                 path: hit.path.clone(),
                 ts,
                 matched_hits,
-                hits: Vec::new(),
-            });
+                hits: vec![hit],
+            }),
         }
-        sessions.last_mut().unwrap().hits.push(hit);
     }
     Ok(SearchPage {
         sessions,

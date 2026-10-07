@@ -6,24 +6,28 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
     r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]+",
     r"\b(?:sk-[A-Za-z0-9_\-]{8,}|(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9_\-]{8,})",
-].into_iter().map(|p| Regex::new(p).unwrap()).collect()
+].into_iter().map(|p| Regex::new(p).expect("static regex is valid")).collect()
 });
-static ASSIGNMENTS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"["']?([A-Za-z0-9_\-]+)["']?\s*[=:]\s*"#).unwrap());
+static ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"["']?([A-Za-z0-9_\-]+)["']?\s*[=:]\s*"#).expect("static regex is valid")
+});
 static ASSIGNED_VALUE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#).unwrap()
+    Regex::new(r#"^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#)
+        .expect("static regex is valid")
 });
 static RUNS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=.!@$%:&?\-]{16,}").unwrap());
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=.!@$%:&?\-]{16,}").expect("static regex is valid"));
 static CREDENTIAL_NAME: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|credential|authorization)|^key$|(?:private[_-]?key|auth|sig|signature|bearer)$")
-        .unwrap()
+        .expect("static regex is valid")
 });
 static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[A-Za-z0-9.!#$%&*+/=?^_`{|}~\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$").unwrap()
+    Regex::new(r"^[A-Za-z0-9.!#$%&*+/=?^_`{|}~\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
+        .expect("static regex is valid")
 });
 static URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^https?://[A-Za-z0-9.\-]+(?::[0-9]+)?(?:[/?][^@]*)?$").unwrap()
+    Regex::new(r"(?i)^https?://[A-Za-z0-9.\-]+(?::[0-9]+)?(?:[/?][^@]*)?$")
+        .expect("static regex is valid")
 });
 
 pub fn redact_value(v: &mut serde_json::Value) {
@@ -92,7 +96,7 @@ pub fn redact(text: &str) -> String {
 }
 
 fn redact_url(run: &str) -> String {
-    let scheme = run.find("://").unwrap() + 3;
+    let scheme = run.find("://").expect("URL matched before redact_url") + 3;
     let end = run[scheme..]
         .find(['/', '?'])
         .map_or(run.len(), |i| scheme + i);
@@ -186,7 +190,7 @@ pub fn redact_metadata(text: &str) -> String {
     let mut redacted = String::new();
     let mut offset = 0;
     for caps in ASSIGNMENTS.captures_iter(&out) {
-        let assignment = caps.get(0).unwrap();
+        let assignment = caps.get_match();
         if assignment.start() >= offset
             && CREDENTIAL_NAME.is_match(&caps[1])
             && let Some(value) = ASSIGNED_VALUE.find(&out[assignment.end()..])

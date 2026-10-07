@@ -1,3 +1,5 @@
+#![warn(clippy::unwrap_used)]
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -357,8 +359,8 @@ fn run(cli: Cli) -> Result<i32> {
                 query::show_snapshot(&db, &target, around, limit, after, snapshot.high_water)?;
             for hit in &hits {
                 let mut value = serde_json::to_value(hit)?;
-                let obj = value.as_object_mut().unwrap();
-                let text = obj.remove("snippet").unwrap();
+                let obj = value.as_object_mut().expect("Hit serializes to an object");
+                let text = obj.remove("snippet").expect("Hit has a snippet field");
                 obj.insert("text".into(), text);
                 emit("record", value)?;
             }
@@ -377,7 +379,9 @@ fn run(cli: Cli) -> Result<i32> {
             program,
             filters,
         } => {
-            let metric = metric.to_possible_value().unwrap();
+            let metric = metric
+                .to_possible_value()
+                .expect("ValueEnum variants are not skipped");
             let rows = counting::count(&db, metric.get_name(), &by, program.as_deref(), &filters)?;
             for row in &rows {
                 emit("count", row.clone())?;

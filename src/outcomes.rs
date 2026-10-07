@@ -4,10 +4,12 @@ use serde_json::Value;
 use std::sync::LazyLock;
 
 static EXIT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?m)^\s*(?:Process exited with code|Exit code:)\s*(-?\d+)\s*$").unwrap()
+    Regex::new(r"(?m)^\s*(?:Process exited with code|Exit code:)\s*(-?\d+)\s*$")
+        .expect("static regex is valid")
 });
 static PARTIAL_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#""status"\s*:\s*"rejected"\s*,\s*"reason"\s*:\s*("(?:\\.|[^"\\])*")"#).unwrap()
+    Regex::new(r#""status"\s*:\s*"rejected"\s*,\s*"reason"\s*:\s*("(?:\\.|[^"\\])*")"#)
+        .expect("static regex is valid")
 });
 pub fn classify(e: &mut Event, output: &Value, harness: &str) {
     if harness != "codex" {
