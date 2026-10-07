@@ -76,7 +76,6 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             if let Some(blocks) = m["content"].as_array() {
                 for (i, b) in blocks.iter().enumerate() {
                     let mut e = match b["type"].as_str().unwrap_or("") {
-                        "text" => continue,
                         "toolCall" => {
                             let mut e = Event::new("assistant", "tool_call", "content.toolCall");
                             e.call_id = string(b, "id");

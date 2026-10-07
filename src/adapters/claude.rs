@@ -102,14 +102,10 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             known: true,
         };
     }
-    let has_text = content.is_string()
-        || content
-            .as_array()
-            .is_some_and(|a| a.iter().any(|b| b["type"] == "text"));
     let only_results = content
         .as_array()
         .is_some_and(|a| !a.is_empty() && a.iter().all(|b| b["type"] == "tool_result"));
-    if typ == "assistant" || has_text || typ == "user" && !only_results {
+    if typ == "assistant" || !only_results {
         let mut e = Event::new(
             role,
             "message",
@@ -135,7 +131,6 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
         for (i, b) in blocks.iter().enumerate() {
             let bt = b["type"].as_str().unwrap_or("");
             let mut e = match bt {
-                "text" => continue,
                 "tool_use" | "server_tool_use" => {
                     let mut e = Event::new("assistant", "tool_call", "content.tool_use");
                     if bt == "server_tool_use" {

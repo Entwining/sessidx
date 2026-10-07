@@ -37,7 +37,12 @@ fn claude_blocks_flags_and_synthetic_model() {
 #[test]
 fn codex_context_arguments_and_telemetry() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (s, es) = events("codex", include_str!("fixtures/codex.jsonl"));
+    let (mut s, es) = events("codex", include_str!("fixtures/codex.jsonl"));
+    adapters::parse(
+        "codex",
+        &serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\nlater fallback"}]}}),
+        &mut s,
+    );
     assert_eq!(s.model.as_deref(), Some("gpt-fixture"));
     assert_eq!(
         es.iter()
@@ -57,6 +62,12 @@ fn codex_context_arguments_and_telemetry() {
         &mut history,
     );
     assert_eq!(history.parent_id.as_deref(), Some("history-parent"));
+    let search = adapters::parse(
+        "codex",
+        &serde_json::json!({"type":"response_item","payload":{"type":"tool_search_call","call_id":"search"}}),
+        &mut history,
+    );
+    assert_eq!(search.events[0].tool.as_deref(), Some("tool_search"));
     let array = adapters::parse(
         "codex",
         &serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":{"command":["printf", "literal quote's"]}}}),
@@ -376,6 +387,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
     assert_eq!(rows.last().unwrap()["complete"], true);
     let r = store.refresh(&roots, false, None).unwrap();
     assert_eq!(r.records, 0);
+    assert_eq!(r.files_changed, 0);
     assert_eq!(r.deferred_tails, 1);
     use std::io::Write;
     fs::OpenOptions::new()
@@ -395,6 +407,12 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
             .unwrap(),
         2
     );
+    assert_eq!(store.refresh(&roots, false, None).unwrap().files_changed, 0);
+    let kind_source: String = store
+        .db
+        .query_row("SELECT kind_source FROM sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(kind_source, "none");
 }
 
 #[test]
@@ -425,6 +443,10 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
         sessidx::normalize::record_for_index(scalar, "pi").unwrap(),
         serde_json::json!(true)
     );
+    assert_eq!(
+        sessidx::normalize::record_for_index(br#"{"message":"plain"}"#, "claude").unwrap(),
+        serde_json::json!({"message":"plain"})
+    );
     assert!(
         sessidx::normalize::record_for_index(
             b"{\"message\":{\"content\":[{\"type\":\"thinking\",\"thinkingSignature\":invalid}]}}",
@@ -432,4 +454,25 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
         )
         .is_err()
     );
+    // Real thinkingSignature records reach 16 MiB; only records above the
+    // limit are skipped as parse errors.
+    let record = |id: &str, len: usize| {
+        let head = format!(
+            "{{\"type\":\"message\",\"id\":\"{id}\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"thinking\",\"thinkingSignature\":\""
+        );
+        let tail = "\"}]}}\n";
+        format!("{head}{}{tail}", "a".repeat(len - head.len() - tail.len()))
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let large = record("large", 2 << 20) + &record("oversized", sessidx::store::MAX_RECORD + 1);
+    fs::write(dir.path().join("large.jsonl"), large).unwrap();
+    let roots = [Root {
+        harness: "pi".into(),
+        path: dir.path().into(),
+    }];
+    let r = Store::open(&dir.path().join("index.db"))
+        .unwrap()
+        .refresh(&roots, false, None)
+        .unwrap();
+    assert_eq!((r.records, r.parse_errors), (2, 1));
 }

@@ -1,7 +1,7 @@
 [
   {
     "name": "double",
-    "source": "await tools.exec_command({cmd: \"rg a src; printf 'literal'\", max_output_tokens: 1});",
+    "source": "await tools.exec_command({cmd: \"rg ${PAT} src; printf '{literal}'\", max_output_tokens: 1});",
     "programs": [
       "rg",
       "printf"
@@ -19,12 +19,22 @@
   },
   {
     "name": "template",
-    "source": "tools.exec_command({cmd: `rg a\r\nprintf x`});",
+    "source": "tools.exec_command({cmd: `rg a\r\nprintf 'x\r\ny'`});",
     "programs": [
       "rg",
       "printf"
     ],
-    "unparsed": 0
+    "unparsed": 0,
+    "argv": [
+      [
+        "rg",
+        "a"
+      ],
+      [
+        "printf",
+        "'x\ny'"
+      ]
+    ]
   },
   {
     "name": "interpolated",
@@ -55,7 +65,7 @@
   },
   {
     "name": "escapes",
-    "source": "tools.exec_command({\"cmd\": \"\\x72\\u0067 'word'\\\n src\"});",
+    "source": "tools.exec_command({\"cmd\": \"\\x72\\u0067 'word'\\\n s\\\r\nrc\"});",
     "programs": [
       "rg"
     ],

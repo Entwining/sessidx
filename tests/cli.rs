@@ -65,8 +65,21 @@ fn stream(out: &Output, exit: i32) -> Vec<Value> {
         assert_eq!(record["path"], record["hits"][0]["path"]);
     }
     assert_eq!(records.iter().filter(|v| v["type"] == "end").count(), 1);
-    assert_eq!(records.last().unwrap()["type"], "end");
-    assert!(records.last().unwrap().get("searched").is_some());
+    let end = records.last().unwrap();
+    assert_eq!(end["type"], "end");
+    let searched = &end["searched"];
+    let returned = searched["returned"].as_u64().unwrap();
+    match searched["unit"].as_str() {
+        Some("sql_rows" | "aggregate_rows") => assert_eq!(searched["records"], returned),
+        Some("source_records") => assert_eq!(searched["records"], records[0]["records"]),
+        Some("source_ranges") => {
+            assert!(searched["records"].as_u64().unwrap() >= returned);
+            if returned > end["unavailable_ranges"].as_u64().unwrap() {
+                assert!(searched["bytes"].as_u64().unwrap() > 0);
+            }
+        }
+        _ => {}
+    }
     records
 }
 
@@ -143,6 +156,17 @@ fn sql_without_an_index_names_the_build_command() {
             .contains("run sessidx index")
     );
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+    let out = Command::new(env!("CARGO_BIN_EXE_sessidx"))
+        .env("HOME", dir.path())
+        .arg("--db")
+        .arg(dir.path().join("index.db"))
+        .arg("index")
+        .output()
+        .unwrap();
+    assert_eq!(
+        stream(&out, 0)[0]["missing_roots"],
+        json!(["claude", "codex", "pi"])
+    );
 }
 
 #[test]
@@ -525,6 +549,7 @@ fn cli_writer_contention_returns_stale_without_waiting() {
     );
     assert_eq!(rows.last().unwrap()["stale"], true);
     assert_eq!(rows.last().unwrap()["complete"], false);
+    assert_eq!(rows.last().unwrap()["refresh"]["writer_busy"], true);
 }
 
 #[test]

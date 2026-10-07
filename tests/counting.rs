@@ -69,18 +69,18 @@ fn codex_text_array_batch_failures_and_quoted_negative_control() {
 #[test]
 fn brush_sites_include_nested_syntax_without_counting_quoted_program_names() {
     let sites = shell::sites(
-        "rg one src | cat; if test -d src; then rg two src; fi; echo \"$(rg three src)\"; printf 'rg is an argument'; f() { rg four src; }; cat <(rg five src)",
+        "rg one src | cat; if test -d src; then rg two src; fi; echo \"$(rg three src)\"; printf 'rg is an argument'; f() { rg four src; }; cat <(rg five src); while read l; do echo \"$l\"; done < <(rg six src); cat <<< \"$(rg seven src)\"; cat <<EOF\n$(rg eight src)\nEOF\n",
     );
     assert_eq!(
         sites
             .iter()
             .filter(|s| s.program.as_deref() == Some("rg"))
             .count(),
-        5
+        8
     );
     assert!(sites.iter().all(|s| s.parsed));
     assert_eq!(
-        shell::sites("printf 'rg quoted'")
+        shell::sites("printf 'rg quoted'; cat <<'EOF'\n$(rg quoted)\nEOF\n")
             .iter()
             .filter(|s| s.program.as_deref() == Some("rg"))
             .count(),
@@ -503,6 +503,10 @@ fn successful_stdout_guard_examples_are_not_denials() {
             "codex",
             serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":"Process exited with code 0\nOutput:\nDENIED: rg has no --include flag."}}),
         ),
+        (
+            "claude",
+            serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"Permission to use Bash has been denied.\nPreToolUse:Bash hook error: quoted log line"}]}}),
+        ),
     ] {
         let r = adapters::parse(harness, &value, &mut State::default());
         assert_eq!(
@@ -515,11 +519,14 @@ fn successful_stdout_guard_examples_are_not_denials() {
 
 #[test]
 fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
-    let fixture=include_str!("fixtures/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}}]}}).to_string()+"\n";
+    let fixture=include_str!("fixtures/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}},{"type":"tool_use","id":"no-command","name":"Bash","input":{}}]}}).to_string()+"\n"+&serde_json::json!({"type":"user","uuid":"bad-result","sessionId":"claude-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"bad-shell","content":"done"}]}}).to_string()+"\n";
     let (_, store) = indexed("claude", &fixture);
     let result =
         counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(result[0]["denominator"], 1);
+    assert_eq!(result[0]["unclassified"], 2);
+    let result =
+        counting::count(&store.db, "denials", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(result[0]["unclassified"], 1);
 }
 
@@ -691,19 +698,30 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         let expected: Vec<_> = f["source"].as_str().into_iter().collect();
         assert_eq!(sources, expected, "fixture {i}");
     }
-    let record = serde_json::json!({"type":"user","toolDenialKind":"permission-rule","message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied."}]}});
-    let r = adapters::parse("claude", &record, &mut State::default());
-    assert_eq!(
-        r.events[0].denials,
-        [("permission_rule".into(), "unknown".into())]
-    );
+    for (kind, source) in [
+        ("permission-rule", "permission_rule"),
+        ("classifier-unavailable", "classifier_unavailable"),
+        ("automode-unavailable", "classifier_unavailable"),
+        ("hook", "hook"),
+        ("user-rejected", "user_rejected"),
+    ] {
+        let record = serde_json::json!({"type":"user","toolDenialKind":kind,"message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied."}]}});
+        let r = adapters::parse("claude", &record, &mut State::default());
+        assert_eq!(
+            r.events[0].denials,
+            [(source.into(), "unknown".into())],
+            "{kind}"
+        );
+    }
 }
 
 #[test]
 fn codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed() {
     let fixtures: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/code-mode.json")).unwrap();
-    for f in fixtures.as_array().unwrap() {
+    // Longer than any fixture literal: size caps must not make ordinary commands opaque.
+    let long = serde_json::json!({"name":"long","source":format!("tools.exec_command({{cmd: \"rg {}\"}});", "a".repeat(2000)),"programs":["rg"],"unparsed":0});
+    for f in fixtures.as_array().unwrap().iter().chain([&long]) {
         let r = adapters::parse(
             "codex",
             &serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"wrapper","input":f["source"]}}),

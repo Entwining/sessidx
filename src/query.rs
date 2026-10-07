@@ -459,10 +459,7 @@ pub fn scan(
         Ok((hits, coverage))
     })();
     db.progress_handler(0, None::<fn() -> bool>);
-    match result {
-        Err(e) if Instant::now() >= deadline && e.downcast_ref::<rusqlite::Error>().is_some_and(|e| matches!(e, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::OperationInterrupted)) => Ok((Vec::new(), Coverage { incomplete: true, continuation: Some(after), ..Coverage::default() })),
-        other => other,
-    }
+    result
 }
 
 pub fn show(

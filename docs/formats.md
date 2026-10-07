@@ -4,7 +4,7 @@ All records in `tests/fixtures` are synthetic. The source inventory contains 80 
 
 ## Rules and regression tests
 
-`scripts/ablate.py` records the failing assertion test and unrelated passing control for each rule. The table maps rules to tests; it does not record ablation results. Fixtures prefixed with tests/ are inline synthetic records. Coverage-only auxiliary rules change the known/unknown record count, not the message count.
+Each row names the regression test that fails when its rule is removed. Fixtures prefixed with tests/ are inline synthetic records. Coverage-only auxiliary rules change the known/unknown record count, not the message count.
 
 ### Messages, models, and attribution
 

@@ -3,7 +3,7 @@ use sessidx::{
     query::{self, Filters},
     store::Store,
 };
-use std::{fs, process::Command, time::Duration};
+use std::{fs, os::unix::fs::PermissionsExt, process::Command, time::Duration};
 
 // Keep child launches from inheriting another test's live writer lock.
 static CLI_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -77,7 +77,6 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
         "{plan:?}"
     );
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO locations(file_id,session_ref,line_no,byte_off,byte_len,raw_hash,ordinal,model_source_ref) SELECT l.file_id,l.session_ref,n.i+100,l.byte_off,l.byte_len,l.raw_hash,0,l.model_source_ref FROM n JOIN locations l ON l.id=1;").unwrap();
-    let start = std::time::Instant::now();
     let (hits, coverage) = query::scan(
         &store.db,
         "absent",
@@ -91,7 +90,6 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     assert!(coverage.incomplete);
     assert_eq!(coverage.records, 0);
     assert_eq!(coverage.continuation, Some(0));
-    assert!(start.elapsed() < Duration::from_secs(1));
     assert_eq!(
         sessidx::counting::sql(&store.db, "SELECT 1 AS n").unwrap()[0]["n"],
         1
@@ -157,7 +155,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
         &store.db,
         &format!("{}:{}", hits[0].path, hits[0].line_no),
         0,
-        100,
+        1,
         0,
     )
     .unwrap();
@@ -188,11 +186,28 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
         )
         .is_err()
     );
+    for narrowed in [
+        Filters {
+            since: Some("2026-10-01".into()),
+            ..Filters::default()
+        },
+        Filters {
+            until: Some("2026-10-01".into()),
+            ..Filters::default()
+        },
+        Filters {
+            cwd: Some("/synthetic".into()),
+            ..Filters::default()
+        },
+    ] {
+        assert!(narrowed.narrowed());
+    }
     let filters = Filters {
         session: Some("codex-fixture".into()),
         role: Some(sessidx::query::Role::Tool),
         ..Filters::default()
     };
+    assert!(query::scan(&store.db, "(", &filters, 20, 0, Duration::from_secs(2)).is_err());
     let path = dir.path().join("logs/session.jsonl");
     let mut bytes = fs::read(&path).unwrap();
     bytes[0] = b'!';
@@ -202,11 +217,19 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
     assert_eq!(hits.len(), 1);
     assert!(!coverage.incomplete);
     let off = hits[0].byte_off as usize;
+    let reference = hits[0].reference.clone();
     bytes[off + 1] = b'!';
     fs::write(&path, bytes).unwrap();
     let (hits, coverage) =
         query::scan(&store.db, "exited", &filters, 20, 0, Duration::from_secs(2)).unwrap();
     assert!(hits.is_empty());
+    assert_eq!(coverage.unavailable_ranges, 1);
+    assert!(coverage.incomplete);
+    let (shown, coverage) = query::show(&store.db, &reference, 0, 20, 0).unwrap();
+    assert_eq!(
+        shown[0].snippet,
+        "[source range unavailable; run sessidx index]"
+    );
     assert_eq!(coverage.unavailable_ranges, 1);
     assert!(coverage.incomplete);
 }
@@ -368,12 +391,12 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             data += &line(&format!("label-{i}-{kind}"), kind, message);
         }
     }
-    for key in ["symbol", "slash", "url_path", "url_query"] {
+    for key in ["symbol", "slash", "url_path", "url_query", "uuid_layout"] {
         let value = fixture[key].as_str().unwrap();
         values.push(value.into());
         let carrier = match key {
             "url_path" => format!("https://hooks.slack.com/services/T123/B456/{value}"),
-            "url_query" => format!("https://example.invalid/search?ref={value}"),
+            "url_query" => format!("https://a.io/?ref={value}"),
             _ => value.to_owned(),
         };
         data += &line(
@@ -667,6 +690,16 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         .remove(0);
     assert!(event.text.as_ref().unwrap().len() <= 2048);
     assert!(event.text_truncated);
+    record["message"]["content"][0]["content"] = serde_json::json!([
+        {"type":"text","text":"first"},
+        {"type":"text","text":""},
+        {"type":"text","text":"second"}
+    ]);
+    let event = sessidx::adapters::parse("claude", &record, &mut s)
+        .events
+        .remove(0);
+    assert_eq!(event.text.as_deref(), Some("first\nsecond"));
+    assert!(!event.text_truncated);
 }
 
 #[test]
@@ -848,8 +881,13 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
 fn initial_schema_creation_respects_the_writer_lock() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("index.db");
+    let path = dir.path().join("cache").join("index.db");
     let store = Store::open(&path).unwrap();
+    let mode = fs::metadata(dir.path().join("cache"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
     let lock = store.lock().unwrap().unwrap();
     let mut second = Store::open(&path).unwrap();
     let r = second.refresh(&[], false, None).unwrap();

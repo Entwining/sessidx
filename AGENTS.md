@@ -14,7 +14,7 @@ sessidx indexes local Claude Code, Codex, and Pi session logs into SQLite for tw
 | `docs/formats.md` | One row per normalization rule with its fixture and regression test, and the observed-variant inventory; the only place a rule's reason lives |
 | This file | Purpose, decisions that are easy to undo by accident, workflow, and environment traps |
 
-Change the owner, not a copy. A rule without a `docs/formats.md` row and a fixture that fails when the rule is removed is not finished. Agents that use sessidx learn it from the skill alone, so a change to the CLI contract also changes the skill in the same commit.
+Change the owner, not a copy. A rule without a `docs/formats.md` row and a fixture whose test fails when the rule is removed is not finished. Agents that use sessidx learn it from the skill alone, so a change to the CLI contract also changes the skill in the same commit.
 
 ## Decisions to keep
 
@@ -28,7 +28,7 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 - **Codex code-mode commands are taken only from `cmd` string literals** in the wrapper source; nothing evaluates JavaScript (user decision). Anything else in a wrapper that references a shell tool stays one unparsed site, so it is counted as unclassified instead of disappearing from `count commands`.
 - **Refresh happens on query within a two-second budget.** There is no daemon or LaunchAgent. Never raise the budget to hide a slow path, and never let a query wait without bound on the writer lock: a wedged refresh that holds the lock blocks every later query.
 - **Counts state their unit, numerator, denominator, and unclassified rows.** Shell command sites are static syntax and never prove execution. Inherited history is deduplicated only by native IDs, never by identical text.
-- **No production switches.** No config file, environment variables, or feature toggles; rule ablation edits source temporarily through `scripts/ablate.py`.
+- **No production switches.** No config file, environment variables, or feature toggles.
 - **No database size target.** Remove waste that does not reduce function and report the measured size.
 
 Not in v1, with the reason: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, token and cost accounting, Claude and Pi loaded-instruction attribution, and Pi branch reconstruction.
@@ -46,7 +46,7 @@ The consumer is usually an agent with a shell, so the ordinary path must be one 
 
 - The repository is public, and logs contain credentials and private context. Never copy real log content into the repository, fixtures, tests, docs, or commit messages: that includes session IDs, paths, project names, and quoted fragments, not only whole lines. A real session UUID once entered a test as a sample identifier and had to be rewritten out of history. Fixtures are synthetic records shaped like an observed variant; cite real evidence outside the repository by `path:line` and its kind only.
 - Never point a development build at the default database `~/.cache/sessidx/index.db`. Use `--db` with a scratch path and `--root HARNESS=PATH`.
-- Run `cargo fmt`, `cargo test`, and `scripts/ablate.py` after rule changes, never concurrently with edits or builds. CI rejects unformatted code, and ablation anchors are exact source text, so write each anchor against the formatted source.
+- Before committing, run `cargo fmt`, `CARGO_BUILD_WARNINGS=deny cargo clippy --all-targets`, `cargo test`, and `cargo deny check`, the checks CI runs. Pull requests also run `cargo mutants --in-diff`; run it locally after a rule change with `git diff origin/main > "$TMPDIR/git.diff" && cargo mutants --in-diff "$TMPDIR/git.diff"`. A missed mutant is either a branch no test protects, which needs an assertion, or a mutation that cannot change behavior, which goes into `.cargo/mutants.toml` with its reason.
 - Passing `cargo test` is not real-corpus acceptance. That gate references private sessions, so it exists only on the maintainer's machine in `~/.local/share/sessidx-eval/` (its `README.md` lists the scripts and their inputs): frozen lookup replay, full-build measurement, independent gold counts, the output-prefix check, the code-mode comparison, and the leak scan. The release targets are warm lookup p95 within 2 s and indexing RSS within 512 MiB, measured on a full build on an otherwise idle machine; a contended run is not a measurement.
 - Corpus scans read only the three session roots, with `rg -j 2` or at most two concurrent readers.
 - Releases are tag-driven. Bump `version` in `Cargo.toml`, add `docs/releases/VERSION.md` (the publish workflow refuses a tag without it), and push a signed `vVERSION` tag; the workflow reruns the checks, creates the GitHub Release, and asks `LoopHubs/homebrew-tap` to update its formula.

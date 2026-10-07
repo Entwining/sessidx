@@ -52,10 +52,11 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
     if depth > 32 {
         return;
     }
+    let depth = depth + 1;
     match v {
         Value::Array(a) => {
             for v in a {
-                structured(v, texts, e, depth + 1);
+                structured(v, texts, e, depth);
             }
         }
         Value::Object(m) => {
@@ -83,7 +84,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                 } else if status == "fulfilled"
                     && let Some(v) = m.get("value")
                 {
-                    structured(v, texts, e, depth + 1);
+                    structured(v, texts, e, depth);
                 }
                 return;
             }
@@ -96,14 +97,14 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                 .is_some_and(|t| t == "input_text" || t == "text")
             {
                 if let Some(v) = m.get("text") {
-                    structured(v, texts, e, depth + 1);
+                    structured(v, texts, e, depth);
                 }
                 return;
             }
             // Codex {i,result}/{index,result} envelopes: tests/fixtures/outcomes.jsonl.
             for key in ["content", "results", "items", "result"] {
                 if let Some(v) = m.get(key) {
-                    structured(v, texts, e, depth + 1);
+                    structured(v, texts, e, depth);
                 }
             }
             // Labeled shell/MCP transports: tests/fixtures/envelopes.json.
@@ -116,7 +117,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                     || v.get("isError").and_then(Value::as_bool).is_some()
                         && v.get("content").is_some())
                 {
-                    structured(v, texts, e, depth + 1);
+                    structured(v, texts, e, depth);
                 }
             }
         }
@@ -147,7 +148,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
             let mut parsed = false;
             while let Some(Ok(v)) = values.next() {
                 if matches!(v, Value::Object(_) | Value::Array(_)) {
-                    structured(&v, texts, e, depth + 1);
+                    structured(&v, texts, e, depth);
                     parsed = true;
                 } else {
                     break;
@@ -161,7 +162,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                             &serde_json::json!({"status":"rejected","reason":reason}),
                             texts,
                             e,
-                            depth + 1,
+                            depth,
                         );
                     }
                 }

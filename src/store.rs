@@ -253,9 +253,7 @@ impl Store {
             if result.coverage == FileCoverage::BudgetExhausted {
                 report.stale = true;
                 report.continuation = Some(path.to_string_lossy().into_owned());
-                if deadline.is_some_and(|d| Instant::now() >= d) {
-                    break;
-                }
+                break;
             }
         }
         report.parse_errors =
