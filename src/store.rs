@@ -241,7 +241,7 @@ impl Store {
                 report.continuation = Some(path.to_string_lossy().into_owned());
                 break;
             }
-            let result = self.index_file(&harness, &path, deadline, None)?;
+            let result = self.index_file(&harness, &path, deadline)?;
             report.files_changed += usize::from(result.changed);
             report.records += result.records;
             if result.coverage == FileCoverage::DeferredTail {
@@ -273,12 +273,10 @@ impl Store {
         harness: &str,
         path: &Path,
         deadline: Option<Instant>,
-        frozen_size: Option<u64>,
     ) -> Result<IndexedFile> {
         let mut file = File::open(path).context("cannot open session file")?;
         let meta = file.metadata()?;
-        let source_size = frozen_size.unwrap_or(meta.len());
-        anyhow::ensure!(source_size <= meta.len(), "frozen file truncated");
+        let source_size = meta.len();
         let mtime = format!(
             "{}:{}:{}:{}",
             meta.mtime(),
@@ -440,13 +438,6 @@ impl Store {
             records,
             coverage,
         })
-    }
-
-    pub fn index_frozen(&mut self, harness: &str, path: &Path, size: u64) -> Result<()> {
-        let _lock = self.lock()?.ok_or_else(|| anyhow::anyhow!("writer busy"))?;
-        self.initialize(&_lock, false)?;
-        self.index_file(harness, path, None, Some(size))?;
-        Ok(())
     }
 }
 
