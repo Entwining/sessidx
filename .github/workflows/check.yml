@@ -17,6 +17,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned Rust toolchain
         run: rustup show active-toolchain
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: actionlint,cargo-deny
+      - name: Lint workflows
+        run: actionlint
+      - name: Check dependencies
+        run: cargo deny --locked check
       - name: Check formatting
         run: cargo fmt --check
       - name: Lint

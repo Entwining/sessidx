@@ -1,0 +1,23 @@
+[graph]
+targets = ["aarch64-apple-darwin"]
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = ["MIT", "Apache-2.0"]
+exceptions = [
+    { allow = ["Zlib"], crate = "foldhash" },
+    { allow = ["Unicode-3.0"], crate = "unicode-ident" },
+]
+
+[bans]
+# Each duplicate pair has one side inside brush-parser's dependency tree, which
+# this crate cannot unify; a warning nobody can act on would bury real output.
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
