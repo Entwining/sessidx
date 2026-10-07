@@ -85,7 +85,7 @@ pub fn redact(text: &str) -> String {
         if path || EMAIL.is_match(identifier) {
             return run.to_owned();
         }
-        redact_run(run)
+        redact_run(run, location)
     })
     .into_owned()
 }
@@ -100,8 +100,11 @@ fn redact_url(run: &str) -> String {
         .split_once('?')
         .map_or((&run[end..], None), |(path, query)| (path, Some(query)));
     let component = |text: &str| {
-        RUNS.replace_all(text, |caps: &regex::Captures<'_>| redact_run(&caps[0]))
-            .into_owned()
+        RUNS.replace_all(text, |caps: &regex::Captures<'_>| {
+            let run = &caps[0];
+            redact_run(run, run.trim_end_matches(['.', '!', '?', ':']))
+        })
+        .into_owned()
     };
     for (i, segment) in path.split('/').enumerate() {
         if i > 0 {
@@ -127,8 +130,7 @@ fn redact_url(run: &str) -> String {
     out
 }
 
-fn redact_run(run: &str) -> String {
-    let identifier = run.trim_end_matches(['.', '!', '?', ':']);
+fn redact_run(run: &str, identifier: &str) -> String {
     let hex = identifier
         .strip_prefix("0x")
         .or_else(|| identifier.strip_prefix("0X"))

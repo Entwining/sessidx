@@ -477,6 +477,9 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "--dangerously-skip-permissions",
         "/path/to/session.jsonl:42",
         "/path/to/session.jsonl:42:7",
+        "src/redaction.rs:83",
+        "a/b.rs:12:5",
+        "crates/core/src/main.rs:107",
     ] {
         let hits = search_hits(
             &store.db,
@@ -505,6 +508,10 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "a1b2.c3d4_e5F6.g7H8",
         "--invalid--flagSyntaxExtra",
         "/path/to/session.jsonl:42:7:3",
+        "crates/core/src/main.rs:107:4:8",
+        "src/redaction.rs:83",
+        "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:83",
+        "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:12:5",
     ] {
         assert!(
             !context[0].snippet.contains(value),
