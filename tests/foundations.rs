@@ -1,4 +1,5 @@
 use sessidx::{adapters, discovery::Root, model::State, store::Store};
+use sha2::Digest;
 use std::fs;
 
 // Keep child launches from inheriting another test's live writer lock.
@@ -45,7 +46,10 @@ fn codex_context_arguments_and_telemetry() {
         1
     );
     assert_eq!(es.iter().filter(|e| e.kind == "message").count(), 1);
-    assert!(s.instruction_hash.is_some());
+    assert_eq!(
+        s.instruction_hash.as_deref(),
+        Some(format!("{:x}", sha2::Sha256::digest("Synthetic instruction")).as_str())
+    );
     let mut history = State::default();
     adapters::parse(
         "codex",

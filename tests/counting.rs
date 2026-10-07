@@ -6,6 +6,7 @@ use sessidx::{
     shell,
     store::Store,
 };
+use sha2::Digest;
 use std::fs;
 
 fn indexed(h: &str, content: &str) -> (tempfile::TempDir, Store) {
@@ -370,7 +371,19 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
                 ),
                 1
             );
-            assert_eq!(usize::from(s.instruction_hash.is_some()), 1);
+            // The injected AGENTS.md message stands in for absent base instructions.
+            assert_eq!(
+                s.instruction_hash.as_deref(),
+                Some(
+                    format!(
+                        "{:x}",
+                        sha2::Sha256::digest(
+                            "# AGENTS.md instructions\nSynthetic fallback instructions"
+                        )
+                    )
+                    .as_str()
+                )
+            );
             assert_eq!(es.iter().filter(|e| e.role == "assistant").count(), 2);
         } else {
             assert_eq!(usize::from(s.parent_id.as_deref() == Some("pi-parent")), 1);

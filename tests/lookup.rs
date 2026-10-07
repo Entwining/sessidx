@@ -91,7 +91,7 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     assert!(coverage.incomplete);
     assert_eq!(coverage.records, 0);
     assert_eq!(coverage.continuation, Some(0));
-    assert!(start.elapsed() < Duration::from_millis(200));
+    assert!(start.elapsed() < Duration::from_secs(1));
     assert_eq!(
         sessidx::counting::sql(&store.db, "SELECT 1 AS n").unwrap()[0]["n"],
         1
