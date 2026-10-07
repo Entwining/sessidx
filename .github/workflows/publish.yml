@@ -39,7 +39,7 @@ jobs:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         id: tap-token
         with:
-          client-id: ${{ secrets.TAP_CLIENT_ID }}
+          client-id: ${{ vars.TAP_CLIENT_ID }}
           private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
           owner: LoopHubs
           repositories: homebrew-tap
