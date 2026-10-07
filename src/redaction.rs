@@ -46,11 +46,11 @@ pub fn redact_value(v: &mut serde_json::Value) {
 }
 
 pub fn redact_serialized(s: &str) -> String {
-    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(s) {
-        if v.is_object() || v.is_array() {
-            redact_value(&mut v);
-            return v.to_string();
-        }
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(s)
+        && (v.is_object() || v.is_array())
+    {
+        redact_value(&mut v);
+        return v.to_string();
     }
     redact(s)
 }

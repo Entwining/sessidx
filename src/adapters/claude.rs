@@ -1,6 +1,6 @@
 use crate::{
     model::{Event, Record, State},
-    normalize::{arguments, shell, string, text, timestamp},
+    normalize::{arguments, message_text, shell, string, timestamp},
 };
 use serde_json::Value;
 
@@ -120,18 +120,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             },
         );
         e.kind_source = "root.type+message.content".into();
-        e.text = Some(if content.is_string() {
-            text(content)
-        } else {
-            content
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|b| b["type"] == "text")
-                .map(text)
-                .collect::<Vec<_>>()
-                .join("\n")
-        });
+        e.text = Some(message_text(content));
         e.native_id = if typ == "assistant" {
             string(m, "id").map(|id| format!("message:{id}"))
         } else {

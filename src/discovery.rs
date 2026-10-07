@@ -22,16 +22,23 @@ pub fn defaults(home: &Path) -> Vec<Root> {
     .collect()
 }
 
-pub fn files(roots: &[Root]) -> Result<(Vec<(String, PathBuf)>, Vec<String>)> {
+pub struct Discovered {
+    /// Harness and path of every session file, sorted by path.
+    pub files: Vec<(String, PathBuf)>,
+    /// Harnesses whose root does not exist.
+    pub missing_roots: Vec<String>,
+}
+
+pub fn files(roots: &[Root]) -> Result<Discovered> {
     let mut files = Vec::new();
-    let mut missing = Vec::new();
+    let mut missing_roots = Vec::new();
     for root in roots {
         anyhow::ensure!(
             ["claude", "codex", "pi"].contains(&root.harness.as_str()),
             "unknown harness"
         );
         if !root.path.exists() {
-            missing.push(root.harness.clone());
+            missing_roots.push(root.harness.clone());
             continue;
         }
         for entry in WalkDir::new(&root.path).follow_links(false) {
@@ -43,5 +50,8 @@ pub fn files(roots: &[Root]) -> Result<(Vec<(String, PathBuf)>, Vec<String>)> {
         }
     }
     files.sort_by(|a, b| a.1.cmp(&b.1));
-    Ok((files, missing))
+    Ok(Discovered {
+        files,
+        missing_roots,
+    })
 }

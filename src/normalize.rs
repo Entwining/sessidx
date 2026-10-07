@@ -40,6 +40,21 @@ pub fn text(v: &Value) -> String {
     }
 }
 
+/// Claude and Pi message content: a string, or the text blocks of a block array.
+pub fn message_text(content: &Value) -> String {
+    if content.is_string() {
+        return text(content);
+    }
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == "text")
+        .map(text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn arguments(v: &Value) -> Value {
     if let Some(s) = v.as_str() {
         serde_json::from_str(s).unwrap_or_else(|_| v.clone())
@@ -50,13 +65,6 @@ pub fn arguments(v: &Value) -> Value {
 
 pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
     const LIMIT: usize = 2048;
-    fn boundary(s: &str, limit: usize) -> usize {
-        let mut n = s.len().min(limit);
-        while !s.is_char_boundary(n) {
-            n -= 1;
-        }
-        n
-    }
     fn append(v: &Value, text: &mut String, truncated: &mut bool) {
         if *truncated {
             return;
@@ -70,7 +78,7 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
                     }
                     text.push('\n');
                 }
-                let end = boundary(s, LIMIT - text.len());
+                let end = s.floor_char_boundary(LIMIT - text.len());
                 text.push_str(&s[..end]);
                 *truncated = end < s.len();
             }
@@ -100,7 +108,7 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
     let mut text = String::with_capacity(LIMIT);
     append(output, &mut text, &mut e.text_truncated);
     let redacted = crate::redaction::redact_serialized(&text);
-    let end = boundary(&redacted, LIMIT);
+    let end = redacted.floor_char_boundary(LIMIT);
     e.text_truncated |= end < redacted.len();
     e.text = if end == 0 {
         None
@@ -157,12 +165,11 @@ pub fn record_for_index(bytes: &[u8], harness: &str) -> serde_json::Result<Value
                         if raw.get().starts_with('{') {
                             let fields: BTreeMap<String, &RawValue> =
                                 serde_json::from_str(raw.get())?;
-                            if let Some(raw_type) = fields.get("type") {
-                                if let Ok(typ) = serde_json::from_str::<String>(raw_type.get()) {
-                                    if matches!(typ.as_str(), "thinking" | "image" | "fallback") {
-                                        opaque = Some(serde_json::json!({"type":typ}));
-                                    }
-                                }
+                            if let Some(raw_type) = fields.get("type")
+                                && let Ok(typ) = serde_json::from_str::<String>(raw_type.get())
+                                && matches!(typ.as_str(), "thinking" | "image" | "fallback")
+                            {
+                                opaque = Some(serde_json::json!({"type":typ}));
                             }
                         }
                         content.push(match opaque {

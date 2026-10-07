@@ -1,6 +1,6 @@
-pub mod claude;
-pub mod codex;
-pub mod pi;
+mod claude;
+mod codex;
+mod pi;
 
 use crate::{
     model::{Record, State},
@@ -9,10 +9,10 @@ use crate::{
 use serde_json::Value;
 
 pub fn parse(harness: &str, v: &Value, state: &mut State) -> Record {
-    if let Some(ts) = crate::normalize::timestamp(v) {
-        if state.first_ts.is_none() {
-            state.first_ts = Some(ts);
-        }
+    if let Some(ts) = crate::normalize::timestamp(v)
+        && state.first_ts.is_none()
+    {
+        state.first_ts = Some(ts);
     }
     let mut r = match harness {
         "claude" => claude::parse(v, state),

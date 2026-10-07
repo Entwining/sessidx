@@ -1,6 +1,6 @@
 use crate::{
     model::{Event, Record, State},
-    normalize::{arguments, shell, string, text, timestamp},
+    normalize::{arguments, message_text, shell, string, text, timestamp},
 };
 use serde_json::Value;
 
@@ -40,7 +40,6 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 let mut e = Event::new("tool", "tool_result", "message.role");
                 e.call_id = string(m, "toolCallId");
                 e.tool = string(m, "toolName");
-                // Pi flags have camel case: testdata/pi.jsonl.
                 e.ok = m.get("isError").and_then(Value::as_bool).map(|v| !v);
                 if e.ok.is_some() {
                     e.ok_source = "flag".into();
@@ -58,18 +57,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             // Pi empty replies: tests/counting.rs::pi_empty_response_and_explicit_message_model_override.
             if role == "assistant" || role == "user" || role == "system" {
                 let mut e = Event::new(role, "message", "message.role");
-                e.text = Some(if m["content"].is_string() {
-                    text(&m["content"])
-                } else {
-                    m["content"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter(|b| b["type"] == "text")
-                        .map(text)
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                });
+                e.text = Some(message_text(&m["content"]));
                 // Pi system sections: testdata/pi-sections.jsonl.
                 if let Some(sections) = m["sections"].as_object() {
                     let body = e.text.as_mut().unwrap();

@@ -45,6 +45,8 @@ pub fn classify(e: &mut Event, output: &Value, harness: &str) {
 }
 
 fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
+    // String values are parsed again as JSON, so the parser's own nesting
+    // limit does not bound this recursion; deeper values stay unclassified.
     if depth > 32 {
         return;
     }
@@ -76,10 +78,10 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                         e.denials
                             .push(("batch_hook".into(), reason_id(&reason).into()));
                     }
-                } else if status == "fulfilled" {
-                    if let Some(v) = m.get("value") {
-                        structured(v, texts, e, depth + 1);
-                    }
+                } else if status == "fulfilled"
+                    && let Some(v) = m.get("value")
+                {
+                    structured(v, texts, e, depth + 1);
                 }
                 return;
             }
@@ -134,10 +136,10 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                     candidate = tail.trim();
                 }
             }
-            if candidate.starts_with("Warning: truncated output") {
-                if let Some((_, tail)) = candidate.split_once("\n\n") {
-                    candidate = tail.trim();
-                }
+            if candidate.starts_with("Warning: truncated output")
+                && let Some((_, tail)) = candidate.split_once("\n\n")
+            {
+                candidate = tail.trim();
             }
             let mut values = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
             let mut parsed = false;
@@ -272,8 +274,7 @@ fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
                 && (line.contains("DENIED:") || e.ok == Some(false) && line.contains("hook error:"))
         {
             Some("hook")
-        } else if harness != "codex"
-            && e.ok == Some(false)
+        } else if e.ok == Some(false)
             && (line.starts_with("DENIED:") || line.starts_with("Blocked by agent-guard:"))
         {
             Some("guard")

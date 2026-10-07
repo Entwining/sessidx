@@ -101,11 +101,11 @@ impl Store {
     }
 
     fn open_mode(path: &Path, rebuilding: bool) -> Result<Self> {
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            if !parent.exists() {
-                fs::create_dir_all(parent)?;
-                fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-            }
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty())
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
         }
         OpenOptions::new()
             .create(true)
@@ -185,7 +185,10 @@ impl Store {
                 ..Refresh::default()
             });
         };
-        let (files, missing_roots) = discovery::files(roots)?;
+        let discovery::Discovered {
+            files,
+            missing_roots,
+        } = discovery::files(roots)?;
         // Read before initialize, which drops these rows on a full rebuild.
         let indexed: Vec<(i64, String)> = if self.db.query_row(
             "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='files'",
@@ -290,24 +293,23 @@ impl Store {
         }).optional()?;
         // Another harness parses the same bytes differently, so neither the
         // cached rows nor an append to them can be reused.
-        if let Some(ref o) = old {
-            if o.12 == harness
-                && o.1 == meta.dev()
-                && o.2 == meta.ino()
-                && o.3 == source_size
-                && o.4 == mtime
-                && (o.7 == source_size || o.11 == "deferred_tail")
-            {
-                return Ok(IndexedFile {
-                    changed: false,
-                    records: 0,
-                    coverage: if o.11 == "deferred_tail" {
-                        FileCoverage::DeferredTail
-                    } else {
-                        FileCoverage::Ready
-                    },
-                });
-            }
+        if let Some(ref o) = old
+            && o.12 == harness
+            && o.1 == meta.dev()
+            && o.2 == meta.ino()
+            && o.3 == source_size
+            && o.4 == mtime
+            && (o.7 == source_size || o.11 == "deferred_tail")
+        {
+            return Ok(IndexedFile {
+                changed: false,
+                records: 0,
+                coverage: if o.11 == "deferred_tail" {
+                    FileCoverage::DeferredTail
+                } else {
+                    FileCoverage::Ready
+                },
+            });
         }
         let prefix_len = source_size.min(4096);
         let mut prefix = vec![0; prefix_len as usize];
@@ -326,21 +328,21 @@ impl Store {
             let o = old.as_ref().unwrap();
             (o.7, o.8, serde_json::from_str::<State>(&o.9)?, o.10)
         } else {
-            let mut state = State::default();
-            state.session_id = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            state.kind = "unknown".into();
-            state.kind_source = "none".into();
+            let state = State {
+                session_id: path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                kind: "unknown".into(),
+                kind_source: "none".into(),
+                ..State::default()
+            };
             (0, 0, state, 0)
         };
         let tx = self.db.transaction()?;
-        if !append {
-            if let Some(ref o) = old {
-                delete_file(&tx, o.0)?;
-            }
+        if !append && let Some(ref o) = old {
+            delete_file(&tx, o.0)?;
         }
         tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
         let file_id: i64 = tx.query_row(
@@ -460,7 +462,7 @@ fn intern(tx: &Transaction<'_>, values: &mut HashMap<String, i64>, value: &str) 
     Ok(id)
 }
 
-pub fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> Result<(u64, bool, bool)> {
+fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> Result<(u64, bool, bool)> {
     buffer.clear();
     let mut length = 0;
     let mut oversized = false;
