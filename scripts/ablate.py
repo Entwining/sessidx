@@ -84,7 +84,7 @@ rows.extend([
 rows.extend([
     ('script_header', 'src/outcomes.rs', 's.trim_start().starts_with("Script failed")', 's.lines().any(|l| l.trim_start().starts_with("Script failed"))', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
     ('labeled_transport', 'src/outcomes.rs', 'if !matches!(key.as_str(), "content" | "results" | "items" | "result")', 'if false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
-    ('legacy_denial', 'src/outcomes.rs', 'line.starts_with("Error: Permission to use ")', 'false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'),
+    ('legacy_denial', 'src/outcomes.rs', 'line\n                .strip_prefix("Error: ")\n                .unwrap_or(line)\n                .starts_with("Permission to use ")', 'false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'),
     ('hook_denied', 'src/outcomes.rs', 'line.contains("DENIED:")', 'false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'),
     ('pi_leading_reason', 'src/outcomes.rs', '&& leading', '&& true', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
     ('pi_quoted_reason', 'src/outcomes.rs', '&& !line.contains("\\"")', '&& true', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
@@ -105,6 +105,7 @@ rows.extend([
     ('doctor_models', 'src/counting.rs', 'SELECT count(*) FROM events WHERE model IS NULL', 'SELECT 0', 'doctor_reports_stored_coverage_gaps_and_sql_bounds', 'claude_blocks_flags_and_synthetic_model'),
     ('doctor_denials', 'src/counting.rs', "SELECT count(*) FROM denials WHERE reason_id='unknown'", 'SELECT 0', 'doctor_reports_stored_coverage_gaps_and_sql_bounds', 'claude_blocks_flags_and_synthetic_model'),
 ])
+rows.append(('native_denial_kind', 'src/adapters/claude.rs', 'e.denials.retain(|(source, _)| source != "native_denial");', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'))
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

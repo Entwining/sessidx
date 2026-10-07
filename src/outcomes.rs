@@ -277,7 +277,11 @@ fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
             Some("guard")
         } else if harness == "claude"
             && e.ok == Some(false)
-            && line.starts_with("Error: Permission to use ")
+            && s.trim_start().starts_with(line)
+            && line
+                .strip_prefix("Error: ")
+                .unwrap_or(line)
+                .starts_with("Permission to use ")
             && line.contains("denied")
         {
             Some("native_denial")

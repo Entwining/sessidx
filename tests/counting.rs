@@ -654,4 +654,10 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         let expected: Vec<_> = f["source"].as_str().into_iter().collect();
         assert_eq!(sources, expected, "fixture {i}");
     }
+    let record = serde_json::json!({"type":"user","toolDenialKind":"permission-rule","message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied."}]}});
+    let r = adapters::parse("claude", &record, &mut State::default());
+    assert_eq!(
+        r.events[0].denials,
+        [("permission_rule".into(), "unknown".into())]
+    );
 }

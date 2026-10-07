@@ -164,6 +164,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     crate::outcomes::classify(&mut e, &b["content"], "claude");
                     crate::normalize::output_prefix(&mut e, &b["content"]);
                     if let Some(kind) = v.get("toolDenialKind").and_then(Value::as_str) {
+                        e.denials.retain(|(source, _)| source != "native_denial");
                         let source = match kind {
                             "classifier" | "automode-blocked" => "classifier",
                             "classifier-unavailable" | "automode-unavailable" => {

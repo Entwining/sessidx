@@ -69,7 +69,7 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `opaque_payload` | `testdata/opaque.jsonl` | Pi thinkingSignature can contain 10-16 MiB strings that the adapter ignores. Borrowing discarded thinking/image blocks avoids materializing them while preserving message and call counts. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
 | `script_header` | `testdata/envelopes.json` | Only a leading script header marks a transport failure; a later quoted header in a file dump does not. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `labeled_transport` | `testdata/envelopes.json` | A custom label can wrap a complete shell/MCP transport object; inspect that object without traversing stdout. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
-| `legacy_denial` | `testdata/envelopes.json` | Claude error text can identify a permission refusal without naming its mechanism; preserve native_denial rather than inventing classifier attribution. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `legacy_denial` | `testdata/envelopes.json` | Claude error text can start with Permission to use, optionally preceded by Error:, without naming its mechanism; preserve native_denial rather than inventing classifier attribution. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `hook_denied` | `testdata/envelopes.json` | A PreToolUse DENIED envelope need not contain hook error wording. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `pi_leading_reason` | `testdata/envelopes.json` | Only the first nonempty Pi result block can supply a bare guard reason. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `pi_quoted_reason` | `testdata/envelopes.json` | Quoted Pi error prose is not a bare guard refusal. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
@@ -87,6 +87,7 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `fallback_payload` | `testdata/opaque.jsonl` | Opaque fallback blocks carry no searchable body and need no owned payload copy. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
 | `doctor_models` | `tests/counting.rs` | Doctor reports missing models among stored rows, including context. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 | `doctor_denials` | `tests/counting.rs` | Doctor reports unknown reasons among stored denial rows. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
+| `native_denial_kind` | `tests/counting.rs::result_envelopes_exclude_quoted_markers_and_preserve_native_denials` | An explicit Claude toolDenialKind supplies the mechanism instead of the generic text-derived native_denial source. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 
 ## Codex output variants
 
