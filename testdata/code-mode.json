@@ -83,18 +83,14 @@
   {
     "name": "spread",
     "source": "tools.exec_command({cmd: \"rg one\",...params});",
-    "programs": [
-      "rg"
-    ],
-    "unparsed": 0
+    "programs": [],
+    "unparsed": 1
   },
   {
     "name": "computed",
     "source": "tools.exec_command({cmd: \"rg one\", [key]: \"cat other\"});",
-    "programs": [
-      "rg"
-    ],
-    "unparsed": 0
+    "programs": [],
+    "unparsed": 1
   },
   {
     "name": "concatenation",
@@ -169,5 +165,77 @@
       "rg"
     ],
     "unparsed": 0
+  },
+  {
+    "name": "spread_before",
+    "source": "tools.exec_command({...params,cmd:\"rg real\"});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "computed_before",
+    "source": "tools.exec_command({[key]:\"cat other\",cmd:\"rg real\"});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "spread_object_after",
+    "source": "tools.exec_command({cmd:\"rg one\",...{cmd:\"cat other\"}});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "computed_quoted_after",
+    "source": "tools.exec_command({cmd:\"rg one\",[\"cmd\"]:\"cat other\"});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "commented_spread_after",
+    "source": "tools.exec_command({cmd:\"rg one\",/* metadata */ ...params});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "commented_computed_after",
+    "source": "tools.exec_command({cmd:\"rg one\",// metadata\n [key]:\"cat other\"});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "nested_override_data",
+    "source": "tools.exec_command({cmd:\"rg real\",meta:{...params,[key]:\"cat fake\"},label:\",...params,[key]\"});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "array_override_data",
+    "source": "tools.exec_command({cmd:\"rg real\",items:[1,...names]});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "regex_override_data",
+    "source": "tools.exec_command({cmd:\"rg real\",pattern:/a,...params,[key]/});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "mixed_override",
+    "source": "Promise.all([tools.exec_command({cmd:\"rg real\"}),tools.exec_command({cmd:\"cat other\",...params})]);",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 1
   }
 ]

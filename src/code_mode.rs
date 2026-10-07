@@ -19,8 +19,9 @@ static CODE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static FIELDS: LazyLock<Regex> = LazyLock::new(|| {
     let object = nested_object();
+    let array = format!(r#"\[(?:[^\[\]"'`]|{STRING})*\]"#);
     Regex::new(&format!(
-        r#"(?P<key>(?:^|,)\s*(?:cmd|"cmd"|'cmd')\s*:)|{object}|{STRING}|{COMMENTS}"#
+        r#"(?P<key>(?:^|,)\s*(?:cmd|"cmd"|'cmd')\s*:)|(?P<override>(?:^|,)\s*(?:(?:{COMMENTS})\s*)*(?:\.\.\.|\[))|{object}|{array}|{STRING}|{COMMENTS}|{REGEX}"#
     ))
     .unwrap()
 });
@@ -29,6 +30,9 @@ static LITERAL: LazyLock<Regex> = LazyLock::new(|| Regex::new(STRING).unwrap());
 fn command(body: &str) -> Option<&str> {
     let mut cmd = None;
     for caps in FIELDS.captures_iter(body) {
+        if cmd.is_some() && caps.name("override").is_some() {
+            return None;
+        }
         if let Some(key) = caps.name("key") {
             if cmd.is_some() {
                 return None;
