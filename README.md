@@ -16,7 +16,7 @@ This installs `~/.local/bin/sessidx`; put that directory on `PATH`. From a check
 
 ## Sources and database
 
-The default database is `~/.cache/sessidx/index.db`. Discovery reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.pi/agent/sessions`, without following symlinks; a harness you do not use has no directory and is skipped. A root that disappears after its sessions were indexed (moved or unmounted) keeps its rows and makes refreshes stale until it returns. `--db PATH` selects another database and repeatable `--root HARNESS=PATH` replaces the default roots; later commands, including the recovery commands below, need the same flags. An older schema fails with one recovery instruction: `run sessidx index --full`.
+The default database is `~/.cache/sessidx/index.db`. Discovery reads `~/.claude/projects`, `~/.codex/sessions`, and `~/.pi/agent/sessions`; a root that is itself a symbolic link to a directory is followed, but links inside a root are not. A harness you do not use has no directory and is skipped. A root that disappears after its sessions were indexed (moved or unmounted) keeps its rows and makes refreshes stale until it returns. `--db PATH` selects another database and repeatable `--root HARNESS=PATH` replaces the default roots; later commands, including the recovery commands below, need the same flags. An older schema fails with one recovery instruction: `run sessidx index --full`.
 
 ## Commands
 
