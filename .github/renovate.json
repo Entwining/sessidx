@@ -24,5 +24,21 @@
       "groupName": null,
       "automerge": false
     }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Cargo tools that install-action installs at a pinned version.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.yml$/"],
+      "matchStrings": ["tool: (?<depName>cargo-[a-z-]+)@(?<currentValue>\\S+)"],
+      "datasourceTemplate": "crate"
+    },
+    {
+      "customType": "regex",
+      "description": "actionlint, built with go install at a pinned version.",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.yml$/"],
+      "matchStrings": ["go install (?<depName>github\\.com/rhysd/actionlint)/cmd/actionlint@(?<currentValue>v\\S+)"],
+      "datasourceTemplate": "go"
+    }
   ]
 }
