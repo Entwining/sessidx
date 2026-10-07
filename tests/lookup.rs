@@ -471,6 +471,10 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "std::fs::File::try_lock",
         "a.b.c_d2",
         "_module_42::Foo_Bar1/Item99",
+        "tools.exec_command:",
+        "std::fs::File::try_lock.",
+        "--max-output-tokens",
+        "--dangerously-skip-permissions",
     ] {
         let hits = search_hits(
             &store.db,
@@ -497,8 +501,12 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "module.name:invalidColon9",
         "module..missing_segment9",
         "a1b2.c3d4_e5F6.g7H8",
+        "--invalid--flagSyntaxExtra",
     ] {
-        assert!(!context[0].snippet.contains(value));
+        assert!(
+            !context[0].snippet.contains(value),
+            "synthetic context control survived: {value}"
+        );
     }
     let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
     assert_eq!(input.len(), 1);

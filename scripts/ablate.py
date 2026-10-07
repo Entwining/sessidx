@@ -144,8 +144,10 @@ rows.extend([
 ])
 rows.append(('diagnostic_source', 'src/adapters/claude.rs', '.get("source")', '.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
 rows.append(('transport_stdout_control', 'src/outcomes.rs', ' | "output" | "stdout" | "stderr"', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'))
-rows.append(('code_identifiers', 'src/redaction.rs', '|| identifier_shaped(run)', '', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('code_identifiers', 'src/redaction.rs', '|| identifier_shaped(identifier)', '', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('url_segments', 'src/redaction.rs', 'return redact_url(run);', 'return run.to_owned();', 'synthetic_secret_canaries_absent_from_storage_and_lookup_outputs', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('identifier_punctuation', 'src/redaction.rs', 'identifier_shaped(identifier)', 'identifier_shaped(run)', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('identifier_flags', 'src/redaction.rs', 'let run = run\n        .strip_prefix("--")\n        .or_else(|| run.strip_prefix(\'-\'))\n        .unwrap_or(run);', 'let run = run;', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('known_token_prefix', 'src/redaction.rs', '(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)', '(?:github_pat_|xox[baprs]-|AKIA|ASIA)', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
 test_sources = [(path.stem, path.read_text()) for path in (root / 'tests').glob('*.rs')]
 test_targets = {}

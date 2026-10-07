@@ -127,7 +127,7 @@ fn redact_run(run: &str) -> String {
             .split('-')
             .zip([8, 4, 4, 4, 12])
             .all(|(s, n)| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit()));
-    if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || identifier_shaped(run) {
+    if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || identifier_shaped(identifier) {
         return run.to_owned();
     }
     let mut counts = HashMap::new();
@@ -149,6 +149,10 @@ fn redact_run(run: &str) -> String {
 }
 
 fn identifier_shaped(run: &str) -> bool {
+    let run = run
+        .strip_prefix("--")
+        .or_else(|| run.strip_prefix('-'))
+        .unwrap_or(run);
     run.split(['.', '/', '-'])
         .flat_map(|segment| segment.split("::"))
         .all(|segment| {
