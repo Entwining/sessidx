@@ -1,0 +1,28 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "schedule:weekly"],
+  "timezone": "Asia/Singapore",
+  "description": [
+    "main has no required status checks, so platformAutomerge stays false and Renovate waits for PR checks before merging."
+  ],
+  "updateNotScheduled": false,
+  "platformAutomerge": false,
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Group and automerge non-major dependency updates after checks pass.",
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "groupName": "Routine dependencies",
+      "automerge": true
+    },
+    {
+      "description": "Shell parse trees decide which commands are counted; review parser upgrades separately.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["brush-parser"],
+      "groupName": null,
+      "automerge": false
+    }
+  ]
+}
