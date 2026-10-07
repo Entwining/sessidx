@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Temporarily remove normalization rules; restore exact source bytes after each run."""
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -41,7 +42,12 @@ rows = [
 def run_test(name):
     result = subprocess.run(['cargo', 'test', '--test', test_targets[name], name, '--', '--exact'], cwd=root, capture_output=True, text=True, timeout=180)
     output = result.stdout + result.stderr
-    return result.returncode, f'test {name} ... ok' in output, f'test {name} ... FAILED' in output, ('assertion' in output or 'canary leaked' in output)
+    assertion = 'assertion' in output or 'canary leaked' in output
+    source = (root / 'tests' / f'{test_targets[name]}.rs').read_text().splitlines()
+    for line in re.findall(rf'panicked at tests/{re.escape(test_targets[name])}\.rs:(\d+):\d+:', output):
+        position = int(line) - 1
+        assertion |= 0 <= position < len(source) and source[position].lstrip().startswith(('assert!(', 'assert_eq!(', 'assert_ne!('))
+    return result.returncode, f'test {name} ... ok' in output, f'test {name} ... FAILED' in output, assertion
 
 rows.extend([
     ('truncated_rejection', 'src/outcomes.rs', 'if truncated {', 'if false {', 'split_script_error_and_truncated_batch_are_denials_with_transport_quote_control', 'claude_blocks_flags_and_synthetic_model'),
