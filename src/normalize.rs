@@ -141,7 +141,7 @@ pub fn is_shell_tool(tool: &str) -> bool {
     )
 }
 
-// Pi thinkingSignature and opaque image/thinking blocks: testdata/opaque.jsonl.
+// Pi thinkingSignature and opaque image/thinking blocks: tests/fixtures/opaque.jsonl.
 pub fn record_for_index(bytes: &[u8], harness: &str) -> serde_json::Result<Value> {
     use serde_json::value::RawValue;
     use std::collections::BTreeMap;

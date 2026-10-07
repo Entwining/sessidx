@@ -20,7 +20,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             }
         }
         "model_change" => {
-            // Pi model changes precede messages: testdata/pi.jsonl.
+            // Pi model changes precede messages: tests/fixtures/pi.jsonl.
             s.model = string(v, "modelId");
             s.model_source = "model_change.modelId".into();
             Record {
@@ -58,7 +58,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             if role == "assistant" || role == "user" || role == "system" {
                 let mut e = Event::new(role, "message", "message.role");
                 let mut body = message_text(&m["content"]);
-                // Pi system sections: testdata/pi-sections.jsonl.
+                // Pi system sections: tests/fixtures/pi-sections.jsonl.
                 if let Some(sections) = m["sections"].as_object() {
                     for section in sections.values().map(text).filter(|s| !s.is_empty()) {
                         if !body.is_empty() {

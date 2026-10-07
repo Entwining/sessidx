@@ -79,7 +79,7 @@ pub fn redact(text: &str) -> String {
                 break;
             }
         }
-        // Body identifiers and credential-context controls: testdata/identifiers.jsonl.
+        // Body identifiers and credential-context controls: tests/fixtures/identifiers.jsonl.
         let path = location.starts_with('/')
             && location.split('/').filter(|s| !s.is_empty()).count() >= 2
             && location.split('/').skip(1).all(|s| {

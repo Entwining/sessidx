@@ -42,7 +42,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             }
         }
         "turn_context" => {
-            // Codex models are turn-scoped: testdata/codex.jsonl.
+            // Codex models are turn-scoped: tests/fixtures/codex.jsonl.
             if let Some(m) = string(p, "model") {
                 s.model = Some(m);
                 s.model_source = "turn_context.model".into();
@@ -102,7 +102,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
                     let mut e = Event::new("tool", "tool_result", "payload.type");
                     e.call_id = string(p, "call_id");
-                    // Codex text and structured outcomes: testdata/outcomes.jsonl.
+                    // Codex text and structured outcomes: tests/fixtures/outcomes.jsonl.
                     crate::outcomes::classify(&mut e, &p["output"], "codex");
                     crate::normalize::output_prefix(&mut e, &p["output"]);
                     e

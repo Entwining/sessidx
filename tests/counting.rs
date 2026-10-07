@@ -31,7 +31,7 @@ fn indexed(h: &str, content: &str) -> (tempfile::TempDir, Store) {
 #[test]
 fn codex_text_array_batch_failures_and_quoted_negative_control() {
     let mut s = State::default();
-    let es: Vec<_> = include_str!("../testdata/outcomes.jsonl")
+    let es: Vec<_> = include_str!("fixtures/outcomes.jsonl")
         .lines()
         .flat_map(|l| adapters::parse("codex", &serde_json::from_str(l).unwrap(), &mut s).events)
         .collect();
@@ -93,7 +93,7 @@ fn brush_sites_include_nested_syntax_without_counting_quoted_program_names() {
 
 #[test]
 fn native_message_fragments_empty_replies_summary_and_history_dedup() {
-    let (dir, mut store) = indexed("claude", include_str!("../testdata/structure.jsonl"));
+    let (dir, mut store) = indexed("claude", include_str!("fixtures/structure.jsonl"));
     let scalar =
         |store: &Store, sql: &str| store.db.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
     assert_eq!(
@@ -150,7 +150,7 @@ fn native_message_fragments_empty_replies_summary_and_history_dedup() {
 
 #[test]
 fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
-    let (dir, store) = indexed("claude", include_str!("../testdata/claude.jsonl"));
+    let (dir, store) = indexed("claude", include_str!("fixtures/claude.jsonl"));
     let commands =
         counting::count(&store.db, "commands", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(commands[0]["unit"], "static_shell_command_sites");
@@ -330,7 +330,7 @@ fn pi_empty_response_and_explicit_message_model_override() {
 #[test]
 fn attribution_native_denials_instructions_children_and_retry_negative_control() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/attribution.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/attribution.json")).unwrap();
     for h in ["claude", "codex", "pi"] {
         let mut s = State::default();
         let es: Vec<_> = fixtures[h]
@@ -401,7 +401,7 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
 
 #[test]
 fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_control() {
-    let (_, store) = indexed("codex", include_str!("../testdata/truncated.jsonl"));
+    let (_, store) = indexed("codex", include_str!("fixtures/truncated.jsonl"));
     let mut stmt = store
         .db
         .prepare(
@@ -438,7 +438,7 @@ fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_contr
 
 #[test]
 fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
-    let (_, store) = indexed("claude", include_str!("../testdata/structure.jsonl"));
+    let (_, store) = indexed("claude", include_str!("fixtures/structure.jsonl"));
     let n: i64 = store
         .db
         .query_row(
@@ -455,7 +455,7 @@ fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
     let n:i64=store.db.query_row("SELECT coalesce(sum(n),0) FROM shapes WHERE signature LIKE 'inter_agent_communication_metadata/%'",[],|r|r.get(0)).unwrap();
     assert_eq!(n, 1);
     let variants: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/inventory.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/inventory.json")).unwrap();
     let es: Vec<_> = variants
         .as_array()
         .unwrap()
@@ -515,7 +515,7 @@ fn successful_stdout_guard_examples_are_not_denials() {
 
 #[test]
 fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
-    let fixture=include_str!("../testdata/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}}]}}).to_string()+"\n";
+    let fixture=include_str!("fixtures/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}}]}}).to_string()+"\n";
     let (_, store) = indexed("claude", &fixture);
     let result =
         counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
@@ -525,7 +525,7 @@ fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
 
 #[test]
 fn claude_hook_check_errors_respect_native_success_flags() {
-    let (_, store) = indexed("claude", include_str!("../testdata/hook-check.jsonl"));
+    let (_, store) = indexed("claude", include_str!("fixtures/hook-check.jsonl"));
     let mut stmt = store
         .db
         .prepare("SELECT source,reason_id FROM denials ORDER BY id")
@@ -582,21 +582,21 @@ fn inherited_models_change_retrospective_group_counts() {
     for (harness, content, model, kind, role) in [
         (
             "claude",
-            include_str!("../testdata/claude.jsonl"),
+            include_str!("fixtures/claude.jsonl"),
             "claude-sonnet",
             "message",
             "user",
         ),
         (
             "codex",
-            include_str!("../testdata/codex.jsonl"),
+            include_str!("fixtures/codex.jsonl"),
             "gpt-fixture",
             "tool_call",
             "assistant",
         ),
         (
             "pi",
-            include_str!("../testdata/pi.jsonl"),
+            include_str!("fixtures/pi.jsonl"),
             "pi-model",
             "tool_result",
             "tool",
@@ -677,7 +677,7 @@ fn codex_mcp_transport_error_flag_is_text_evidence_with_content_control() {
 #[test]
 fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/envelopes.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/envelopes.json")).unwrap();
     for (i, f) in fixtures.as_array().unwrap().iter().enumerate() {
         let harness = f["harness"].as_str().unwrap();
         let mut e = sessidx::model::Event::new("tool", "tool_result", "fixture");
@@ -702,7 +702,7 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
 #[test]
 fn codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed() {
     let fixtures: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/code-mode.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/code-mode.json")).unwrap();
     for f in fixtures.as_array().unwrap() {
         let r = adapters::parse(
             "codex",

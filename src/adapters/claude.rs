@@ -16,7 +16,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
         s.kind_source = "isSidechain".into();
     }
     let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
-    // Claude diagnostic attachments: testdata/output-prefix.json.
+    // Claude diagnostic attachments: tests/fixtures/output-prefix.json.
     if typ == "attachment"
         && v.pointer("/attachment/type").and_then(Value::as_str) == Some("diagnostics")
     {
@@ -86,7 +86,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
         };
     }
     let m = &v["message"];
-    // Claude model fields and synthetic errors: testdata/claude.jsonl.
+    // Claude model fields and synthetic errors: tests/fixtures/claude.jsonl.
     if let Some(model) = string(m, "model").filter(|m| m != "<synthetic>") {
         s.model = Some(model);
         s.model_source = "message.model".into();
@@ -94,7 +94,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
     let role = m.get("role").and_then(Value::as_str).unwrap_or(typ);
     let content = &m["content"];
     let mut events = Vec::new();
-    // Claude fragments, empty replies, and compaction: testdata/structure.jsonl.
+    // Claude fragments, empty replies, and compaction: tests/fixtures/structure.jsonl.
     let summary = v.get("isCompactSummary").and_then(Value::as_bool) == Some(true);
     if summary {
         return Record {

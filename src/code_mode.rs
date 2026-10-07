@@ -104,7 +104,7 @@ fn literal(raw: &str) -> Option<String> {
     Some(out)
 }
 
-// Codex code-mode cmd literals and opaque expressions: testdata/code-mode.json.
+// Codex code-mode cmd literals and opaque expressions: tests/fixtures/code-mode.json.
 pub fn sites(source: &str) -> Vec<Site> {
     let opaque = || Site {
         program: None,

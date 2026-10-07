@@ -55,7 +55,7 @@ fn assert_canaries_absent_from_storage(dir: &std::path::Path, values: &[&str]) {
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
+    let (_dir, store, _) = setup("claude", include_str!("fixtures/claude.jsonl"));
     let filters = Filters {
         session: Some("claude-fixture".into()),
         ..Filters::default()
@@ -101,7 +101,7 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
+    let (_dir, store, _) = setup("claude", include_str!("fixtures/claude.jsonl"));
     let filters = Filters::default();
     assert_eq!(
         search_hits(&store.db, "太长", &filters, 20, 0)
@@ -163,7 +163,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
     .unwrap();
     assert_eq!(shown.len(), 1);
     assert!(!coverage.incomplete);
-    let (_dir, store, _) = setup("codex", include_str!("../testdata/codex.jsonl"));
+    let (_dir, store, _) = setup("codex", include_str!("fixtures/codex.jsonl"));
     assert_eq!(
         query::show(&store.db, "codex://threads/codex-fixture", 3, 100, 0)
             .unwrap()
@@ -176,7 +176,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
 #[test]
 fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (dir, store, _) = setup("codex", include_str!("../testdata/codex.jsonl"));
+    let (dir, store, _) = setup("codex", include_str!("fixtures/codex.jsonl"));
     assert!(
         query::scan(
             &store.db,
@@ -214,7 +214,7 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
 #[test]
 fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (_dir, mut store, roots) = setup("codex", include_str!("../testdata/codex.jsonl"));
+    let (_dir, mut store, roots) = setup("codex", include_str!("fixtures/codex.jsonl"));
     let lock = store.lock().unwrap().unwrap();
     let busy = store
         .refresh(&roots, false, Some(Duration::from_secs(2)))
@@ -261,7 +261,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
 
 #[test]
 fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
-    let (dir, mut store, roots) = setup("codex", include_str!("../testdata/codex.jsonl"));
+    let (dir, mut store, roots) = setup("codex", include_str!("fixtures/codex.jsonl"));
     fs::rename(&roots[0].path, dir.path().join("moved")).unwrap();
     let missing = store.refresh(&roots, false, None).unwrap();
     assert_eq!(missing.missing_roots, ["codex"]);
@@ -280,7 +280,7 @@ fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
 
 #[test]
 fn a_path_reindexed_under_another_harness_is_parsed_again() {
-    let (_dir, mut store, roots) = setup("claude", include_str!("../testdata/pi.jsonl"));
+    let (_dir, mut store, roots) = setup("claude", include_str!("fixtures/pi.jsonl"));
     let pi = [Root {
         harness: "pi".into(),
         path: roots[0].path.clone(),
@@ -339,7 +339,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         );
     }
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/credential-context.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/credential-context.json")).unwrap();
     for (i, f) in fixture["labels"].as_array().unwrap().iter().enumerate() {
         let label = f["label"].as_str().unwrap();
         let value = f["value"].as_str().unwrap();
@@ -462,7 +462,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
 fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let values: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/privacy.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/privacy.json")).unwrap();
     let text = format!(
         "needle {} token={} Authorization: Basic {} password = \"{}\" https://example.invalid/?token={} https://example.invalid/?page=2&key={} https://example.invalid/?access_token={}",
         values["unmarked"].as_str().unwrap(),
@@ -499,7 +499,7 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 #[test]
 fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (_, store, _) = setup("claude", include_str!("../testdata/identifiers.jsonl"));
+    let (_, store, _) = setup("claude", include_str!("fixtures/identifiers.jsonl"));
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
         "0xabcdef0123456789abcdef0123456789abcdef01",
@@ -610,7 +610,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
 fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/output-prefix.json")).unwrap();
     let prefix = format!("outputneedle {}", "x".repeat(2047 - "outputneedle ".len()));
     let text = format!("{prefix}太tailoutside");
     for f in fixture.as_array().unwrap().iter().take(3) {
@@ -671,7 +671,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
 fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/output-prefix.json")).unwrap();
     let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
     let (_dir, store, _) = setup("claude", &data);
     let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
@@ -711,7 +711,7 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
 #[test]
 fn pi_sections_share_the_native_message_and_are_redacted() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (dir, store, _) = setup("pi", include_str!("../testdata/pi-sections.jsonl"));
+    let (dir, store, _) = setup("pi", include_str!("fixtures/pi-sections.jsonl"));
     for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
         let hits = search_hits(&store.db, term, &Filters::default(), 20, 0).unwrap();
         assert_eq!(hits.len(), 1, "{term}");

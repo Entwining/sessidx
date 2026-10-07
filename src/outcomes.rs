@@ -34,7 +34,7 @@ pub fn classify(e: &mut Event, output: &Value, harness: &str) {
         denials(s, harness, e, true);
     }
     failed |= !e.denials.is_empty() || codes.iter().any(|n| *n != 0);
-    // Mixed shell/MCP outcomes: testdata/outcomes.jsonl.
+    // Mixed shell/MCP outcomes: tests/fixtures/outcomes.jsonl.
     if failed || e.ok_source == "none" && !codes.is_empty() {
         e.ok = Some(!failed);
         e.ok_source = "text".into();
@@ -63,7 +63,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                 e.ok = Some(!error && e.ok != Some(false));
                 e.ok_source = "text".into();
             }
-            // Codex Promise outcomes and shell transports: testdata/outcomes.jsonl.
+            // Codex Promise outcomes and shell transports: tests/fixtures/outcomes.jsonl.
             if let Some(status) = m.get("status").and_then(Value::as_str) {
                 if status == "rejected" {
                     let reason = m
@@ -100,13 +100,13 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                 }
                 return;
             }
-            // Codex {i,result}/{index,result} envelopes: testdata/outcomes.jsonl.
+            // Codex {i,result}/{index,result} envelopes: tests/fixtures/outcomes.jsonl.
             for key in ["content", "results", "items", "result"] {
                 if let Some(v) = m.get(key) {
                     structured(v, texts, e, depth + 1);
                 }
             }
-            // Labeled shell/MCP transports: testdata/envelopes.json.
+            // Labeled shell/MCP transports: tests/fixtures/envelopes.json.
             for (key, v) in m {
                 if !matches!(
                     key.as_str(),
@@ -153,7 +153,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                     break;
                 }
             }
-            // Truncated Codex batches retain complete rejection values: testdata/truncated.jsonl.
+            // Truncated Codex batches retain complete rejection values: tests/fixtures/truncated.jsonl.
             if truncated {
                 for capture in PARTIAL_REJECTION.captures_iter(&candidate[values.byte_offset()..]) {
                     if let Ok(reason) = serde_json::from_str::<Value>(&capture[1]) {
@@ -250,7 +250,7 @@ fn flag_denials(v: &Value, harness: &str, e: &mut Event, leading: &mut bool) {
 }
 
 fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
-    // Native success and hook-check errors: testdata/hook-check.jsonl.
+    // Native success and hook-check errors: tests/fixtures/hook-check.jsonl.
     if harness != "codex" && e.ok == Some(true) {
         return;
     }

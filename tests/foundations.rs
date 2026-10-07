@@ -17,7 +17,7 @@ fn events(h: &str, fixture: &str) -> (State, Vec<sessidx::model::Event>) {
 #[test]
 fn claude_blocks_flags_and_synthetic_model() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (s, es) = events("claude", include_str!("../testdata/claude.jsonl"));
+    let (s, es) = events("claude", include_str!("fixtures/claude.jsonl"));
     assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
     assert_eq!(
         es.iter()
@@ -37,7 +37,7 @@ fn claude_blocks_flags_and_synthetic_model() {
 #[test]
 fn codex_context_arguments_and_telemetry() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (s, es) = events("codex", include_str!("../testdata/codex.jsonl"));
+    let (s, es) = events("codex", include_str!("fixtures/codex.jsonl"));
     assert_eq!(s.model.as_deref(), Some("gpt-fixture"));
     assert_eq!(
         es.iter()
@@ -77,7 +77,7 @@ fn codex_context_arguments_and_telemetry() {
 #[test]
 fn pi_model_tool_call_and_camel_case_flag() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let (s, es) = events("pi", include_str!("../testdata/pi.jsonl"));
+    let (s, es) = events("pi", include_str!("fixtures/pi.jsonl"));
     assert_eq!(s.model.as_deref(), Some("pi-model"));
     assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
     assert_eq!(
@@ -108,7 +108,7 @@ fn previous_schema_requires_explicit_locked_rebuild() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     let old = rusqlite::Connection::open(&path).unwrap();
-    old.execute_batch(include_str!("../testdata/schema-v1.sql"))
+    old.execute_batch(include_str!("fixtures/schema-v1.sql"))
         .unwrap();
     for args in [
         vec!["search", "needle"],
@@ -139,11 +139,7 @@ fn previous_schema_requires_explicit_locked_rebuild() {
     assert!(Store::open(&path).is_err());
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
-    fs::write(
-        root.join("one.jsonl"),
-        include_str!("../testdata/codex.jsonl"),
-    )
-    .unwrap();
+    fs::write(root.join("one.jsonl"), include_str!("fixtures/codex.jsonl")).unwrap();
     let roots = [Root {
         harness: "codex".into(),
         path: root,
@@ -202,8 +198,8 @@ fn previous_schema_requires_explicit_locked_rebuild() {
 fn previous_compact_schema_rebuilds_without_reading_new_columns() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     for schema in [
-        include_str!("../testdata/schema-v2.sql"),
-        include_str!("../testdata/schema-v3.sql"),
+        include_str!("fixtures/schema-v2.sql"),
+        include_str!("fixtures/schema-v3.sql"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("old-compact.db");
@@ -233,7 +229,7 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
     let path = root.join("s.jsonl");
-    let fixture = include_str!("../testdata/codex.jsonl");
+    let fixture = include_str!("fixtures/codex.jsonl");
     let roots = [Root {
         harness: "codex".into(),
         path: root,
@@ -404,7 +400,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
 #[test]
 fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let raw = include_bytes!("../testdata/opaque.jsonl");
+    let raw = include_bytes!("fixtures/opaque.jsonl");
     let original: serde_json::Value = serde_json::from_slice(raw).unwrap();
     let filtered = sessidx::normalize::record_for_index(raw, "pi").unwrap();
     let payload_fields: usize = filtered["message"]["content"]

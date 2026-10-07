@@ -3,7 +3,7 @@ use sessidx::{adapters, model::State};
 #[test]
 fn inventory_variants_are_classified_with_future_shape_negative_control() {
     let variants: serde_json::Value =
-        serde_json::from_str(include_str!("../testdata/inventory.json")).unwrap();
+        serde_json::from_str(include_str!("fixtures/inventory.json")).unwrap();
     let mut known = 0;
     let mut unknown = 0;
     let mut mismatches = Vec::new();
