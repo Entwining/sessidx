@@ -109,6 +109,7 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `code_mode_quoted_control` | `testdata/code-mode.json` | Quoted JavaScript examples and comments do not create tool-call sites. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
 | `code_mode_regex_control` | `testdata/code-mode.json` | Regular-expression literals containing tool names are data, not tool-call sites. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
 | `diagnostic_source` | `testdata/output-prefix.json[3]` | The diagnostic source names the checker even when its message does not; put source before the bounded message prefix. | `diagnostic_attachments_are_tool_outputs_without_creating_results` |
+| `transport_stdout_control` | `testdata/envelopes.json` | Output, stdout and stderr remain payload data even when an object inside them resembles a shell transport; a real leading content error can still override a false MCP error flag. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 
 ## Codex output variants
 

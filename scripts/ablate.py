@@ -83,7 +83,7 @@ rows.extend([
 ])
 rows.extend([
     ('script_header', 'src/outcomes.rs', 's.trim_start().starts_with("Script failed")', 's.lines().any(|l| l.trim_start().starts_with("Script failed"))', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
-    ('labeled_transport', 'src/outcomes.rs', 'if !matches!(key.as_str(), "content" | "results" | "items" | "result")', 'if false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
+    ('labeled_transport', 'src/outcomes.rs', 'if !matches!(\n                    key.as_str(),\n                    "content" | "results" | "items" | "result" | "output" | "stdout" | "stderr"\n                )', 'if false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
     ('legacy_denial', 'src/outcomes.rs', 'line\n                .strip_prefix("Error: ")\n                .unwrap_or(line)\n                .starts_with("Permission to use ")', 'false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'),
     ('hook_denied', 'src/outcomes.rs', 'line.contains("DENIED:")', 'false', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'),
     ('pi_leading_reason', 'src/outcomes.rs', '&& leading', '&& true', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'),
@@ -137,6 +137,7 @@ rows.extend([
     ('code_mode_regex_control', 'src/code_mode.rs', "if c == '/' && regex_allowed", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
 ])
 rows.append(('diagnostic_source', 'src/adapters/claude.rs', 'd.get("source")', 'd.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
+rows.append(('transport_stdout_control', 'src/outcomes.rs', ' | "output" | "stdout" | "stderr"', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'))
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

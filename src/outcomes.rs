@@ -104,11 +104,13 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
             }
             // Labeled shell/MCP transports: testdata/envelopes.json.
             for (key, v) in m {
-                if !matches!(key.as_str(), "content" | "results" | "items" | "result")
-                    && (v.get("exit_code").and_then(Value::as_i64).is_some()
-                        && v.get("output").is_some()
-                        || v.get("isError").and_then(Value::as_bool).is_some()
-                            && v.get("content").is_some())
+                if !matches!(
+                    key.as_str(),
+                    "content" | "results" | "items" | "result" | "output" | "stdout" | "stderr"
+                ) && (v.get("exit_code").and_then(Value::as_i64).is_some()
+                    && v.get("output").is_some()
+                    || v.get("isError").and_then(Value::as_bool).is_some()
+                        && v.get("content").is_some())
                 {
                     structured(v, texts, e, depth + 1);
                 }
