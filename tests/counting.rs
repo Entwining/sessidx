@@ -472,6 +472,14 @@ fn successful_stdout_guard_examples_are_not_denials() {
     for (harness, value) in [
         (
             "claude",
+            serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"DENIED: rg has no --include flag."}]}}),
+        ),
+        (
+            "pi",
+            serde_json::json!({"type":"message","message":{"role":"toolResult","content":"DENIED: rg has no --include flag."}}),
+        ),
+        (
+            "claude",
             serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":"DENIED: rg has no --include flag."}]}}),
         ),
         (
