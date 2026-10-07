@@ -134,7 +134,7 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `missing_root_absent` | `tests/lookup.rs::writer_lock_budget_missing_root_and_scan_cursor_are_visible` | A default root can be absent because the user does not run that harness; a missing root that never held indexed files is reported but does not make refreshes stale. | `writer_lock_budget_missing_root_and_scan_cursor_are_visible` |
 | `missing_root_indexed` | `tests/lookup.rs::a_missing_root_is_stale_only_when_it_held_indexed_files` | A moved or unmounted root that held indexed files keeps its rows, which can no longer be verified, so refreshes stay stale. | `a_missing_root_is_stale_only_when_it_held_indexed_files` |
 | `harness_identity` | `tests/lookup.rs::a_path_reindexed_under_another_harness_is_parsed_again` | The same file under another harness root parses differently; harness is part of the cached file identity, so a change reparses instead of keeping the old rows. | `a_path_reindexed_under_another_harness_is_parsed_again` |
-| `missing_root_rebuild` | `tests/lookup.rs::a_missing_root_is_stale_only_when_it_held_indexed_files` | A full rebuild drops the rows that prove a root was indexed; read them before the reset so a missing root cannot silently lose its sessions. | `a_missing_root_is_stale_only_when_it_held_indexed_files` |
+| `missing_root_rebuild` | `tests/lookup.rs::a_missing_root_is_stale_only_when_it_held_indexed_files` | A full rebuild drops the rows that prove a root was indexed, after which refreshes would report complete coverage; refuse the rebuild while such a root is missing. | `a_missing_root_is_stale_only_when_it_held_indexed_files` |
 
 ### Lookup and pagination
 

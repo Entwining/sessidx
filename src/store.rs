@@ -200,19 +200,28 @@ impl Store {
         } else {
             Vec::new()
         };
-        self.initialize(&_lock, full)?;
-        let mut report = Refresh {
-            missing_roots,
-            ..Refresh::default()
-        };
         // A missing root that never held indexed files is a harness this user
         // does not have; one that did (moved, unmounted) leaves its rows unverified.
-        report.stale = roots.iter().any(|r| {
+        let unverified = roots.iter().find(|r| {
             !r.path.exists()
                 && indexed
                     .iter()
                     .any(|(_, path)| Path::new(path).starts_with(&r.path))
         });
+        // A rebuild would drop the rows that keep later refreshes stale.
+        if let (true, Some(root)) = (full, unverified) {
+            anyhow::bail!(
+                "{} root {} is missing but holds indexed sessions; restore it, or rebuild with --root for each root that remains",
+                root.harness,
+                root.path.display()
+            );
+        }
+        self.initialize(&_lock, full)?;
+        let mut report = Refresh {
+            missing_roots,
+            stale: unverified.is_some(),
+            ..Refresh::default()
+        };
         let existing = if full { Vec::new() } else { indexed };
         let discovered: HashSet<_> = files.iter().map(|(_, p)| p.as_path()).collect();
         for (id, path) in existing {

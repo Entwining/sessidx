@@ -270,7 +270,11 @@ fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
         .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
         .unwrap();
     assert_eq!(files, 1);
-    assert!(store.refresh(&roots, true, None).unwrap().stale);
+    let refused = store.refresh(&roots, true, None).unwrap_err();
+    assert!(format!("{refused:#}").contains("--root"), "{refused:#}");
+    assert!(store.refresh(&roots, false, None).unwrap().stale);
+    store.refresh(&[], true, None).unwrap();
+    assert!(!store.refresh(&roots, false, None).unwrap().stale);
 }
 
 #[test]
