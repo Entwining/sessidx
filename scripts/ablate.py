@@ -135,13 +135,18 @@ rows.extend([
 ])
 rows.extend([
     ('code_mode_literals', 'src/adapters/codex.rs', 'map(crate::code_mode::sites)', 'map(|_| vec![crate::shell::Site { program: None, argv: Vec::new(), parsed:false }])', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
-    ('code_mode_opaque', 'src/code_mode.rs', 'if unparsed {', 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_opaque', 'src/code_mode.rs', 'if unparsed || referenced && out.is_empty() {', 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
     ('code_mode_escape', 'src/code_mode.rs', "if c == '\\\\' {", 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
-    ('code_mode_template', 'src/code_mode.rs', "if quote == '`' && c == '$'", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
-    ('code_mode_duplicate', 'src/code_mode.rs', 'cmd.is_some() || field.len() != 3', 'field.len() != 3', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
-    ('code_mode_quoted_control', 'src/code_mode.rs', 'if matches!(c, \'\\\'\' | \'"\' | \'`\')', 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
-    ('code_mode_regex_control', 'src/code_mode.rs', "if c == '/' && regex_allowed", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_template', 'src/code_mode.rs', "if quote == b'`' && c == '$'", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_duplicate', 'src/code_mode.rs', 'if cmd.is_some() {', 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_quoted_control', 'src/code_mode.rs', '|{STRING}|{COMMENTS}|{REGEX}|(?P<shell>', '|{COMMENTS}|{REGEX}|(?P<shell>', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_regex_control', 'src/code_mode.rs', '|{REGEX}|(?P<shell>', '|(?P<shell>', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
 ])
+rows.append(('code_mode_comments', 'src/code_mode.rs', '|{COMMENTS}|{REGEX}|(?P<shell>', '|{REGEX}|(?P<shell>', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('code_mode_value_end', 'src/code_mode.rs', "if !tail.is_empty() && !tail.starts_with(',') {", 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('code_mode_receiver', 'src/code_mode.rs', '} else if caps.name("shell").is_some() {', '} else if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('code_mode_empty_literal', 'src/code_mode.rs', 'unparsed || referenced && out.is_empty()', 'unparsed', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('code_mode_quoted_key', 'src/code_mode.rs', '(?:cmd|"cmd"|\'cmd\')', '(?:cmd|"cmd"|\'removed-cmd\')', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('diagnostic_source', 'src/adapters/claude.rs', '.get("source")', '.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
 rows.append(('transport_stdout_control', 'src/outcomes.rs', ' | "output" | "stdout" | "stderr"', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('code_identifiers', 'src/redaction.rs', '|| identifier_shaped(identifier)', '', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))

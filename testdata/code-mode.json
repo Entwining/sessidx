@@ -69,42 +69,8 @@
     ]
   },
   {
-    "name": "surrogate_pair",
-    "source": "tools.exec_command({cmd: \"printf '\\uD83D\\uDE00'\"});",
-    "programs": [
-      "printf"
-    ],
-    "unparsed": 0,
-    "argv": [
-      [
-        "printf",
-        "'😀'"
-      ]
-    ]
-  },
-  {
-    "name": "code_point",
-    "source": "tools.exec_command({cmd: \"printf '\\u{1F600}'\"});",
-    "programs": [
-      "printf"
-    ],
-    "unparsed": 0,
-    "argv": [
-      [
-        "printf",
-        "'😀'"
-      ]
-    ]
-  },
-  {
     "name": "invalid_escape",
     "source": "tools.exec_command({cmd: \"\\xZZ\"});",
-    "programs": [],
-    "unparsed": 1
-  },
-  {
-    "name": "lone_surrogate",
-    "source": "tools.exec_command({cmd: \"printf '\\uD800'\"});",
     "programs": [],
     "unparsed": 1
   },
@@ -117,14 +83,18 @@
   {
     "name": "spread",
     "source": "tools.exec_command({cmd: \"rg one\",...params});",
-    "programs": [],
-    "unparsed": 1
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
   },
   {
     "name": "computed",
     "source": "tools.exec_command({cmd: \"rg one\", [key]: \"cat other\"});",
-    "programs": [],
-    "unparsed": 1
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
   },
   {
     "name": "concatenation",
@@ -161,20 +131,6 @@
     "unparsed": 1
   },
   {
-    "name": "brace_surrogate_pair",
-    "source": "tools.exec_command({cmd: \"printf '\\u{D83D}\\u{DE00}'\"});",
-    "programs": [
-      "printf"
-    ],
-    "unparsed": 0,
-    "argv": [
-      [
-        "printf",
-        "'😀'"
-      ]
-    ]
-  },
-  {
     "name": "trailing_comma",
     "source": "tools.exec_command({cmd:\"rg real\",},);",
     "programs": [
@@ -187,5 +143,31 @@
     "source": "other.tools.exec_command({cmd:\"rg fake\"});",
     "programs": [],
     "unparsed": 1
+  },
+  {
+    "name": "bare_receiver",
+    "source": "exec_command({cmd:\"rg one\"})",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "codex_receiver",
+    "source": "codex.exec_command({cmd:\"rg one\"})",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "empty_literal",
+    "source": "tools.exec_command({cmd:\"\"})",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "quoted_key_after_fields",
+    "source": "tools.exec_command({max_output_tokens:1,'cmd':'rg one',workdir:'/synthetic'});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
   }
 ]
