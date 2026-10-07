@@ -180,7 +180,6 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     }
                     e
                 }
-                "thinking" | "redacted_thinking" | "image" | "fallback" => continue,
                 _ => continue,
             };
             e.native_id = e

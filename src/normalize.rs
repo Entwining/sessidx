@@ -110,19 +110,27 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
 }
 
 pub fn shell(tool: &str, args: &Value) -> Option<String> {
-    match tool.rsplit('.').next().unwrap_or(tool) {
-        "Bash" | "bash" | "exec_command" | "shell_command" => {
-            string(args, "command").or_else(|| string(args, "cmd"))
-        }
-        "shell" => args.get("command").and_then(Value::as_array).map(|a| {
+    if !is_shell_tool(tool) {
+        return None;
+    }
+    if tool.rsplit('.').next() == Some("shell") {
+        args.get("command").and_then(Value::as_array).map(|a| {
             a.iter()
                 .filter_map(Value::as_str)
                 .map(|s| format!("'{}'", s.replace('\'', "'\\''")))
                 .collect::<Vec<_>>()
                 .join(" ")
-        }),
-        _ => None,
+        })
+    } else {
+        string(args, "command").or_else(|| string(args, "cmd"))
     }
+}
+
+pub fn is_shell_tool(tool: &str) -> bool {
+    matches!(
+        tool.rsplit('.').next().unwrap_or(tool),
+        "Bash" | "bash" | "exec_command" | "shell_command" | "shell"
+    )
 }
 
 // Pi thinkingSignature and opaque image/thinking blocks: testdata/opaque.jsonl.

@@ -50,13 +50,11 @@ pub fn parse(harness: &str, v: &Value, state: &mut State) -> Record {
             e.sites = crate::shell::sites(command);
         } else if e.kind == "tool_call"
             && e.tool.as_deref().is_some_and(|t| {
-                matches!(
-                    t.rsplit('.').next().unwrap_or(t),
-                    "Bash" | "bash" | "exec_command" | "shell_command" | "shell"
-                ) || matches!(t, "exec" | "functions.exec")
-                    && e.text
-                        .as_deref()
-                        .is_some_and(|s| s.contains("exec_command") || s.contains("shell_command"))
+                crate::normalize::is_shell_tool(t)
+                    || matches!(t, "exec" | "functions.exec")
+                        && e.text.as_deref().is_some_and(|s| {
+                            s.contains("exec_command") || s.contains("shell_command")
+                        })
             })
         {
             e.sites = vec![crate::shell::Site {
