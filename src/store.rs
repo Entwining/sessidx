@@ -186,17 +186,34 @@ impl Store {
             });
         };
         let (files, missing_roots) = discovery::files(roots)?;
+        // Read before initialize, which drops these rows on a full rebuild.
+        let indexed: Vec<(i64, String)> = if self.db.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='files'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? == 1
+        {
+            self.db
+                .prepare("SELECT id,path FROM files")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        } else {
+            Vec::new()
+        };
         self.initialize(&_lock, full)?;
         let mut report = Refresh {
             missing_roots,
             ..Refresh::default()
         };
-        report.stale = !report.missing_roots.is_empty();
-        let existing: Vec<(i64, String)> = self
-            .db
-            .prepare("SELECT id,path FROM files")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<rusqlite::Result<_>>()?;
+        // A missing root that never held indexed files is a harness this user
+        // does not have; one that did (moved, unmounted) leaves its rows unverified.
+        report.stale = roots.iter().any(|r| {
+            !r.path.exists()
+                && indexed
+                    .iter()
+                    .any(|(_, path)| Path::new(path).starts_with(&r.path))
+        });
+        let existing = if full { Vec::new() } else { indexed };
         let discovered: HashSet<_> = files.iter().map(|(_, p)| p.as_path()).collect();
         for (id, path) in existing {
             if roots

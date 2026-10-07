@@ -160,6 +160,9 @@ rows.append(('path_locator', 'src/redaction.rs', 'for _ in 0..2 {', 'for _ in 0.
 rows.append(('path_locator_shape', 'src/redaction.rs', "&& path.contains(['/', '.'])", '', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('static_help', 'src/main.rs', 'print!("{e}");', 'print!("");', 'cli_static_help_and_version_preserve_locators_and_errors_redact_values', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('known_token_prefix', 'src/redaction.rs', '(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)', '(?:github_pat_|xox[baprs]-|AKIA|ASIA)', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('missing_root_absent', 'src/store.rs', 'report.stale = roots.iter().any(|r| {', 'report.stale = !report.missing_roots.is_empty() || roots.iter().any(|r| {', 'writer_lock_budget_missing_root_and_scan_cursor_are_visible', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('missing_root_indexed', 'src/store.rs', '!r.path.exists()\n                && indexed', 'false\n                && indexed', 'a_missing_root_is_stale_only_when_it_held_indexed_files', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('missing_root_rebuild', 'src/store.rs', '// Read before initialize, which drops these rows on a full rebuild.\n', 'self.initialize(&_lock, full)?;\n        ', 'a_missing_root_is_stale_only_when_it_held_indexed_files', 'claude_blocks_flags_and_synthetic_model'))
 test_sources = [(path.stem, path.read_text()) for path in (root / 'tests').glob('*.rs')]
 test_targets = {}
 for name in {name for row in rows for name in row[4:]}:

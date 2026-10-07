@@ -237,7 +237,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
         )
         .unwrap();
     assert_eq!(missing.missing_roots, ["pi"]);
-    assert!(missing.stale);
+    assert!(!missing.stale);
     let filters = Filters {
         harness: vec![sessidx::query::Harness::Codex],
         ..Filters::default()
@@ -256,6 +256,21 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     .unwrap();
     assert!(!next.is_empty());
     assert!(next.iter().all(|h| h.event_id > hits[0].event_id));
+}
+
+#[test]
+fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
+    let (dir, mut store, roots) = setup("codex", include_str!("../testdata/codex.jsonl"));
+    fs::rename(&roots[0].path, dir.path().join("moved")).unwrap();
+    let missing = store.refresh(&roots, false, None).unwrap();
+    assert_eq!(missing.missing_roots, ["codex"]);
+    assert!(missing.stale);
+    let files: i64 = store
+        .db
+        .query_row("SELECT count(*) FROM files", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(files, 1);
+    assert!(store.refresh(&roots, true, None).unwrap().stale);
 }
 
 pub fn canaries() -> Vec<String> {
