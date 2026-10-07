@@ -88,6 +88,8 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `doctor_models` | `tests/counting.rs` | Doctor reports missing models among stored rows, including context. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 | `doctor_denials` | `tests/counting.rs` | Doctor reports unknown reasons among stored denial rows. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 | `native_denial_kind` | `tests/counting.rs::result_envelopes_exclude_quoted_markers_and_preserve_native_denials` | An explicit Claude toolDenialKind supplies the mechanism instead of the generic text-derived native_denial source. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `session_access` | `tests/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | Resolve native session strings and file paths through indexed identities before scanning, preserving both selection forms without a cross-table OR. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
+| `grep_sqlite_deadline` | `tests/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | The first SQLite step can exhaust grep coverage before returning a row; a progress handler must interrupt it and preserve the continuation. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
 
 ## Codex output variants
 

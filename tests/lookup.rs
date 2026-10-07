@@ -49,6 +49,50 @@ fn assert_canaries_absent_from_storage(dir: &std::path::Path, values: &[&str]) {
 }
 
 #[test]
+fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
+    let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
+    let filters = Filters {
+        session: Some("claude-fixture".into()),
+        ..Filters::default()
+    };
+    let (clause, args) = filters.sql(&store.db).unwrap();
+    let plan = store
+        .db
+        .prepare(&format!(
+            "EXPLAIN QUERY PLAN SELECT e.id FROM events e WHERE {clause} ORDER BY e.id"
+        ))
+        .unwrap()
+        .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(|s| s.contains("events_session")),
+        "{plan:?}"
+    );
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO locations(file_id,session_ref,line_no,byte_off,byte_len,raw_hash,ordinal,model_source_ref) SELECT l.file_id,l.session_ref,n.i+100,l.byte_off,l.byte_len,l.raw_hash,0,l.model_source_ref FROM n JOIN locations l ON l.id=1;").unwrap();
+    let start = std::time::Instant::now();
+    let (hits, coverage) = query::scan(
+        &store.db,
+        "absent",
+        &filters,
+        20,
+        0,
+        Duration::from_millis(10),
+    )
+    .unwrap();
+    assert!(hits.is_empty());
+    assert!(coverage.incomplete);
+    assert_eq!(coverage.records, 0);
+    assert_eq!(coverage.continuation, Some(0));
+    assert!(start.elapsed() < Duration::from_millis(200));
+    assert_eq!(
+        sessidx::counting::sql(&store.db, "SELECT 1 AS n").unwrap()[0]["n"],
+        1
+    );
+}
+
+#[test]
 fn lookup_cjk_latin_filters_and_show_references() {
     let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
     let filters = Filters::default();

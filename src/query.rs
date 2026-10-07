@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
 use clap::{Args, ValueEnum};
 use regex::Regex;
-use rusqlite::{Connection, params_from_iter, types::Value};
+use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value};
 use serde::Serialize;
 use serde_json::Value as Json;
 use std::{
@@ -69,7 +69,7 @@ impl Filters {
             || self.session.is_some()
     }
 
-    pub fn sql(&self) -> Result<(String, Vec<Value>)> {
+    pub fn sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
         let mut conditions = vec!["1=1".to_owned()];
         let mut args = Vec::new();
         if !self.harness.is_empty() {
@@ -101,8 +101,26 @@ impl Filters {
             }
         }
         if let Some(session) = &self.session {
-            conditions.push("(e.session_id=? OR f.path=?)".into());
-            args.extend([Value::Text(session.clone()), Value::Text(session.clone())]);
+            let session_ref: Option<i64> = db
+                .query_row("SELECT id FROM strings WHERE value=?", [session], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            let file_id: Option<i64> = db
+                .query_row("SELECT id FROM files WHERE path=?", [session], |r| r.get(0))
+                .optional()?;
+            let mut selectors = Vec::new();
+            for (column, id) in [("session_ref", session_ref), ("file_id", file_id)] {
+                if let Some(id) = id {
+                    selectors.push(format!("SELECT id FROM locations WHERE {column}=?"));
+                    args.push(Value::Integer(id));
+                }
+            }
+            conditions.push(if selectors.is_empty() {
+                "0".into()
+            } else {
+                format!("e.id IN ({})", selectors.join(" UNION "))
+            });
         }
         for (op, value) in [(">=", &self.since), ("<", &self.until)] {
             if let Some(value) = value {
@@ -219,7 +237,7 @@ pub fn search(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<Session>> {
-    let (clause, mut args) = filters.sql()?;
+    let (clause, mut args) = filters.sql(db)?;
     args.push(Value::Text(fts_query(query)?));
     args.push(Value::Integer(limit as i64));
     args.push(Value::Integer(offset as i64));
@@ -318,43 +336,64 @@ pub fn scan(
         filters.narrowed(),
         "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --harness"
     );
-    let pattern = Regex::new(pattern).context("invalid grep regex")?;
-    let (clause, mut args) = filters.sql()?;
-    args.push(Value::Integer(after));
-    let sql = format!(
-        "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(e2.ordinal) FROM events e2 WHERE e2.file_id=e.file_id AND e2.line_no=e.line_no AND e2.role=e.role) ORDER BY e.id"
-    );
-    let mut stmt = db.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args), hit)?;
     let deadline = Instant::now() + budget;
-    let mut hits = Vec::new();
-    let mut coverage = Coverage::default();
-    let mut cursor = after;
-    for row in rows {
-        if Instant::now() >= deadline || hits.len() >= limit {
-            coverage.incomplete = true;
-            coverage.continuation = Some(cursor);
-            break;
-        }
-        let mut item = row?;
-        cursor = item.event_id;
-        coverage.records += 1;
-        match read_range(db, &item) {
-            Ok(bytes) => {
-                coverage.bytes += bytes.len() as u64;
-                if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
-                    item.snippet = display_range(&bytes)?;
-                    item.truncated = false;
-                    hits.push(item);
+    db.progress_handler(1000, Some(move || Instant::now() >= deadline));
+    let result: Result<(Vec<Hit>, Coverage)> = (|| {
+        let pattern = Regex::new(pattern).context("invalid grep regex")?;
+        let (clause, mut args) = filters.sql(db)?;
+        args.push(Value::Integer(after));
+        let sql = format!(
+            "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(e2.ordinal) FROM events e2 WHERE e2.file_id=e.file_id AND e2.line_no=e.line_no AND e2.role=e.role) ORDER BY e.id"
+        );
+        let mut stmt = db.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(args))?;
+        let mut hits = Vec::new();
+        let mut coverage = Coverage::default();
+        let mut cursor = after;
+        loop {
+            if Instant::now() >= deadline || hits.len() >= limit {
+                coverage.incomplete = true;
+                coverage.continuation = Some(cursor);
+                break;
+            }
+            let row = match rows.next() {
+                Ok(Some(row)) => row,
+                Ok(None) => break,
+                Err(rusqlite::Error::SqliteFailure(e, _))
+                    if e.code == rusqlite::ErrorCode::OperationInterrupted
+                        && Instant::now() >= deadline =>
+                {
+                    coverage.incomplete = true;
+                    coverage.continuation = Some(cursor);
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let mut item = hit(row)?;
+            cursor = item.event_id;
+            coverage.records += 1;
+            match read_range(db, &item) {
+                Ok(bytes) => {
+                    coverage.bytes += bytes.len() as u64;
+                    if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
+                        item.snippet = display_range(&bytes)?;
+                        item.truncated = false;
+                        hits.push(item);
+                    }
+                }
+                Err(_) => {
+                    coverage.unavailable_ranges += 1;
+                    coverage.incomplete = true;
                 }
             }
-            Err(_) => {
-                coverage.unavailable_ranges += 1;
-                coverage.incomplete = true;
-            }
         }
+        Ok((hits, coverage))
+    })();
+    db.progress_handler(0, None::<fn() -> bool>);
+    match result {
+        Err(e) if Instant::now() >= deadline && e.downcast_ref::<rusqlite::Error>().is_some_and(|e| matches!(e, rusqlite::Error::SqliteFailure(code, _) if code.code == rusqlite::ErrorCode::OperationInterrupted)) => Ok((Vec::new(), Coverage { incomplete: true, continuation: Some(after), ..Coverage::default() })),
+        other => other,
     }
-    Ok((hits, coverage))
 }
 
 pub fn show(

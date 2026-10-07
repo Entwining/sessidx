@@ -106,6 +106,10 @@ rows.extend([
     ('doctor_denials', 'src/counting.rs', "SELECT count(*) FROM denials WHERE reason_id='unknown'", 'SELECT 0', 'doctor_reports_stored_coverage_gaps_and_sql_bounds', 'claude_blocks_flags_and_synthetic_model'),
 ])
 rows.append(('native_denial_kind', 'src/adapters/claude.rs', 'e.denials.retain(|(source, _)| source != "native_denial");', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'codex_context_arguments_and_telemetry'))
+rows.extend([
+    ('session_access', 'src/query.rs', 'SELECT id FROM locations WHERE {column}=?', 'SELECT id FROM locations WHERE +{column}=?', 'session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step', 'codex_context_arguments_and_telemetry'),
+    ('grep_sqlite_deadline', 'src/query.rs', 'db.progress_handler(1000,', 'db.progress_handler(0,', 'session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step', 'codex_context_arguments_and_telemetry'),
+])
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

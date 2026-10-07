@@ -36,7 +36,7 @@ pub fn count(
         keys.push(key);
         expressions.push(expression);
     }
-    let (clause, args) = filters.sql()?;
+    let (clause, args) = filters.sql(db)?;
     let selected = if program.is_some() {
         match metric {
             "commands" => "c.program=:program",
