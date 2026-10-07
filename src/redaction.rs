@@ -114,12 +114,13 @@ pub fn redact_metadata(text: &str) -> String {
     let mut offset = 0;
     for caps in ASSIGNMENTS.captures_iter(&out) {
         let assignment = caps.get(0).unwrap();
-        if assignment.start() >= offset && CREDENTIAL_NAME.is_match(&caps[1]) {
-            if let Some(value) = ASSIGNED_VALUE.find(&out[assignment.end()..]) {
-                redacted.push_str(&out[offset..assignment.start()]);
-                redacted.push_str("[REDACTED]");
-                offset = assignment.end() + value.end();
-            }
+        if assignment.start() >= offset
+            && CREDENTIAL_NAME.is_match(&caps[1])
+            && let Some(value) = ASSIGNED_VALUE.find(&out[assignment.end()..])
+        {
+            redacted.push_str(&out[offset..assignment.start()]);
+            redacted.push_str("[REDACTED]");
+            offset = assignment.end() + value.end();
         }
     }
     redacted.push_str(&out[offset..]);

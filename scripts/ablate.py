@@ -65,11 +65,11 @@ rows.extend([
     ('codex_tool_search', 'src/adapters/codex.rs', '"function_call" | "custom_tool_call" | "tool_search_call"', '"function_call" | "custom_tool_call"', 'inventory_variants_are_classified_with_future_shape_negative_control', 'pi_model_tool_call_and_camel_case_flag'),
 ])
 rows.append(('guard_stdout_control', 'src/outcomes.rs', 'harness != "codex"\n            && e.ok == Some(false)', 'true', 'successful_stdout_guard_examples_are_not_denials', 'codex_context_arguments_and_telemetry'))
-rows.append(('credential_assignments', 'src/redaction.rs', 'if assignment.start() >= offset && CREDENTIAL_NAME.is_match(&caps[1])', 'if false', 'adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed', 'codex_context_arguments_and_telemetry'))
+rows.append(('credential_assignments', 'src/redaction.rs', 'if assignment.start() >= offset\n            && CREDENTIAL_NAME.is_match(&caps[1])', 'if false', 'adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed', 'codex_context_arguments_and_telemetry'))
 rows.append(('harness_outcome_scope', 'src/counting.rs', 'o.harness=f.harness AND ', '', 'call_outcomes_are_isolated_by_harness', 'pi_model_tool_call_and_camel_case_flag'))
 rows.append(('count_program_binding', 'src/counting.rs', 'Value::Text(program.context("program parameter missing")?.into())', 'Value::Text("removed-program".into())', 'counts_state_units_denominators_unknowns_and_sql_is_read_only', 'codex_context_arguments_and_telemetry'))
 rows.append(('mcp_transport_flag', 'src/outcomes.rs', 'if let Some(error) = m.get("isError").and_then(Value::as_bool) {', 'if let Some(error) = None::<bool> {', 'codex_mcp_transport_error_flag_is_text_evidence_with_content_control', 'claude_blocks_flags_and_synthetic_model'))
-rows.append(('opaque_payload', 'src/normalize.rs', 'if matches!(\n                                        typ.as_str(),\n                                        "thinking" | "image" | "fallback"\n                                    )', 'if false', 'opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved', 'codex_context_arguments_and_telemetry'))
+rows.append(('opaque_payload', 'src/normalize.rs', 'if matches!(typ.as_str(), "thinking" | "image" | "fallback")', 'if false', 'opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved', 'codex_context_arguments_and_telemetry'))
 rows.extend([
     ('body_identifiers', 'src/redaction.rs', 'if hex.bytes().all(|b| b.is_ascii_hexdigit())', 'if false', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
     ('key_label', 'src/redaction.rs', 'CREDENTIAL_NAME.is_match(&caps[1])', 'CREDENTIAL_NAME.is_match(&caps[1]) && &caps[1] != "key"', 'body_identifiers_are_searchable_and_credential_context_stays_redacted', 'claude_blocks_flags_and_synthetic_model'),
@@ -136,7 +136,7 @@ rows.extend([
     ('code_mode_quoted_control', 'src/code_mode.rs', 'if matches!(c, \'\\\'\' | \'"\' | \'`\')', 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
     ('code_mode_regex_control', 'src/code_mode.rs', "if c == '/' && regex_allowed", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
 ])
-rows.append(('diagnostic_source', 'src/adapters/claude.rs', 'd.get("source")', 'd.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
+rows.append(('diagnostic_source', 'src/adapters/claude.rs', '.get("source")', '.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
 rows.append(('transport_stdout_control', 'src/outcomes.rs', ' | "output" | "stdout" | "stderr"', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'))
 results = []
 if len(sys.argv) > 2:
