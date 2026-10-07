@@ -65,8 +65,16 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `credential_assignments` | `testdata/privacy.json` | Quoted credential values can contain spaces; replacing only the first word leaks the remaining passphrase. Credential-named URL query values need pattern redaction even when too short for entropy detection. | `adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed` |
 | `harness_outcome_scope` | `tests/counting.rs::call_outcomes_are_isolated_by_harness` | Equal native call/session IDs in different harnesses must not share outcomes. | `call_outcomes_are_isolated_by_harness` |
 | `count_program_binding` | `testdata/claude.jsonl`, combined filters in `tests/counting.rs` | Count's program predicate appears in SELECT before the anonymous WHERE filter parameters. Binding program as ?1 keeps the supplied values in statement order for every metric. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
-| `mcp_transport_flag` | `tests/counting.rs::codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control` | Codex output can serialize an MCP isError flag; preserve it as transport text evidence, with failure winning over later success and stdout remaining a negative control. | `codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control` |
+| `mcp_transport_flag` | `tests/counting.rs::codex_mcp_transport_error_flag_is_text_evidence_with_content_control` | Codex output can serialize an MCP isError flag; preserve it as transport text evidence, with failure winning over later success and a content file-dump quotation as a negative control. | `codex_mcp_transport_error_flag_is_text_evidence_with_content_control` |
 | `opaque_payload` | `testdata/opaque.jsonl` | Pi thinkingSignature can contain 10-16 MiB strings that the adapter ignores. Borrowing discarded thinking/image blocks avoids materializing them while preserving message and call counts. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
+
+| `script_header` | `testdata/envelopes.json` | Only a leading script header marks a transport failure; a later quoted header in a file dump does not. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `labeled_transport` | `testdata/envelopes.json` | A custom label can wrap a complete shell/MCP transport object; inspect that object without traversing stdout. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `legacy_denial` | `testdata/envelopes.json` | Claude error text can identify a permission refusal without naming its mechanism; preserve native_denial rather than inventing classifier attribution. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `hook_denied` | `testdata/envelopes.json` | A PreToolUse DENIED envelope need not contain hook error wording. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `pi_leading_reason` | `testdata/envelopes.json` | Only the first nonempty Pi result block can supply a bare guard reason. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `pi_quoted_reason` | `testdata/envelopes.json` | Quoted Pi error prose is not a bare guard refusal. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `exit_anchor` | `testdata/envelopes.json` | A numeric exit must occupy a complete transport line; inline quotations remain unknown. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 
 ## Codex output variants
 

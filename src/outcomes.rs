@@ -24,10 +24,9 @@ pub fn classify(e: &mut Event, output: &Value, harness: &str) {
                 codes.push(code);
             }
         }
-        if s.lines().any(|l| {
-            l.trim_start().starts_with("Script failed")
-                || l.trim_start().starts_with("Script error:")
-        }) {
+        if s.trim_start().starts_with("Script failed")
+            || s.trim_start().starts_with("Script error:")
+        {
             failed = true;
         }
         denials(s, harness, e, true);
@@ -70,7 +69,10 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                         .unwrap_or_default();
                     e.ok = Some(false);
                     e.ok_source = "text".into();
-                    if reason.contains("Command blocked by PreToolUse hook:") {
+                    if reason
+                        .trim_start()
+                        .starts_with("Command blocked by PreToolUse hook:")
+                    {
                         e.denials
                             .push(("batch_hook".into(), reason_id(&reason).into()));
                     }
@@ -97,6 +99,17 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
             // Codex {i,result}/{index,result} envelopes: testdata/outcomes.jsonl.
             for key in ["content", "results", "items", "result"] {
                 if let Some(v) = m.get(key) {
+                    structured(v, texts, e, depth + 1);
+                }
+            }
+            // Labeled shell/MCP transports: testdata/envelopes.json.
+            for (key, v) in m {
+                if !matches!(key.as_str(), "content" | "results" | "items" | "result")
+                    && (v.get("exit_code").and_then(Value::as_i64).is_some()
+                        && v.get("output").is_some()
+                        || v.get("isError").and_then(Value::as_bool).is_some()
+                            && v.get("content").is_some())
+                {
                     structured(v, texts, e, depth + 1);
                 }
             }
@@ -235,29 +248,39 @@ fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
     if harness != "codex" && e.ok == Some(true) {
         return;
     }
+    if harness == "codex" {
+        let Some(payload) = s.trim_start().strip_prefix("Script error:") else {
+            return;
+        };
+        if payload
+            .trim_start()
+            .starts_with("Command blocked by PreToolUse hook:")
+        {
+            let denial = ("hook".into(), reason_id(payload).into());
+            if !e.denials.contains(&denial) {
+                e.denials.push(denial);
+            }
+        }
+        return;
+    }
     for line in s.lines() {
         let line = line.trim();
         let source = if line.starts_with("Script error: Command blocked by PreToolUse hook:")
-            || harness == "codex"
-                && line.starts_with("Command blocked by PreToolUse hook:")
-                && s.trim_start().starts_with("Script error:")
             || (line.starts_with("PreToolUse:") || line.starts_with("Error: PreToolUse:"))
                 && (line.contains("DENIED:") || e.ok == Some(false) && line.contains("hook error:"))
         {
             Some("hook")
         } else if harness != "codex"
             && e.ok == Some(false)
-            && (line.starts_with("DENIED:")
-                || line.starts_with("Command blocked by agent-guard:")
-                || line.starts_with("Blocked by agent-guard:"))
+            && (line.starts_with("DENIED:") || line.starts_with("Blocked by agent-guard:"))
         {
             Some("guard")
         } else if harness == "claude"
             && e.ok == Some(false)
-            && (line.starts_with("Error: Permission to use ") && line.contains("denied")
-                || line.starts_with("Auto-mode classifier denied"))
+            && line.starts_with("Error: Permission to use ")
+            && line.contains("denied")
         {
-            Some("classifier")
+            Some("native_denial")
         } else if harness == "pi"
             && leading
             && e.ok == Some(false)

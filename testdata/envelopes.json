@@ -1,0 +1,11 @@
+[
+  {"harness":"codex","ok":false,"source":"hook","output":"Script failed\nWall time: 0.1\nOutput:\nScript error:\nCommand blocked by PreToolUse hook: rg has no --include flag."},
+  {"harness":"codex","ok":true,"output":{"isError":false,"content":[{"type":"text","text":"=== refusal.txt ===\nScript error: Command blocked by PreToolUse hook: rg has no --include flag."}]}},
+  {"harness":"codex","ok":null,"output":"=== refusal.txt ===\nScript failed\nWall time: 0.1\nOutput:\nScript error: Command blocked by PreToolUse hook: rg has no --include flag."},
+  {"harness":"codex","ok":true,"exit_code":0,"output":{"label":"synthetic-check","transport":{"exit_code":0,"output":"Script error: Command blocked by PreToolUse hook: quoted"}}},
+  {"harness":"codex","ok":null,"output":"The example says Exit code: 7 inline."},
+  {"harness":"claude","ok":false,"source":"native_denial","output":"Error: Permission to use Bash denied"},
+  {"harness":"claude","ok":false,"source":"hook","output":"PreToolUse:Bash DENIED: rg has no --include flag."},
+  {"harness":"pi","ok":false,"output":[{"type":"text","text":"ordinary diagnostic"},{"type":"text","text":"rg has no --include flag."}]},
+  {"harness":"pi","ok":false,"output":"rg has no --include flag. The example is \"quoted\"."}
+]

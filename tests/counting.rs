@@ -533,11 +533,11 @@ fn call_outcomes_are_isolated_by_harness() {
 }
 
 #[test]
-fn codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control() {
+fn codex_mcp_transport_error_flag_is_text_evidence_with_content_control() {
     let mut state = State::default();
     let es:Vec<_>=[
         serde_json::json!({"status":"fulfilled","value":{"isError":true,"content":[{"type":"text","text":"synthetic failure"}]}}),
-        serde_json::json!({"status":"fulfilled","value":{"isError":false,"stdout":"Script error: Command blocked by PreToolUse hook: rg has no --include flag."}}),
+        serde_json::json!({"status":"fulfilled","value":{"isError":false,"content":[{"type":"text","text":"=== refusal.txt ===\nScript error: Command blocked by PreToolUse hook: rg has no --include flag."}]}}),
         serde_json::json!({"opaque":"synthetic result"}),
         serde_json::json!([{ "isError":true },{ "isError":false }]),
     ].iter().flat_map(|v|adapters::parse("codex",&serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":v.to_string()}}),&mut state).events).collect();
@@ -555,4 +555,23 @@ fn codex_mcp_transport_error_flag_is_text_evidence_with_stdout_control() {
     );
     assert_eq!(es.iter().filter(|e| e.ok.is_none()).count(), 1);
     assert_eq!(es.iter().flat_map(|e| &e.denials).count(), 0);
+}
+
+#[test]
+fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/envelopes.json")).unwrap();
+    for (i, f) in fixtures.as_array().unwrap().iter().enumerate() {
+        let harness = f["harness"].as_str().unwrap();
+        let mut e = sessidx::model::Event::new("tool", "tool_result", "fixture");
+        if harness != "codex" {
+            e.ok = f["ok"].as_bool();
+        }
+        sessidx::outcomes::classify(&mut e, &f["output"], harness);
+        assert_eq!(e.ok, f["ok"].as_bool(), "fixture {i}");
+        assert_eq!(e.exit_code, f["exit_code"].as_i64(), "fixture {i}");
+        let sources: Vec<_> = e.denials.iter().map(|(s, _)| s.as_str()).collect();
+        let expected: Vec<_> = f["source"].as_str().into_iter().collect();
+        assert_eq!(sources, expected, "fixture {i}");
+    }
 }
