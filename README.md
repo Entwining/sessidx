@@ -6,7 +6,13 @@ The database holds redacted copies of messages, tool inputs, shell argv, and the
 
 ## Install
 
-Requires Rust 1.98 or later and a C compiler for the bundled SQLite (on macOS, the Xcode Command Line Tools). The code uses Unix file APIs; it is developed and tested only on Apple Silicon macOS.
+sessidx is developed and tested only on Apple Silicon macOS.
+
+```sh
+brew install loophubs/tap/sessidx
+```
+
+To build from source instead, you need Rust 1.98 or later and a C compiler for the bundled SQLite (the Xcode Command Line Tools); the code uses Unix file APIs:
 
 ```sh
 cargo install --locked --git https://github.com/LoopHubs/sessidx --root ~/.local
