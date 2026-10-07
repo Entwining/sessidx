@@ -6,7 +6,6 @@ use crate::{
     redaction::{redact, redact_metadata, spaced_cjk},
 };
 use anyhow::{Context, Result};
-use fs2::FileExt;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use std::{
@@ -39,7 +38,9 @@ pub struct Store {
     pub path: PathBuf,
 }
 
-pub struct WriterLock(File);
+pub struct WriterLock {
+    _file: File,
+}
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FileCoverage {
     Ready,
@@ -69,16 +70,11 @@ impl WriterLock {
             .truncate(false)
             .mode(0o600)
             .open(path.with_extension("lock"))?;
-        match f.try_lock_exclusive() {
-            Ok(()) => Ok(Some(Self(f))),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        match f.try_lock() {
+            Ok(()) => Ok(Some(Self { _file: f })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(e) => Err(e.into()),
         }
-    }
-}
-impl Drop for WriterLock {
-    fn drop(&mut self) {
-        let _ = FileExt::unlock(&self.0);
     }
 }
 
