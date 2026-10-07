@@ -237,17 +237,87 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
             .unwrap(),
         2,
     );
-    let rows = stream(
+    let mut final_cursor = String::new();
+    for verb in ["search", "grep", "show"] {
+        let mut args = match verb {
+            "show" => vec!["show", "claude-session"],
+            "grep" => vec!["grep", "sharedneedle", "--harness", "claude"],
+            _ => vec!["search", "sharedneedle"],
+        };
+        args.extend(["--limit", "1"]);
+        let first = stream(&command(&store, &roots, &args).output().unwrap(), 0);
+        let cursor = first.last().unwrap()["next"].as_str().unwrap().to_owned();
+        *args.last_mut().unwrap() = "1000";
+        args.extend(["--cursor", &cursor]);
+        let expected = stream(&command(&store, &roots, &args).output().unwrap(), 0);
+        let root = if verb == "search" {
+            roots
+                .iter()
+                .find(|r| r.harness == expected[0]["harness"])
+                .unwrap()
+        } else {
+            &roots[0]
+        };
+        let id = format!("added-{verb}");
+        let record = match root.harness.as_str() {
+            "claude" => {
+                json!({"type":"user","uuid":id,"sessionId":"claude-session","timestamp":"2030-01-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}})
+            }
+            "codex" => {
+                json!({"type":"response_item","timestamp":"2030-01-01T00:00:00Z","payload":{"type":"message","id":id,"role":"user","content":[{"type":"input_text","text":"sharedneedle"}]}})
+            }
+            _ => {
+                json!({"type":"message","id":id,"timestamp":"2030-01-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}})
+            }
+        };
+        let mut data = fs::read_to_string(&root.path).unwrap();
+        data.push_str(&format!("{record}\n"));
+        fs::write(&root.path, data).unwrap();
+        let appended = stream(&command(&store, &roots, &args).output().unwrap(), 0);
+        assert_eq!(
+            &appended[..appended.len() - 1],
+            &expected[..expected.len() - 1]
+        );
+        final_cursor = cursor;
+    }
+    fs::write(&roots[0].path, "{\"type\":\"user\",\"uuid\":\"replacement\",\"sessionId\":\"claude-session\",\"message\":{\"role\":\"user\",\"content\":\"sharedneedle\"}}\n").unwrap();
+    let invalid = stream(
+        &command(
+            &store,
+            &roots,
+            &[
+                "show",
+                "claude-session",
+                "--limit",
+                "1",
+                "--cursor",
+                &final_cursor,
+            ],
+        )
+        .output()
+        .unwrap(),
+        2,
+    );
+    assert!(
+        invalid[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("restart without --cursor")
+    );
+    let fresh = stream(
         &command(&store, &roots, &["search", "sharedneedle", "--limit", "1"])
             .output()
             .unwrap(),
         0,
     );
-    let cursor = rows.last().unwrap()["next"].as_str().unwrap();
-    let mut data = fs::read_to_string(&roots[0].path).unwrap();
-    data.push_str("{\"type\":\"user\",\"uuid\":\"added\",\"sessionId\":\"claude-session\",\"message\":{\"role\":\"user\",\"content\":\"sharedneedle\"}}\n");
-    fs::write(&roots[0].path, data).unwrap();
-    let invalid = stream(
+    let cursor = fresh.last().unwrap()["next"].as_str().unwrap();
+    stream(
+        &command(&store, &roots, &["index", "--full"])
+            .output()
+            .unwrap(),
+        0,
+    );
+    let rebuilt = stream(
         &command(
             &store,
             &roots,
@@ -258,10 +328,10 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
         2,
     );
     assert!(
-        invalid[0]["error"]
+        rebuilt[0]["error"]
             .as_str()
             .unwrap()
-            .contains("index version")
+            .contains("restart without --cursor")
     );
 }
 
@@ -301,4 +371,71 @@ fn cli_writer_contention_returns_stale_without_waiting() {
     );
     assert_eq!(rows.last().unwrap()["stale"], true);
     assert_eq!(rows.last().unwrap()["complete"], false);
+}
+
+#[test]
+fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
+    let (dir, store, mut roots) = fixture();
+    for (name, text, year) in [
+        ("rank-a", "alpha alpha alpha alpha beta", 2030),
+        ("rank-b", "alpha beta beta beta beta", 2029),
+    ] {
+        let path = dir.path().join(format!("{name}.jsonl"));
+        fs::write(&path, format!("{}\n", json!({"type":"message","id":name,"timestamp":format!("{year}-01-01T00:00:00Z"),"message":{"role":"user","content":text}}))).unwrap();
+        roots.push(Root {
+            harness: "pi".into(),
+            path,
+        });
+    }
+    let first = stream(
+        &command(&store, &roots, &["search", "alpha beta", "--limit", "1"])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert_eq!(first[0]["session_id"], "rank-a");
+    let cursor = first.last().unwrap()["next"].as_str().unwrap();
+    let mut data = fs::read_to_string(&roots[0].path).unwrap();
+    for i in 0..100 {
+        data.push_str(&format!("{}\n",json!({"type":"user","uuid":format!("idf-{i}"),"sessionId":"claude-session","message":{"role":"user","content":"alpha"}})));
+    }
+    fs::write(&roots[0].path, data).unwrap();
+    let second = stream(
+        &command(
+            &store,
+            &roots,
+            &["search", "alpha beta", "--limit", "1", "--cursor", cursor],
+        )
+        .output()
+        .unwrap(),
+        0,
+    );
+    assert_eq!(second[0]["session_id"], "rank-b");
+    let fresh = stream(
+        &command(&store, &roots, &["search", "alpha beta", "--limit", "1"])
+            .output()
+            .unwrap(),
+        0,
+    );
+    assert_eq!(fresh[0]["session_id"], "rank-b");
+    let newer = dir.path().join("newer.jsonl");
+    fs::write(&newer,"{\"type\":\"message\",\"id\":\"newer\",\"message\":{\"role\":\"user\",\"content\":\"ordinary\"}}\n").unwrap();
+    roots.push(Root {
+        harness: "pi".into(),
+        path: newer.clone(),
+    });
+    stream(&command(&store, &roots, &["index"]).output().unwrap(), 0);
+    fs::write(newer,"{\"type\":\"message\",\"id\":\"replaced-newer\",\"message\":{\"role\":\"user\",\"content\":\"different\"}}\n").unwrap();
+    let valid = stream(
+        &command(
+            &store,
+            &roots,
+            &["search", "alpha beta", "--limit", "1", "--cursor", cursor],
+        )
+        .output()
+        .unwrap(),
+        0,
+    );
+    assert_eq!(valid[0]["session_id"], "rank-b");
 }

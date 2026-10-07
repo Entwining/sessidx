@@ -1,12 +1,4 @@
 -- Source files are the authority; byte ranges include the complete JSONL newline.
-CREATE TABLE IF NOT EXISTS index_identity (
- id INTEGER PRIMARY KEY CHECK(id=1), instance TEXT NOT NULL
-);
-INSERT INTO index_identity SELECT 1,lower(hex(randomblob(16))) WHERE NOT EXISTS(SELECT 1 FROM index_identity);
--- Replacement/deletion records invalidate only snapshots containing the changed locations.
-CREATE TABLE IF NOT EXISTS index_changes (
- id INTEGER PRIMARY KEY AUTOINCREMENT, first_event_id INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS files (
  id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, harness TEXT NOT NULL,
  dev INTEGER NOT NULL, inode INTEGER NOT NULL, size INTEGER NOT NULL, mtime TEXT NOT NULL,
@@ -30,7 +22,7 @@ CREATE TABLE IF NOT EXISTS strings (
 -- Every indexed event needs a range for show/grep, identity for dedup and filter metadata.
 -- Context records have only this row: their constant role/kind/outcome fields are derived.
 CREATE TABLE IF NOT EXISTS locations (
- id INTEGER PRIMARY KEY AUTOINCREMENT, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+ id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
  session_ref INTEGER NOT NULL REFERENCES strings(id), native_id BLOB,
  line_no INTEGER NOT NULL, byte_off INTEGER NOT NULL, byte_len INTEGER NOT NULL,
  raw_hash BLOB NOT NULL CHECK(length(raw_hash)=32), ordinal INTEGER NOT NULL, ts TEXT,
@@ -104,4 +96,4 @@ CREATE VIEW IF NOT EXISTS call_outcomes AS
       WHEN sum(ok_source='flag')>0 THEN 'flag'
       WHEN sum(ok_source='text')>0 THEN 'text' ELSE 'none' END AS ok_source
  FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id;
-PRAGMA user_version=4;
+PRAGMA user_version=3;

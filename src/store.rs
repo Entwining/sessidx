@@ -18,7 +18,7 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -152,6 +152,9 @@ impl Store {
         }
         if full && version != 0 {
             let tx = self.db.transaction()?;
+            if version >= 4 {
+                tx.execute("INSERT INTO index_changes(first_event_id) VALUES (0)", [])?;
+            }
             tx.execute_batch("DROP VIEW call_outcomes; DROP VIEW canonical_events; DROP TABLE commands; DROP TABLE denials;")?;
             if version == 1 {
                 tx.execute_batch("DROP TABLE events;")?;
@@ -201,7 +204,9 @@ impl Store {
                 .any(|r| r.path.exists() && Path::new(&path).starts_with(&r.path))
                 && !discovered.contains(Path::new(&path))
             {
-                self.db.execute("DELETE FROM files WHERE id=?", [id])?;
+                let tx = self.db.transaction()?;
+                delete_file(&tx, id)?;
+                tx.commit()?;
             }
         }
         for (harness, path) in files {
@@ -306,7 +311,7 @@ impl Store {
         let tx = self.db.transaction()?;
         if !append {
             if let Some(ref o) = old {
-                tx.execute("DELETE FROM files WHERE id=?", [o.0])?;
+                delete_file(&tx, o.0)?;
             }
         }
         tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
@@ -413,6 +418,12 @@ impl Store {
         self.index_file(harness, path, None, Some(size))?;
         Ok(())
     }
+}
+
+fn delete_file(tx: &Transaction<'_>, id: i64) -> Result<()> {
+    tx.execute("INSERT INTO index_changes(first_event_id) SELECT min(id) FROM locations WHERE file_id=? HAVING count(*)>0", [id])?;
+    tx.execute("DELETE FROM files WHERE id=?", [id])?;
+    Ok(())
 }
 
 fn intern(tx: &Transaction<'_>, values: &mut HashMap<String, i64>, value: &str) -> Result<i64> {

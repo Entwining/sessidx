@@ -218,6 +218,7 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
                 since: Some("2026-10-01".into()),
                 until: Some("2026-10-02".into()),
                 cwd: Some("/synthetic".into()),
+                ..Filters::default()
             };
             assert_eq!(
                 counting::count(&store.db, metric, "", Some("rg"), &filters).unwrap(),

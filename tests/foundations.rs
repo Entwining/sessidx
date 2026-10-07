@@ -197,25 +197,29 @@ fn previous_schema_requires_explicit_locked_rebuild() {
 #[test]
 fn previous_compact_schema_rebuilds_without_reading_new_columns() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("old-compact.db");
-    let old = rusqlite::Connection::open(&path).unwrap();
-    old.execute_batch(include_str!("../testdata/schema-v2.sql"))
-        .unwrap();
-    assert!(Store::open(&path).is_err());
-    assert!(Store::require_schema(&old).is_err());
-    let mut upgrade = Store::open_for_rebuild(&path).unwrap();
-    upgrade.refresh(&[], true, None).unwrap();
-    Store::require_schema(&upgrade.db).unwrap();
-    let n: i64 = upgrade
-        .db
-        .query_row(
-            "SELECT count(*) FROM events WHERE text_truncated=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(n, 0);
+    for schema in [
+        include_str!("../testdata/schema-v2.sql"),
+        include_str!("../testdata/schema-v3.sql"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old-compact.db");
+        let old = rusqlite::Connection::open(&path).unwrap();
+        old.execute_batch(schema).unwrap();
+        assert!(Store::open(&path).is_err());
+        assert!(Store::require_schema(&old).is_err());
+        let mut upgrade = Store::open_for_rebuild(&path).unwrap();
+        upgrade.refresh(&[], true, None).unwrap();
+        Store::require_schema(&upgrade.db).unwrap();
+        let n: i64 = upgrade
+            .db
+            .query_row(
+                "SELECT count(*) FROM events WHERE text_truncated=1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+    }
 }
 
 #[test]

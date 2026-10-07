@@ -92,6 +92,10 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `grep_sqlite_deadline` | `tests/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | The first SQLite step can exhaust grep coverage before returning a row; a progress handler must interrupt it and preserve the continuation. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
 | `sql_duplicate_columns` | `tests/counting.rs` | SQL object output cannot preserve duplicate or redaction-colliding names; require unique aliases instead of overwriting columns. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
 | `sql_writer_coverage` | `tests/cli.rs` | SQL must mark cached reads incomplete/stale while the writer lock covers a rebuild. | `cli_writer_contention_returns_stale_without_waiting` |
+| `cursor_high_water` | `tests/cli.rs::cli_streams_end_coverage_and_query_bound_cursors` | Later pages must exclude records added above the first page event high-water mark. | `cli_streams_end_coverage_and_query_bound_cursors` |
+| `cursor_invalidation` | `tests/cli.rs::cli_streams_end_coverage_and_query_bound_cursors` | File replacement/deletion records the first removed event, invalidating only cursors whose high-water mark includes it. | `cli_streams_end_coverage_and_query_bound_cursors` |
+| `cursor_rebuild` | `tests/cli.rs::cli_streams_end_coverage_and_query_bound_cursors` | Full rebuild records a zero-boundary invalidation before replacing indexed events. | `cli_streams_end_coverage_and_query_bound_cursors` |
+| `cursor_search_order` | `tests/cli.rs::search_cursor_freezes_order_when_append_changes_fts_statistics` | Appends change global FTS statistics even below a row watermark; preserve the first request session order in its cursor. | `search_cursor_freezes_order_when_append_changes_fts_statistics` |
 
 ## Codex output variants
 

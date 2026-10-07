@@ -58,6 +58,12 @@ pub struct Filters {
     /// Native session ID or session file path
     #[arg(long)]
     pub session: Option<String>,
+    #[arg(skip)]
+    #[serde(skip)]
+    pub high_water: Option<i64>,
+    #[arg(skip)]
+    #[serde(skip)]
+    pub search_order: Option<String>,
 }
 
 impl Filters {
@@ -72,6 +78,10 @@ impl Filters {
     pub fn sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
         let mut conditions = vec!["1=1".to_owned()];
         let mut args = Vec::new();
+        if let Some(high_water) = self.high_water {
+            conditions.push("e.id<=?".into());
+            args.push(Value::Integer(high_water));
+        }
         if !self.harness.is_empty() {
             conditions.push(format!(
                 "f.harness IN ({})",
@@ -228,6 +238,8 @@ pub struct Session {
     pub ts: Option<String>,
     pub matched_hits: usize,
     pub hits: Vec<Hit>,
+    #[serde(skip)]
+    pub search_order: Option<String>,
 }
 
 pub fn search(
@@ -239,6 +251,13 @@ pub fn search(
 ) -> Result<Vec<Session>> {
     let (clause, mut args) = filters.sql(db)?;
     args.push(Value::Text(fts_query(query)?));
+    args.push(
+        filters
+            .search_order
+            .clone()
+            .map(Value::Text)
+            .unwrap_or(Value::Null),
+    );
     args.push(Value::Integer(limit as i64));
     args.push(Value::Integer(offset as i64));
     // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
@@ -246,21 +265,33 @@ pub fn search(
         "WITH matches AS MATERIALIZED (
           SELECT f.harness,e.session_id,e.id,e.ts,bm25(fts) AS score {FROM}
           JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ?
-        ), heads AS MATERIALIZED (
+        ), ordering AS MATERIALIZED (SELECT ? AS ranks), all_heads AS MATERIALIZED (
           SELECT harness,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n
           FROM matches GROUP BY harness,session_id
-          ORDER BY score,ts DESC,harness,session_id LIMIT ? OFFSET ?
+        ), ordered_heads AS MATERIALIZED (
+          SELECT h.*,j.key AS position FROM ordering CROSS JOIN json_each(ordering.ranks) j
+          JOIN all_heads h ON j.value ->> '$[0]'=h.harness AND j.value ->> '$[1]'=h.session_id
+          UNION ALL SELECT h.*,0 AS position FROM all_heads h CROSS JOIN ordering WHERE ordering.ranks IS NULL
+        ), heads AS MATERIALIZED (
+          SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,harness,session_id LIMIT ? OFFSET ?
         ), ranked AS (
           SELECT m.id,row_number() OVER (
             PARTITION BY m.harness,m.session_id ORDER BY m.score,m.ts DESC,m.id DESC
           ) AS n FROM matches m JOIN heads h USING(harness,session_id)
         )
-        SELECT {COLUMNS},h.ts,h.n {FROM}
+        SELECT {COLUMNS},h.ts,h.n,
+          CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(json_array(harness,session_id))
+            FROM (SELECT harness,session_id FROM all_heads ORDER BY score,ts DESC,harness,session_id)) END
+        {FROM} CROSS JOIN ordering
         JOIN ranked r ON r.id=e.id JOIN heads h ON h.harness=f.harness AND h.session_id=e.session_id
-        WHERE r.n<=3 ORDER BY h.score,h.ts DESC,h.harness,h.session_id,r.n"
+        WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.harness,h.session_id,r.n"
     );
     let mut stmt = db.prepare(&sql)?;
+    let mut search_order = None;
     let rows = stmt.query_map(params_from_iter(args), |r| {
+        if search_order.is_none() && filters.search_order.is_none() {
+            search_order = r.get(14)?;
+        }
         Ok((
             hit(r)?,
             r.get::<_, Option<String>>(12)?,
@@ -281,9 +312,13 @@ pub fn search(
                 ts,
                 matched_hits,
                 hits: Vec::new(),
+                search_order: None,
             });
         }
         sessions.last_mut().unwrap().hits.push(hit);
+    }
+    if let Some(first) = sessions.first_mut() {
+        first.search_order = search_order;
     }
     Ok(sessions)
 }
@@ -403,6 +438,17 @@ pub fn show(
     limit: usize,
     after: i64,
 ) -> Result<(Vec<Hit>, Coverage)> {
+    show_snapshot(db, target, around, limit, after, i64::MAX)
+}
+
+pub fn show_snapshot(
+    db: &Connection,
+    target: &str,
+    around: usize,
+    limit: usize,
+    after: i64,
+    high_water: i64,
+) -> Result<(Vec<Hit>, Coverage)> {
     let mut args = Vec::new();
     let clause = if let Some((path, line)) = target
         .rsplit_once(':')
@@ -425,8 +471,11 @@ pub fn show(
         "e.session_id=?"
     };
     args.push(Value::Integer(after));
+    args.push(Value::Integer(high_water));
     args.push(Value::Integer((limit + 1) as i64));
-    let sql = format!("SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? ORDER BY e.id LIMIT ?");
+    let sql = format!(
+        "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.id<=? ORDER BY e.id LIMIT ?"
+    );
     let mut hits = db
         .prepare(&sql)?
         .query_map(params_from_iter(args), hit)?

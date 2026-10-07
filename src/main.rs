@@ -92,56 +92,72 @@ enum Command {
     Doctor,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Cursor {
     version: u8,
     scope: String,
     position: i64,
+    high_water: i64,
+    revision: i64,
+    search_order: Option<String>,
 }
 
 fn scope(db: &rusqlite::Connection, request: &Value) -> Result<String> {
     let mut hash = Sha256::new();
     hash.update(serde_json::to_vec(request)?);
-    // Refresh can change ordering or replace event IDs; a cursor cannot cross that boundary.
-    let mut stmt =
-        db.prepare("SELECT id,path,dev,inode,size,mtime,bytes_indexed FROM files ORDER BY id")?;
-    let rows = stmt.query_map([], |r| {
-        Ok((
-            r.get::<_, i64>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, i64>(2)?,
-            r.get::<_, i64>(3)?,
-            r.get::<_, i64>(4)?,
-            r.get::<_, String>(5)?,
-            r.get::<_, i64>(6)?,
-        ))
-    })?;
-    for row in rows {
-        hash.update(serde_json::to_vec(&row?)?);
-    }
+    let instance: String =
+        db.query_row("SELECT instance FROM index_identity WHERE id=1", [], |r| {
+            r.get(0)
+        })?;
+    hash.update(instance);
     Ok(format!("{:x}", hash.finalize()))
 }
 
-fn position(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) -> Result<i64> {
-    let Some(cursor) = cursor else { return Ok(0) };
+fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) -> Result<Cursor> {
+    let revision: i64 = db.query_row("SELECT coalesce(max(id),0) FROM index_changes", [], |r| {
+        r.get(0)
+    })?;
+    let Some(cursor) = cursor else {
+        return Ok(Cursor {
+            version: 2,
+            scope: scope(db, request)?,
+            position: 0,
+            high_water: db.query_row("SELECT coalesce(max(id),0) FROM locations", [], |r| {
+                r.get(0)
+            })?,
+            revision,
+            search_order: None,
+        });
+    };
     let cursor: Cursor = serde_json::from_str(cursor)
         .context("invalid cursor; restart the query without --cursor")?;
+    let changed: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM index_changes WHERE id>? AND first_event_id<=?)",
+        [cursor.revision, cursor.high_water],
+        |r| r.get(0),
+    )?;
     anyhow::ensure!(
-        cursor.version == 1 && cursor.position >= 0 && cursor.scope == scope(db, request)?,
+        cursor.version == 2
+            && cursor.position >= 0
+            && cursor.high_water >= 0
+            && cursor.revision <= revision
+            && cursor.revision >= 0
+            && cursor.scope == scope(db, request)?
+            && !changed,
         "cursor belongs to another query or index version; restart without --cursor"
     );
-    Ok(cursor.position)
+    Ok(cursor)
 }
 
-fn next(db: &rusqlite::Connection, pos: Option<i64>, request: &Value) -> Result<Option<String>> {
-    pos.map(|position| {
-        Ok(serde_json::to_string(&Cursor {
-            version: 1,
-            scope: scope(db, request)?,
-            position,
-        })?)
-    })
-    .transpose()
+fn next(snapshot: &Cursor, position: Option<i64>) -> Result<Option<String>> {
+    position
+        .map(|position| {
+            Ok(serde_json::to_string(&Cursor {
+                position,
+                ..snapshot.clone()
+            })?)
+        })
+        .transpose()
 }
 
 fn emit(kind: &str, value: Value) -> Result<()> {
@@ -250,25 +266,27 @@ fn run(cli: Cli) -> Result<i32> {
     match cli.command {
         Command::Search {
             query,
-            filters,
+            mut filters,
             page,
         } => {
             anyhow::ensure!((1..=1000).contains(&page.limit), "--limit must be 1..1000");
             let request = json!(["search_sessions", path, query, filters]);
-            let offset = position(&db, page.cursor.as_deref(), &request)?;
+            let mut snapshot = snapshot(&db, page.cursor.as_deref(), &request)?;
+            let offset = snapshot.position;
+            filters.high_water = Some(snapshot.high_water);
+            filters.search_order = snapshot.search_order.clone();
             let mut sessions =
                 query::search(&db, &query, &filters, page.limit + 1, offset as usize)?;
+            if snapshot.search_order.is_none() {
+                snapshot.search_order = sessions.first_mut().and_then(|s| s.search_order.take());
+            }
             let records = sessions.iter().map(|s| s.hits.len()).sum();
             let more = sessions.len() > page.limit;
             sessions.truncate(page.limit);
             for session in &sessions {
                 emit("session", serde_json::to_value(session)?)?;
             }
-            let cursor = next(
-                &db,
-                more.then_some(offset + sessions.len() as i64),
-                &request,
-            )?;
+            let cursor = next(&snapshot, more.then_some(offset + sessions.len() as i64))?;
             end(
                 Some(&refresh),
                 &Coverage {
@@ -284,12 +302,14 @@ fn run(cli: Cli) -> Result<i32> {
         }
         Command::Grep {
             pattern,
-            filters,
+            mut filters,
             page,
         } => {
             anyhow::ensure!((1..=1000).contains(&page.limit), "--limit must be 1..1000");
             let request = json!(["grep", path, pattern, filters]);
-            let after = position(&db, page.cursor.as_deref(), &request)?;
+            let snapshot = snapshot(&db, page.cursor.as_deref(), &request)?;
+            let after = snapshot.position;
+            filters.high_water = Some(snapshot.high_water);
             let (hits, coverage) = query::scan(
                 &db,
                 &pattern,
@@ -304,7 +324,7 @@ fn run(cli: Cli) -> Result<i32> {
             end(
                 Some(&refresh),
                 &coverage,
-                next(&db, coverage.continuation, &request)?,
+                next(&snapshot, coverage.continuation)?,
                 "source_ranges",
                 hits.len(),
             )?;
@@ -318,8 +338,10 @@ fn run(cli: Cli) -> Result<i32> {
         } => {
             anyhow::ensure!((1..=1000).contains(&limit), "--limit must be 1..1000");
             let request = json!(["show", path, target, around]);
-            let after = position(&db, cursor.as_deref(), &request)?;
-            let (hits, coverage) = query::show(&db, &target, around, limit, after)?;
+            let snapshot = snapshot(&db, cursor.as_deref(), &request)?;
+            let after = snapshot.position;
+            let (hits, coverage) =
+                query::show_snapshot(&db, &target, around, limit, after, snapshot.high_water)?;
             for hit in &hits {
                 let mut value = serde_json::to_value(hit)?;
                 let obj = value.as_object_mut().unwrap();
@@ -330,7 +352,7 @@ fn run(cli: Cli) -> Result<i32> {
             end(
                 Some(&refresh),
                 &coverage,
-                next(&db, coverage.continuation, &request)?,
+                next(&snapshot, coverage.continuation)?,
                 "source_ranges",
                 hits.len(),
             )?;

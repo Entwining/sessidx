@@ -114,6 +114,12 @@ rows.extend([
     ('sql_duplicate_columns', 'src/counting.rs', 'names.iter().collect::<std::collections::HashSet<_>>().len() == names.len()', 'true', 'counts_state_units_denominators_unknowns_and_sql_is_read_only', 'codex_context_arguments_and_telemetry'),
     ('sql_writer_coverage', 'src/main.rs', 'let _read_lock = Store::read_lock(&path)?;', 'let _read_lock = Some(std::fs::File::open(path.with_extension("lock"))?);', 'cli_writer_contention_returns_stale_without_waiting', 'codex_context_arguments_and_telemetry'),
 ])
+rows.extend([
+    ('cursor_high_water', 'src/query.rs', 'if let Some(high_water) = self.high_water', 'if let Some(high_water) = None::<i64>', 'cli_streams_end_coverage_and_query_bound_cursors', 'codex_context_arguments_and_telemetry'),
+    ('cursor_invalidation', 'src/store.rs', 'HAVING count(*)>0', 'HAVING 0', 'cli_streams_end_coverage_and_query_bound_cursors', 'codex_context_arguments_and_telemetry'),
+    ('cursor_rebuild', 'src/store.rs', 'if version >= 4 {', 'if false {', 'cli_streams_end_coverage_and_query_bound_cursors', 'codex_context_arguments_and_telemetry'),
+    ('cursor_search_order', 'src/query.rs', 'ordering AS MATERIALIZED (SELECT ? AS ranks)', 'ordering AS MATERIALIZED (SELECT CASE WHEN ? IS NULL THEN NULL ELSE NULL END AS ranks)', 'search_cursor_freezes_order_when_append_changes_fts_statistics', 'codex_context_arguments_and_telemetry'),
+])
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]
