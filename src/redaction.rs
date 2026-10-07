@@ -68,6 +68,7 @@ pub fn redact(text: &str) -> String {
             if let Some((path, number)) = location.rsplit_once(':')
                 && !number.is_empty()
                 && number.bytes().all(|b| b.is_ascii_digit())
+                && path.contains(['/', '.'])
             {
                 location = path;
             } else {

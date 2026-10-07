@@ -512,6 +512,8 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "src/redaction.rs:83",
         "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:83",
         "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:12:5",
+        "order:9182736455647382",
+        "aBcDeFgHiJkLmNoP:42",
     ] {
         assert!(
             !context[0].snippet.contains(value),
