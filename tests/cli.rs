@@ -390,6 +390,27 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
 }
 
 #[test]
+fn a_closed_stdout_ends_quietly() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
+    let (_dir, store, roots) = fixture();
+    // Output larger than the pipe buffer forces a write after the reader is gone.
+    let query = "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<5000) SELECT i, printf('%040d', i) AS pad FROM n";
+    let mut child = command(&store, &roots, &["sql", query])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn cli_writer_contention_returns_stale_without_waiting() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, roots) = fixture();

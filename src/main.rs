@@ -10,7 +10,11 @@ use sessidx::{
     store::{Refresh, Store},
 };
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, time::Duration};
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+    time::Duration,
+};
 
 #[derive(Parser)]
 #[command(
@@ -166,7 +170,7 @@ fn emit(kind: &str, value: Value) -> Result<()> {
         .as_object_mut()
         .context("output record must be an object")?
         .insert("type".into(), json!(kind));
-    println!("{}", serde_json::to_string(&value)?);
+    writeln!(io::stdout().lock(), "{}", serde_json::to_string(&value)?)?;
     Ok(())
 }
 
@@ -395,29 +399,39 @@ fn run(cli: Cli) -> Result<i32> {
     }
 }
 
-fn fail(message: &str) {
-    println!(
+fn fail(message: &str) -> io::Result<()> {
+    writeln!(
+        io::stdout().lock(),
         "{}",
         json!({"type":"end","complete":false,"stale":null,"next":null,"searched":{"unit":null,"records":0,"bytes":0,"returned":0},"error":redact(message)})
-    );
+    )
+}
+
+/// A reader that stops early (`| head`) is not an error, as in other filters.
+fn closed_stdout(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        c.downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
+    })
 }
 
 fn main() {
     let code = match Cli::try_parse() {
         Ok(cli) => match run(cli) {
             Ok(code) => code,
+            Err(e) if closed_stdout(&e) => 0,
             Err(e) => {
-                fail(&format!("{e:#}"));
+                let _ = fail(&format!("{e:#}"));
                 2
             }
         },
         Err(e) => {
             let code = e.exit_code();
-            if code == 0 {
-                print!("{e}");
+            let _ = if code == 0 {
+                write!(io::stdout().lock(), "{e}")
             } else {
-                fail(&e.to_string());
-            }
+                fail(&e.to_string())
+            };
             code
         }
     };
