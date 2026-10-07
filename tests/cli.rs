@@ -115,7 +115,12 @@ fn sql_without_an_index_names_the_build_command() {
         .output()
         .unwrap();
     let rows = stream(&out, 2);
-    assert!(rows[0]["error"].as_str().unwrap().contains("run sessidx index"));
+    assert!(
+        rows[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("run sessidx index")
+    );
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
 }
 

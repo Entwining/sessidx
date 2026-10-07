@@ -43,9 +43,10 @@ The consumer is usually an agent with a shell, so the ordinary path must be one 
 
 - The repository is public, and logs contain credentials and private context. Never copy real log content into the repository, fixtures, tests, docs, or commit messages: that includes session IDs, paths, project names, and quoted fragments, not only whole lines. A real session UUID once entered a test as a sample identifier and had to be rewritten out of history. Fixtures are synthetic records shaped like an observed variant; cite real evidence outside the repository by `path:line` and its kind only.
 - Never point a development build at the default database `~/.cache/sessidx/index.db`. Use `--db` with a scratch path and `--root HARNESS=PATH`.
-- Run `cargo test`, and `scripts/ablate.py` after rule changes, never concurrently with edits or builds.
+- Run `cargo fmt`, `cargo test`, and `scripts/ablate.py` after rule changes, never concurrently with edits or builds. CI rejects unformatted code, and ablation anchors are exact source text, so write each anchor against the formatted source.
 - Passing `cargo test` is not real-corpus acceptance. That gate references private sessions, so it exists only on the maintainer's machine in `~/.local/share/sessidx-eval/` (its `README.md` lists the scripts and their inputs): frozen lookup replay, full-build measurement, independent gold counts, the output-prefix check, the code-mode comparison, and the leak scan. The release targets are warm lookup p95 within 2 s and indexing RSS within 512 MiB, measured on a full build on an otherwise idle machine; a contended run is not a measurement.
 - Corpus scans read only the three session roots, with `rg -j 2` or at most two concurrent readers.
+- Releases are tag-driven. Bump `version` in `Cargo.toml`, add `docs/releases/VERSION.md` (the publish workflow refuses a tag without it), and push a signed `vVERSION` tag; the workflow reruns the checks, creates the GitHub Release, and asks `LoopHubs/homebrew-tap` to update its formula.
 
 ## Environment traps
 
