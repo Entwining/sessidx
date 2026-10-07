@@ -1,0 +1,191 @@
+[
+  {
+    "name": "double",
+    "source": "await tools.exec_command({cmd: \"rg a src; printf 'literal'\", max_output_tokens: 1});",
+    "programs": [
+      "rg",
+      "printf"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "single",
+    "source": "tools.exec_command({cmd: 'printf \\'literal\\'; rg b'});",
+    "programs": [
+      "printf",
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "template",
+    "source": "tools.exec_command({cmd: `rg a\r\nprintf x`});",
+    "programs": [
+      "rg",
+      "printf"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "interpolated",
+    "source": "tools.exec_command({cmd: `rg ${term}`});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "variable",
+    "source": "tools.exec_command({cmd});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "non_object",
+    "source": "tools.exec_command(params);",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "multiple",
+    "source": "await Promise.all([tools.exec_command({cmd:\"rg one\"}),tools.exec_command({cmd:'cat file'}),tools.exec_command({cmd: variable}),tools.shell_command(other)]);",
+    "programs": [
+      "rg",
+      "cat"
+    ],
+    "unparsed": 1
+  },
+  {
+    "name": "escapes",
+    "source": "tools.exec_command({\"cmd\": \"\\x72\\u0067 'word'\\\n src\"});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0,
+    "argv": [
+      [
+        "rg",
+        "'word'",
+        "src"
+      ]
+    ]
+  },
+  {
+    "name": "surrogate_pair",
+    "source": "tools.exec_command({cmd: \"printf '\\uD83D\\uDE00'\"});",
+    "programs": [
+      "printf"
+    ],
+    "unparsed": 0,
+    "argv": [
+      [
+        "printf",
+        "'😀'"
+      ]
+    ]
+  },
+  {
+    "name": "code_point",
+    "source": "tools.exec_command({cmd: \"printf '\\u{1F600}'\"});",
+    "programs": [
+      "printf"
+    ],
+    "unparsed": 0,
+    "argv": [
+      [
+        "printf",
+        "'😀'"
+      ]
+    ]
+  },
+  {
+    "name": "invalid_escape",
+    "source": "tools.exec_command({cmd: \"\\xZZ\"});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "lone_surrogate",
+    "source": "tools.exec_command({cmd: \"printf '\\uD800'\"});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "duplicate",
+    "source": "tools.exec_command({cmd: \"rg one\",cmd:\"cat other\"});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "spread",
+    "source": "tools.exec_command({cmd: \"rg one\",...params});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "computed",
+    "source": "tools.exec_command({cmd: \"rg one\", [key]: \"cat other\"});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "concatenation",
+    "source": "tools.exec_command({cmd: \"rg \" + term});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "nested_metadata",
+    "source": "tools.exec_command({meta:{cmd:\"grep fake\"},cmd:\"rg real\"});",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "quoted_control",
+    "source": "const quoted=\"tools.exec_command({cmd:'rg fake'})\"; /* tools.exec_command({cmd:\"cat fake\"}) */\nconst re=/tools.exec_command/;",
+    "programs": [],
+    "unparsed": 0
+  },
+  {
+    "name": "escaped_interpolation",
+    "source": "tools.exec_command({cmd: `printf \"\\${term}\"`});",
+    "programs": [
+      "printf"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "nested_template",
+    "source": "tools.exec_command({cmd: `rg ${`inner ${value}`}`});",
+    "programs": [],
+    "unparsed": 1
+  },
+  {
+    "name": "brace_surrogate_pair",
+    "source": "tools.exec_command({cmd: \"printf '\\u{D83D}\\u{DE00}'\"});",
+    "programs": [
+      "printf"
+    ],
+    "unparsed": 0,
+    "argv": [
+      [
+        "printf",
+        "'😀'"
+      ]
+    ]
+  },
+  {
+    "name": "trailing_comma",
+    "source": "tools.exec_command({cmd:\"rg real\",},);",
+    "programs": [
+      "rg"
+    ],
+    "unparsed": 0
+  },
+  {
+    "name": "nested_receiver",
+    "source": "other.tools.exec_command({cmd:\"rg fake\"});",
+    "programs": [],
+    "unparsed": 1
+  }
+]

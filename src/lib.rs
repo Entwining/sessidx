@@ -21,6 +21,7 @@ mod tests {
     }
 }
 pub mod adapters;
+mod code_mode;
 pub mod counting;
 pub mod discovery;
 pub mod model;

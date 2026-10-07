@@ -101,6 +101,13 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `credential_name_suffix` | `testdata/credential-context.json` | Text assignments and JSON fields share credential-name recognition, including names ending in private_key, auth, sig, signature or bearer. | `synthetic_secret_canaries_absent_from_storage_and_lookup_outputs` |
 | `url_identifier` | `testdata/credential-context.json` | Public URL shapes must remain searchable when the broad entropy candidate includes their punctuation. | `synthetic_secret_canaries_absent_from_storage_and_lookup_outputs` |
 | `email_identifier` | `testdata/credential-context.json` | Public email shapes must remain searchable when the broad entropy candidate includes their punctuation. | `synthetic_secret_canaries_absent_from_storage_and_lookup_outputs` |
+| `code_mode_literals` | `testdata/code-mode.json` | Codex exec wrapper calls with literal cmd strings contain recoverable shell sources attached to the native wrapper call. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_opaque` | `testdata/code-mode.json` | Variables, interpolated templates and unsupported argument shapes retain one opaque unparsed site per wrapper. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_escape` | `testdata/code-mode.json` | JavaScript quote, hexadecimal, Unicode and line-continuation escapes must decode before Brush sees the shell source. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_template` | `testdata/code-mode.json` | Template interpolation prevents exact static reconstruction; escaped interpolation markers remain literal text. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_duplicate` | `testdata/code-mode.json` | Duplicate cmd fields cannot be counted as multiple shell sources or guessed from their first value. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_quoted_control` | `testdata/code-mode.json` | Quoted JavaScript examples and comments do not create tool-call sites. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_regex_control` | `testdata/code-mode.json` | Regular-expression literals containing tool names are data, not tool-call sites. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
 
 ## Codex output variants
 

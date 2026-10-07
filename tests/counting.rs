@@ -677,3 +677,43 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         [("permission_rule".into(), "unknown".into())]
     );
 }
+
+#[test]
+fn codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/code-mode.json")).unwrap();
+    for f in fixtures.as_array().unwrap() {
+        let r = adapters::parse(
+            "codex",
+            &serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"wrapper","input":f["source"]}}),
+            &mut State::default(),
+        );
+        let sites = &r.events[0].sites;
+        let mut programs: Vec<_> = sites.iter().filter_map(|s| s.program.as_deref()).collect();
+        let mut expected: Vec<_> = f["programs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap())
+            .collect();
+        programs.sort();
+        expected.sort();
+        assert_eq!(programs, expected, "{}", f["name"]);
+        assert_eq!(
+            sites.iter().filter(|s| !s.parsed).count(),
+            f["unparsed"].as_u64().unwrap() as usize,
+            "{}",
+            f["name"]
+        );
+        if let Some(argv) = f["argv"].as_array() {
+            let expected: Vec<Vec<String>> =
+                serde_json::from_value(serde_json::Value::Array(argv.clone())).unwrap();
+            assert_eq!(
+                sites.iter().map(|s| s.argv.clone()).collect::<Vec<_>>(),
+                expected,
+                "{}",
+                f["name"]
+            );
+        }
+    }
+}

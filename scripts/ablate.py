@@ -127,6 +127,15 @@ rows.extend([
     ('url_identifier', 'src/redaction.rs', 'URL.is_match(identifier)', 'false', 'synthetic_secret_canaries_absent_from_storage_and_lookup_outputs', 'codex_context_arguments_and_telemetry'),
     ('email_identifier', 'src/redaction.rs', 'EMAIL.is_match(identifier)', 'false', 'synthetic_secret_canaries_absent_from_storage_and_lookup_outputs', 'codex_context_arguments_and_telemetry'),
 ])
+rows.extend([
+    ('code_mode_literals', 'src/adapters/codex.rs', 'map(crate::code_mode::sites)', 'map(|_| vec![crate::shell::Site { program: None, argv: Vec::new(), parsed:false }])', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_opaque', 'src/code_mode.rs', 'if unparsed {', 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_escape', 'src/code_mode.rs', "if c == '\\\\' {", 'if false {', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_template', 'src/code_mode.rs', "if quote == '`' && c == '$'", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_duplicate', 'src/code_mode.rs', 'cmd.is_some() || field.len() != 3', 'field.len() != 3', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_quoted_control', 'src/code_mode.rs', 'if matches!(c, \'\\\'\' | \'"\' | \'`\')', 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+    ('code_mode_regex_control', 'src/code_mode.rs', "if c == '/' && regex_allowed", 'if false', 'codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed', 'claude_blocks_flags_and_synthetic_model'),
+])
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]

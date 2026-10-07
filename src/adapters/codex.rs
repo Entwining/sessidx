@@ -84,6 +84,18 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                             .unwrap_or(&Value::Null),
                     );
                     e.command = e.tool.as_deref().and_then(|t| shell(t, &args));
+                    if matches!(e.tool.as_deref(), Some("exec" | "functions.exec")) {
+                        e.sites = args
+                            .as_str()
+                            .map(crate::code_mode::sites)
+                            .unwrap_or_else(|| {
+                                vec![crate::shell::Site {
+                                    program: None,
+                                    argv: Vec::new(),
+                                    parsed: false,
+                                }]
+                            });
+                    }
                     e.text = Some(args.to_string());
                     e
                 }

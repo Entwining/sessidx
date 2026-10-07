@@ -49,13 +49,9 @@ pub fn parse(harness: &str, v: &Value, state: &mut State) -> Record {
         if let Some(command) = &e.command {
             e.sites = crate::shell::sites(command);
         } else if e.kind == "tool_call"
-            && e.tool.as_deref().is_some_and(|t| {
-                crate::normalize::is_shell_tool(t)
-                    || matches!(t, "exec" | "functions.exec")
-                        && e.text.as_deref().is_some_and(|s| {
-                            s.contains("exec_command") || s.contains("shell_command")
-                        })
-            })
+            && e.tool
+                .as_deref()
+                .is_some_and(crate::normalize::is_shell_tool)
         {
             e.sites = vec![crate::shell::Site {
                 program: None,
