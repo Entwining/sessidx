@@ -190,6 +190,11 @@ fn run(cli: Cli) -> Result<i32> {
         .db
         .unwrap_or_else(|| home.join(".cache/sessidx/index.db"));
     if let Command::Sql { query } = &cli.command {
+        anyhow::ensure!(
+            path.exists(),
+            "no index at {}; run sessidx index to build it",
+            path.display()
+        );
         let _read_lock = Store::read_lock(&path)?;
         let refresh = Refresh {
             stale: _read_lock.is_none(),

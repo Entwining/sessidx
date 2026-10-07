@@ -163,6 +163,7 @@ rows.append(('known_token_prefix', 'src/redaction.rs', '(?:gh[pousr]_|github_pat
 rows.append(('missing_root_absent', 'src/store.rs', 'report.stale = roots.iter().any(|r| {', 'report.stale = !report.missing_roots.is_empty() || roots.iter().any(|r| {', 'writer_lock_budget_missing_root_and_scan_cursor_are_visible', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('missing_root_indexed', 'src/store.rs', '!r.path.exists()\n                && indexed', 'false\n                && indexed', 'a_missing_root_is_stale_only_when_it_held_indexed_files', 'claude_blocks_flags_and_synthetic_model'))
 rows.append(('missing_root_rebuild', 'src/store.rs', '// Read before initialize, which drops these rows on a full rebuild.\n', 'self.initialize(&_lock, full)?;\n        ', 'a_missing_root_is_stale_only_when_it_held_indexed_files', 'claude_blocks_flags_and_synthetic_model'))
+rows.append(('sql_missing_index', 'src/main.rs', 'path.exists(),\n            "no index at', 'true,\n            "no index at', 'sql_without_an_index_names_the_build_command', 'claude_blocks_flags_and_synthetic_model'))
 test_sources = [(path.stem, path.read_text()) for path in (root / 'tests').glob('*.rs')]
 test_targets = {}
 for name in {name for row in rows for name in row[4:]}:

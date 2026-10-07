@@ -105,6 +105,21 @@ fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
 }
 
 #[test]
+fn sql_without_an_index_names_the_build_command() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_sessidx"))
+        .arg("--db")
+        .arg(dir.path().join("index.db"))
+        .args(["sql", "SELECT 1"])
+        .output()
+        .unwrap();
+    let rows = stream(&out, 2);
+    assert!(rows[0]["error"].as_str().unwrap().contains("run sessidx index"));
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn cli_validates_enum_values_and_unions_harnesses() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, roots) = fixture();
