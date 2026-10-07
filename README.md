@@ -9,13 +9,13 @@ The database holds redacted copies of messages, tool inputs, shell argv, and the
 sessidx is developed and tested only on Apple Silicon macOS.
 
 ```sh
-brew install loophubs/tap/sessidx
+brew install entwining/tap/sessidx
 ```
 
 To build from source instead, you need Rust 1.98 or later and a C compiler for the bundled SQLite (the Xcode Command Line Tools); the code uses Unix file APIs:
 
 ```sh
-cargo install --locked --git https://github.com/LoopHubs/sessidx --root ~/.local
+cargo install --locked --git https://github.com/Entwining/sessidx --root ~/.local
 ```
 
 This installs `~/.local/bin/sessidx`; put that directory on `PATH`. From a checkout, use `--path .` instead of `--git`.
@@ -42,7 +42,7 @@ sessidx doctor
 The [`sessidx` skill](skills/sessidx/SKILL.md) teaches an agent with a shell when to reach for sessidx and how to read its results. With `sessidx` on `PATH`, install it for your user with the GitHub CLI:
 
 ```sh
-gh skill install LoopHubs/sessidx sessidx --scope user
+gh skill install Entwining/sessidx sessidx --scope user
 ```
 
 ## Documentation

@@ -41,9 +41,9 @@ jobs:
         with:
           client-id: ${{ vars.TAP_CLIENT_ID }}
           private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
-          owner: LoopHubs
+          owner: Entwining
           repositories: homebrew-tap
       - name: Ask the tap to pick up this version
         env:
           GH_TOKEN: ${{ steps.tap-token.outputs.token }}
-        run: gh api repos/LoopHubs/homebrew-tap/dispatches -f event_type=sessidx-release
+        run: gh api repos/Entwining/homebrew-tap/dispatches -f event_type=sessidx-release
