@@ -1,6 +1,9 @@
 use sessidx::{adapters, discovery::Root, model::State, store::Store};
 use std::fs;
 
+// Keep child launches from inheriting another test's live writer lock.
+static CLI_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn events(h: &str, fixture: &str) -> (State, Vec<sessidx::model::Event>) {
     let mut s = State::default();
     let es = fixture
@@ -12,6 +15,7 @@ fn events(h: &str, fixture: &str) -> (State, Vec<sessidx::model::Event>) {
 
 #[test]
 fn claude_blocks_flags_and_synthetic_model() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (s, es) = events("claude", include_str!("../testdata/claude.jsonl"));
     assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
     assert_eq!(
@@ -31,6 +35,7 @@ fn claude_blocks_flags_and_synthetic_model() {
 
 #[test]
 fn codex_context_arguments_and_telemetry() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (s, es) = events("codex", include_str!("../testdata/codex.jsonl"));
     assert_eq!(s.model.as_deref(), Some("gpt-fixture"));
     assert_eq!(
@@ -67,6 +72,7 @@ fn codex_context_arguments_and_telemetry() {
 
 #[test]
 fn pi_model_tool_call_and_camel_case_flag() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (s, es) = events("pi", include_str!("../testdata/pi.jsonl"));
     assert_eq!(s.model.as_deref(), Some("pi-model"));
     assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
@@ -94,6 +100,7 @@ fn snapshot(store: &Store) -> Vec<String> {
 
 #[test]
 fn previous_schema_requires_explicit_locked_rebuild() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old.db");
     let old = rusqlite::Connection::open(&path).unwrap();
@@ -189,6 +196,7 @@ fn previous_schema_requires_explicit_locked_rebuild() {
 
 #[test]
 fn previous_compact_schema_rebuilds_without_reading_new_columns() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("old-compact.db");
     let old = rusqlite::Connection::open(&path).unwrap();
@@ -212,6 +220,7 @@ fn previous_compact_schema_rebuilds_without_reading_new_columns() {
 
 #[test]
 fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
@@ -292,6 +301,7 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
 
 #[test]
 fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("one.jsonl");
     let data = format!(
@@ -324,6 +334,7 @@ fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
 
 #[test]
 fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("one.jsonl");
     let first = "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n";
@@ -383,6 +394,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
 
 #[test]
 fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let raw = include_bytes!("../testdata/opaque.jsonl");
     let original: serde_json::Value = serde_json::from_slice(raw).unwrap();
     let filtered = sessidx::normalize::record_for_index(raw, "pi").unwrap();

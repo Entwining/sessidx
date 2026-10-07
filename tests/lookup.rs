@@ -5,6 +5,9 @@ use sessidx::{
 };
 use std::{fs, process::Command, time::Duration};
 
+// Keep child launches from inheriting another test's live writer lock.
+static CLI_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn setup(harness: &str, content: &str) -> (tempfile::TempDir, Store, Vec<Root>) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");
@@ -50,6 +53,7 @@ fn assert_canaries_absent_from_storage(dir: &std::path::Path, values: &[&str]) {
 
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
     let filters = Filters {
         session: Some("claude-fixture".into()),
@@ -94,6 +98,7 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
 
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, _) = setup("claude", include_str!("../testdata/claude.jsonl"));
     let filters = Filters::default();
     assert_eq!(
@@ -168,6 +173,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
 
 #[test]
 fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (dir, store, _) = setup("codex", include_str!("../testdata/codex.jsonl"));
     assert!(
         query::scan(
@@ -205,6 +211,7 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
 
 #[test]
 fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, mut store, roots) = setup("codex", include_str!("../testdata/codex.jsonl"));
     let lock = store.lock().unwrap().unwrap();
     let busy = store
@@ -264,6 +271,7 @@ pub fn canaries() -> Vec<String> {
 
 #[test]
 fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let values = canaries();
     let line = |id: &str, typ: &str, value: serde_json::Value| {
         serde_json::json!({"type":typ,"uuid":id,"sessionId":"canary-session","cwd":"/synthetic","message":value}).to_string()+"\n"
@@ -340,6 +348,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
 
 #[test]
 fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let values: serde_json::Value =
         serde_json::from_str(include_str!("../testdata/privacy.json")).unwrap();
     let text = format!(
@@ -377,6 +386,7 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 
 #[test]
 fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_, store, _) = setup("claude", include_str!("../testdata/identifiers.jsonl"));
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
@@ -436,6 +446,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
 
 #[test]
 fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
     let prefix = format!("outputneedle {}", "x".repeat(2047 - "outputneedle ".len()));
@@ -496,6 +507,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
 
 #[test]
 fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../testdata/output-prefix.json")).unwrap();
     let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
@@ -530,6 +542,7 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
 
 #[test]
 fn pi_sections_share_the_native_message_and_are_redacted() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (dir, store, _) = setup("pi", include_str!("../testdata/pi-sections.jsonl"));
     for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
         let hits = search_hits(&store.db, term, &Filters::default(), 20, 0).unwrap();
@@ -550,6 +563,7 @@ fn pi_sections_share_the_native_message_and_are_redacted() {
 
 #[test]
 fn ranked_search_pages_sessions_before_selecting_best_hits() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let message = |session: &str, id: usize, ts: &str, text: &str| {
         serde_json::json!({"type":"user","uuid":format!("{session}-{id}"),"sessionId":session,"timestamp":ts,"message":{"role":"user","content":text}}).to_string()+"\n"
     };
@@ -610,6 +624,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
 
 #[test]
 fn scan_matches_original_ranges_before_redacting_display() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";
     let (_dir, store, _) = setup("claude", &data);
@@ -632,6 +647,7 @@ fn scan_matches_original_ranges_before_redacting_display() {
 
 #[test]
 fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let session = "rollout-2026-05-01T10-30-00-syntheticId7QwX9rTbM3k";
     let cwd = "/synthetic/Code/GitHub/project-with-native-identifiers";
     let data=serde_json::json!({"type":"session_meta","payload":{"id":session,"cwd":cwd}}).to_string()+"\n"+&serde_json::json!({"type":"turn_context","payload":{"model":"claude-haiku-4-5-20251001"}}).to_string()+"\n"+&serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}}).to_string()+"\n";
@@ -654,6 +670,7 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
 
 #[test]
 fn initial_schema_creation_respects_the_writer_lock() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("index.db");
     let store = Store::open(&path).unwrap();
