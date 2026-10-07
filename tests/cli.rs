@@ -105,6 +105,26 @@ fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
 }
 
 #[test]
+fn skill_names_only_commands_and_options_the_cli_accepts() {
+    let skill = include_str!("../skills/sessidx/SKILL.md");
+    let mut help = String::new();
+    let verbs = regex::Regex::new(r"`sessidx ([a-z]+)").unwrap();
+    for verb in verbs.captures_iter(skill).map(|c| c[1].to_owned()) {
+        let out = Command::new(env!("CARGO_BIN_EXE_sessidx"))
+            .args([&verb, "--help"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "sessidx {verb} --help");
+        help.push_str(&String::from_utf8_lossy(&out.stdout));
+    }
+    let options = regex::Regex::new(r"--[a-z][a-z-]*").unwrap();
+    for option in options.find_iter(skill).map(|m| m.as_str()) {
+        let listed = regex::Regex::new(&format!("{}(?:[^a-z-]|$)", regex::escape(option))).unwrap();
+        assert!(listed.is_match(&help), "{option} is not a sessidx option");
+    }
+}
+
+#[test]
 fn sql_without_an_index_names_the_build_command() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let dir = tempfile::tempdir().unwrap();

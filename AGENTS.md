@@ -1,17 +1,20 @@
 # sessidx
 
-sessidx indexes local Claude Code, Codex, and Pi session logs into SQLite for two uses: lookup (find the session where something happened, the context behind a commit, a past failure) by people and by agents, and retrospective counting by harness, model, role, and week with honest denominators. It replaces grepping gigabytes of logs per question and rewriting throwaway parsers per retrospective, which produced contradictory counts. The maintainer's agents reach it through the `sessidx` skill in [liby/dotfiles](https://github.com/liby/dotfiles) (`dot_agents/skills/sessidx/SKILL.md`), which requires `sessidx` on `PATH`.
+sessidx indexes local Claude Code, Codex, and Pi session logs into SQLite for two uses: lookup (find the session where something happened, the context behind a commit, a past failure) by people and by agents, and retrospective counting by harness, model, role, and week with honest denominators. It replaces grepping gigabytes of logs per question and rewriting throwaway parsers per retrospective, which produced contradictory counts. Agents reach it through the [`sessidx` skill](skills/sessidx/SKILL.md), which requires `sessidx` on `PATH`.
 
 ## Where things are owned
 
 | File | Owns |
 | --- | --- |
-| `README.md` | Commands, filters, output records, exit codes: the contract callers rely on |
+| `README.md` | What sessidx is for, how to install it, a first use, and where each document lives |
+| `docs/cli.md` | Commands, output records, exit codes, and refresh: the contract callers rely on |
+| `--help` text (`src/main.rs`, `query::Filters`) | What each option means |
+| `skills/sessidx/SKILL.md` | When an agent should use sessidx and how it reads the results |
 | `docs/design.md` | Storage, refresh, privacy, counting units, and known limits as they currently work |
 | `docs/formats.md` | One row per normalization rule with its fixture and regression test, and the observed-variant inventory; the only place a rule's reason lives |
 | This file | Purpose, decisions that are easy to undo by accident, workflow, and environment traps |
 
-Change the owner, not a copy. A rule without a `docs/formats.md` row and a fixture that fails when the rule is removed is not finished. A change to the README contract also changes that dotfiles skill and its `CLI_SMOKE_COMMANDS` entries in `dot_agents/skills/scripts/validate-skills.rb`; the maintainer's agents learn the CLI from the skill, not from this repository.
+Change the owner, not a copy. A rule without a `docs/formats.md` row and a fixture that fails when the rule is removed is not finished. Agents that use sessidx learn it from the skill alone, so a change to the CLI contract also changes the skill in the same commit.
 
 ## Decisions to keep
 

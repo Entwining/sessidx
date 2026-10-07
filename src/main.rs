@@ -25,8 +25,10 @@ use std::{
     after_help = "Examples:\n  sessidx search 'instruction hash'\n  sessidx grep 'Script error:' --harness codex\n  sessidx show /path/to/session.jsonl:42\n  sessidx count commands --program rg\n  sessidx sql 'SELECT role,count(*) FROM events GROUP BY role'\n  sessidx index --full\n  sessidx doctor"
 )]
 struct Cli {
-    #[arg(long, global = true)]
+    /// Index database to use instead of ~/.cache/sessidx/index.db
+    #[arg(long, global = true, value_name = "PATH")]
     db: Option<PathBuf>,
+    /// Session root to scan instead of the defaults; repeat for each root
     #[arg(long = "root", global = true, value_name = "HARNESS=PATH")]
     roots: Vec<String>,
     #[command(subcommand)]
@@ -35,8 +37,10 @@ struct Cli {
 
 #[derive(clap::Args)]
 struct Page {
+    /// Maximum results, 1-1000
     #[arg(long, default_value_t = 20)]
     limit: usize,
+    /// Continue from the previous end record's `next` with the same command and filters
     #[arg(long)]
     cursor: Option<String>,
 }
@@ -52,6 +56,7 @@ enum Metric {
 enum Command {
     /// Ranked full-text lookup
     Search {
+        /// Terms joined with AND; quote a phrase to keep its word order
         query: String,
         #[command(flatten)]
         filters: Filters,
@@ -60,6 +65,7 @@ enum Command {
     },
     /// Regex match over original indexed source ranges; requires narrowing
     Grep {
+        /// Regular expression matched against the original source bytes
         pattern: String,
         #[command(flatten)]
         filters: Filters,
@@ -68,11 +74,15 @@ enum Command {
     },
     /// Expand a hit ref or session ID to source records
     Show {
+        /// A hit's ref (path:line), a native session ID, or a codex://threads/ID link
         target: String,
+        /// Source lines to include on each side of a path:line target
         #[arg(long, default_value_t = 3)]
         around: usize,
+        /// Maximum records, 1-1000
         #[arg(long, default_value_t = 100)]
         limit: usize,
+        /// Continue from the previous end record's `next` with the same target
         #[arg(long)]
         cursor: Option<String>,
     },
@@ -80,17 +90,23 @@ enum Command {
     Count {
         #[arg(value_enum)]
         metric: Metric,
+        /// Comma-separated grouping from harness, model, role, week, kind
         #[arg(long, default_value = "harness,model,role,week")]
         by: String,
-        #[arg(long)]
+        /// Count only shell calls that run this program
+        #[arg(long, value_name = "NAME")]
         program: Option<String>,
         #[command(flatten)]
         filters: Filters,
     },
     /// Run one read-only SELECT/WITH without refresh
-    Sql { query: String },
+    Sql {
+        /// One SELECT or WITH statement over the tables in src/schema.sql
+        query: String,
+    },
     /// Refresh the derived index; --full rebuilds its schema
     Index {
+        /// Rebuild the index and its schema from the raw logs
         #[arg(long)]
         full: bool,
     },

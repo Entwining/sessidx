@@ -44,20 +44,26 @@ pub enum Kind {
 
 #[derive(Args, Clone, Debug, Default, Serialize)]
 pub struct Filters {
+    /// Only this harness; repeat for a union
     #[arg(long, value_enum)]
     pub harness: Vec<Harness>,
+    /// Only events from this speaker
     #[arg(long, value_enum)]
     pub role: Option<Role>,
+    /// Only sessions of this kind; delegated needs explicit subagent evidence
     #[arg(long, value_enum)]
     pub kind: Option<Kind>,
-    #[arg(long)]
+    /// Only events at or after this RFC 3339 time or UTC YYYY-MM-DD date
+    #[arg(long, value_name = "TIME")]
     pub since: Option<String>,
-    #[arg(long)]
+    /// Only events before this RFC 3339 time or UTC YYYY-MM-DD date
+    #[arg(long, value_name = "TIME")]
     pub until: Option<String>,
-    #[arg(long)]
+    /// Only sessions whose working directory is DIR or below it
+    #[arg(long, value_name = "DIR")]
     pub cwd: Option<String>,
-    /// Native session ID or session file path
-    #[arg(long)]
+    /// Only this session, by native ID or session file path
+    #[arg(long, value_name = "ID|PATH")]
     pub session: Option<String>,
     #[arg(skip)]
     #[serde(skip)]
