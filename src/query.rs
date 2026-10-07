@@ -61,9 +61,10 @@ pub struct Filters {
     #[arg(skip)]
     #[serde(skip)]
     pub high_water: Option<i64>,
+    /// Anchors of the frozen search ranking, from the first page's cursor.
     #[arg(skip)]
     #[serde(skip)]
-    pub search_order: Option<String>,
+    pub search_order: Option<Vec<i64>>,
 }
 
 impl Filters {
@@ -230,6 +231,10 @@ pub fn fts_query(query: &str) -> Result<String> {
         .join(" AND "))
 }
 
+/// Sessions reachable through search pagination: larger allows deeper paging
+/// and lengthens the cursor by about one integer per session.
+pub const SEARCH_PAGE_SESSIONS: usize = 100;
+
 #[derive(Debug, Serialize)]
 pub struct Session {
     pub harness: String,
@@ -238,8 +243,15 @@ pub struct Session {
     pub ts: Option<String>,
     pub matched_hits: usize,
     pub hits: Vec<Hit>,
-    #[serde(skip)]
-    pub search_order: Option<String>,
+}
+
+pub struct SearchPage {
+    pub sessions: Vec<Session>,
+    /// Matching sessions at or below the high-water mark, ranked or not.
+    pub matched_sessions: usize,
+    /// Each session is anchored by its lowest matching event ID, which stays
+    /// fixed below the high-water mark. Set only when no order was supplied.
+    pub order: Option<Vec<i64>>,
 }
 
 pub fn search(
@@ -248,29 +260,27 @@ pub fn search(
     filters: &Filters,
     limit: usize,
     offset: usize,
-) -> Result<Vec<Session>> {
+) -> Result<SearchPage> {
     let (clause, mut args) = filters.sql(db)?;
     args.push(Value::Text(fts_query(query)?));
-    args.push(
-        filters
-            .search_order
-            .clone()
-            .map(Value::Text)
-            .unwrap_or(Value::Null),
-    );
+    args.push(match &filters.search_order {
+        Some(order) => Value::Text(serde_json::to_string(order)?),
+        None => Value::Null,
+    });
     args.push(Value::Integer(limit as i64));
     args.push(Value::Integer(offset as i64));
+    args.push(Value::Integer(SEARCH_PAGE_SESSIONS as i64));
     // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
     let sql = format!(
         "WITH matches AS MATERIALIZED (
           SELECT f.harness,e.session_id,e.id,e.ts,bm25(fts) AS score {FROM}
           JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ?
         ), ordering AS MATERIALIZED (SELECT ? AS ranks), all_heads AS MATERIALIZED (
-          SELECT harness,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n
+          SELECT harness,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n,min(id) AS anchor
           FROM matches GROUP BY harness,session_id
         ), ordered_heads AS MATERIALIZED (
           SELECT h.*,j.key AS position FROM ordering CROSS JOIN json_each(ordering.ranks) j
-          JOIN all_heads h ON j.value ->> '$[0]'=h.harness AND j.value ->> '$[1]'=h.session_id
+          JOIN all_heads h ON j.value=h.anchor
           UNION ALL SELECT h.*,0 AS position FROM all_heads h CROSS JOIN ordering WHERE ordering.ranks IS NULL
         ), heads AS MATERIALIZED (
           SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,harness,session_id LIMIT ? OFFSET ?
@@ -279,18 +289,20 @@ pub fn search(
             PARTITION BY m.harness,m.session_id ORDER BY m.score,m.ts DESC,m.id DESC
           ) AS n FROM matches m JOIN heads h USING(harness,session_id)
         )
-        SELECT {COLUMNS},h.ts,h.n,
-          CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(json_array(harness,session_id))
-            FROM (SELECT harness,session_id FROM all_heads ORDER BY score,ts DESC,harness,session_id)) END
+        SELECT {COLUMNS},h.ts,h.n,(SELECT count(*) FROM all_heads),
+          CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(anchor)
+            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,harness,session_id LIMIT ?)) END
         {FROM} CROSS JOIN ordering
         JOIN ranked r ON r.id=e.id JOIN heads h ON h.harness=f.harness AND h.session_id=e.session_id
         WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.harness,h.session_id,r.n"
     );
     let mut stmt = db.prepare(&sql)?;
-    let mut search_order = None;
+    let mut matched_sessions = 0;
+    let mut order = None;
     let rows = stmt.query_map(params_from_iter(args), |r| {
-        if search_order.is_none() && filters.search_order.is_none() {
-            search_order = r.get(14)?;
+        matched_sessions = r.get(14)?;
+        if order.is_none() {
+            order = r.get::<_, Option<String>>(15)?;
         }
         Ok((
             hit(r)?,
@@ -312,15 +324,15 @@ pub fn search(
                 ts,
                 matched_hits,
                 hits: Vec::new(),
-                search_order: None,
             });
         }
         sessions.last_mut().unwrap().hits.push(hit);
     }
-    if let Some(first) = sessions.first_mut() {
-        first.search_order = search_order;
-    }
-    Ok(sessions)
+    Ok(SearchPage {
+        sessions,
+        matched_sessions,
+        order: order.map(|o| serde_json::from_str(&o)).transpose()?,
+    })
 }
 
 fn read_range(db: &Connection, item: &Hit) -> Result<Vec<u8>> {

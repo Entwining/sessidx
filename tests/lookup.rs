@@ -30,6 +30,7 @@ fn search_hits(
     offset: usize,
 ) -> anyhow::Result<Vec<query::Hit>> {
     Ok(query::search(db, query, filters, limit, offset)?
+        .sessions
         .into_iter()
         .flat_map(|s| s.hits)
         .collect())
@@ -754,7 +755,9 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     )
     .unwrap();
     store.refresh(&roots, false, None).unwrap();
-    let page = query::search(&store.db, "groupneedle", &Filters::default(), 2, 0).unwrap();
+    let page = query::search(&store.db, "groupneedle", &Filters::default(), 2, 0)
+        .unwrap()
+        .sessions;
     assert_eq!(
         page.iter()
             .map(|s| &s.session_id)
@@ -768,7 +771,9 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
             .collect::<Vec<_>>(),
         ["crowded", "older"]
     );
-    let next = query::search(&store.db, "groupneedle", &Filters::default(), 2, 2).unwrap();
+    let next = query::search(&store.db, "groupneedle", &Filters::default(), 2, 2)
+        .unwrap()
+        .sessions;
     assert_eq!(next.len(), 1);
     assert_eq!(next[0].session_id, "weaker");
     assert_eq!(page[0].matched_hits, 25);
@@ -784,7 +789,9 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
         path: codex,
     });
     store.refresh(&roots, false, None).unwrap();
-    let all = query::search(&store.db, "groupneedle", &Filters::default(), 20, 0).unwrap();
+    let all = query::search(&store.db, "groupneedle", &Filters::default(), 20, 0)
+        .unwrap()
+        .sessions;
     assert_eq!(all.len(), 4);
     assert_eq!(all.iter().filter(|s| s.session_id == "crowded").count(), 2);
 }

@@ -152,6 +152,7 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `cursor_invalidation` | `tests/cli.rs::cli_streams_end_coverage_and_query_bound_cursors` | File replacement/deletion records the first removed event, invalidating only cursors whose high-water mark includes it. | `cli_streams_end_coverage_and_query_bound_cursors` |
 | `cursor_rebuild` | `tests/cli.rs::cli_streams_end_coverage_and_query_bound_cursors` | Full rebuild records a zero-boundary invalidation before replacing indexed events. | `cli_streams_end_coverage_and_query_bound_cursors` |
 | `cursor_search_order` | `tests/cli.rs::search_cursor_freezes_order_when_append_changes_fts_statistics` | Appends change global FTS statistics even below a row watermark; preserve the first request session order in its cursor. | `search_cursor_freezes_order_when_append_changes_fts_statistics` |
+| `cursor_search_bound` | `tests/cli.rs::search_pagination_is_bounded_by_a_frozen_session_prefix` | A cursor listing every matching session outgrows the argument limit on a broad query; freeze only a bounded prefix, one integer anchor per session, and end incomplete without a cursor past it. | `search_pagination_is_bounded_by_a_frozen_session_prefix` |
 
 ### Counting, SQL, and doctor
 

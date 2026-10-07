@@ -283,7 +283,8 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
             20,
             0,
         )
-        .unwrap();
+        .unwrap()
+        .sessions;
         assert_eq!(matches.len(), usize::from(data.contains("太长")));
         let raw = fs::read(&path).unwrap();
         let ranges: Vec<(usize, usize, usize)> = store

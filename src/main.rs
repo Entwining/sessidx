@@ -103,7 +103,7 @@ struct Cursor {
     position: i64,
     high_water: i64,
     revision: i64,
-    search_order: Option<String>,
+    search_order: Option<Vec<i64>>,
 }
 
 fn scope(db: &rusqlite::Connection, request: &Value) -> Result<String> {
@@ -123,7 +123,7 @@ fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) ->
     })?;
     let Some(cursor) = cursor else {
         return Ok(Cursor {
-            version: 2,
+            version: 3,
             scope: scope(db, request)?,
             position: 0,
             high_water: db.query_row("SELECT coalesce(max(id),0) FROM locations", [], |r| {
@@ -141,7 +141,7 @@ fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) ->
         |r| r.get(0),
     )?;
     anyhow::ensure!(
-        cursor.version == 2
+        cursor.version == 3
             && cursor.position >= 0
             && cursor.high_water >= 0
             && cursor.revision <= revision
@@ -284,18 +284,22 @@ fn run(cli: Cli) -> Result<i32> {
             let offset = snapshot.position;
             filters.high_water = Some(snapshot.high_water);
             filters.search_order = snapshot.search_order.clone();
-            let mut sessions =
-                query::search(&db, &query, &filters, page.limit + 1, offset as usize)?;
+            let found = query::search(&db, &query, &filters, page.limit, offset as usize)?;
             if snapshot.search_order.is_none() {
-                snapshot.search_order = sessions.first_mut().and_then(|s| s.search_order.take());
+                snapshot.search_order = found.order;
             }
+            let sessions = found.sessions;
             let records = sessions.iter().map(|s| s.hits.len()).sum();
-            let more = sessions.len() > page.limit;
-            sessions.truncate(page.limit);
+            let reached = offset as usize + sessions.len();
+            let more = reached < found.matched_sessions;
             for session in &sessions {
                 emit("session", serde_json::to_value(session)?)?;
             }
-            let cursor = next(&snapshot, more.then_some(offset + sessions.len() as i64))?;
+            // Past the frozen prefix the end stays incomplete without a cursor.
+            let cursor = next(
+                &snapshot,
+                (more && reached < query::SEARCH_PAGE_SESSIONS).then_some(reached as i64),
+            )?;
             end(
                 Some(&refresh),
                 &Coverage {
