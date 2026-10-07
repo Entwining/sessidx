@@ -67,7 +67,6 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `count_program_binding` | `testdata/claude.jsonl`, combined filters in `tests/counting.rs` | Count's program predicate appears in SELECT before the anonymous WHERE filter parameters. Binding program as ?1 keeps the supplied values in statement order for every metric. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
 | `mcp_transport_flag` | `tests/counting.rs::codex_mcp_transport_error_flag_is_text_evidence_with_content_control` | Codex output can serialize an MCP isError flag; preserve it as transport text evidence, with failure winning over later success and a content file-dump quotation as a negative control. | `codex_mcp_transport_error_flag_is_text_evidence_with_content_control` |
 | `opaque_payload` | `testdata/opaque.jsonl` | Pi thinkingSignature can contain 10-16 MiB strings that the adapter ignores. Borrowing discarded thinking/image blocks avoids materializing them while preserving message and call counts. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
-
 | `script_header` | `testdata/envelopes.json` | Only a leading script header marks a transport failure; a later quoted header in a file dump does not. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `labeled_transport` | `testdata/envelopes.json` | A custom label can wrap a complete shell/MCP transport object; inspect that object without traversing stdout. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `legacy_denial` | `testdata/envelopes.json` | Claude error text can identify a permission refusal without naming its mechanism; preserve native_denial rather than inventing classifier attribution. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
@@ -75,6 +74,19 @@ All records in testdata are synthetic. The source inventory contains 80 root/con
 | `pi_leading_reason` | `testdata/envelopes.json` | Only the first nonempty Pi result block can supply a bare guard reason. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `pi_quoted_reason` | `testdata/envelopes.json` | Quoted Pi error prose is not a bare guard refusal. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `exit_anchor` | `testdata/envelopes.json` | A numeric exit must occupy a complete transport line; inline quotations remain unknown. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
+| `inventory_mapping` | `testdata/inventory.json` | Every variant must retain its own classification even when compensating mistakes preserve the total known count. | `inventory_variants_are_classified_with_future_shape_negative_control` |
+| `count_group_model` | `tests/counting.rs` | Model attribution must survive grouped counts. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
+| `count_group_week` | `tests/counting.rs` | Counts group timestamps by their UTC ISO week. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
+| `count_duplicate_group` | `tests/counting.rs` | Repeated group names are an error rather than duplicate output keys. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
+| `sql_row_bound` | `tests/counting.rs` | A result above 10,000 rows fails instead of claiming partial success. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
+| `sql_deadline` | `tests/counting.rs` | SQLite work is interrupted within the two-second SQL budget, including before the first row. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
+| `history_parent` | `tests/foundations.rs` | Codex history_base.thread_id is recorded ancestry when other parent fields are absent. | `codex_context_arguments_and_telemetry` |
+| `numeric_timestamp` | `tests/foundations.rs` | Pi nested message timestamps can be numeric milliseconds. | `pi_model_tool_call_and_camel_case_flag` |
+| `shell_array` | `tests/foundations.rs` | Codex shell commands are argv arrays; quote each element before Brush parsing. | `codex_context_arguments_and_telemetry` |
+| `pi_system` | `tests/foundations.rs` | A Pi system message is a native message, not an auxiliary record. | `pi_model_tool_call_and_camel_case_flag` |
+| `fallback_payload` | `testdata/opaque.jsonl` | Opaque fallback blocks carry no searchable body and need no owned payload copy. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
+| `doctor_models` | `tests/counting.rs` | Doctor reports missing models among stored rows, including context. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
+| `doctor_denials` | `tests/counting.rs` | Doctor reports unknown reasons among stored denial rows. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 
 ## Codex output variants
 
@@ -181,3 +193,5 @@ Known auxiliary records receive context pointers without body storage. Thinking,
 | pi | `message / toolCall` | 79 | `pi_call` |
 
 Exact pointer and append/truncate/inode-replacement invariants use `incremental_append_truncate_replace_equals_rebuild_and_exact_pointers`; they are storage invariants rather than additional format aliases. `inventory_variants_are_classified_with_future_shape_negative_control` expects 79 classified variants and one opaque Pi custom variant, with unknown-future roots as negative controls. The privacy byte-search fixture covers each storage/output boundary without retaining real corpus content.
+
+Pi message/bashExecution is a user-run record; it receives only a context pointer and is neither indexed as a logical message nor counted as an agent call.

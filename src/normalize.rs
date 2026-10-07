@@ -159,10 +159,7 @@ pub fn record_for_index(bytes: &[u8], harness: &str) -> serde_json::Result<Value
                                 serde_json::from_str(raw.get())?;
                             if let Some(raw_type) = fields.get("type") {
                                 if let Ok(typ) = serde_json::from_str::<String>(raw_type.get()) {
-                                    if matches!(
-                                        typ.as_str(),
-                                        "thinking" | "redacted_thinking" | "image" | "fallback"
-                                    ) {
+                                    if matches!(typ.as_str(), "thinking" | "image" | "fallback") {
                                         opaque = Some(serde_json::json!({"type":typ}));
                                     }
                                 }

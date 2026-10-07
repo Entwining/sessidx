@@ -42,6 +42,7 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
     }
     assert_eq!(known, 79, "{mismatches:?}");
     assert_eq!(unknown, 1);
+    assert!(mismatches.is_empty(), "{mismatches:?}");
     let future =
         serde_json::json!({"type":"unknown-future-shape","message":{"content":"negative control"}});
     for h in ["claude", "codex", "pi"] {

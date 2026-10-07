@@ -6,6 +6,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+// Concurrent child launches can inherit another test's live writer lock before exec.
+static CLI_PROCESS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn fixture() -> (tempfile::TempDir, Store, Vec<Root>) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
@@ -69,6 +72,7 @@ fn stream(out: &Output, exit: i32) -> Vec<Value> {
 
 #[test]
 fn cli_validates_enum_values_and_unions_harnesses() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, roots) = fixture();
     for (flag, bad, values) in [
         ("--harness", "claude_code", vec!["claude", "codex", "pi"]),
@@ -158,6 +162,7 @@ fn cli_validates_enum_values_and_unions_harnesses() {
 
 #[test]
 fn cli_streams_end_coverage_and_query_bound_cursors() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, roots) = fixture();
     for (args, kind, exit) in [
         (vec!["search", "sharedneedle"], "session", 0),
@@ -262,6 +267,7 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
 
 #[test]
 fn cli_writer_contention_returns_stale_without_waiting() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, roots) = fixture();
     let _lock = store.lock().unwrap().unwrap();
     store.db.execute_batch("BEGIN IMMEDIATE;").unwrap();

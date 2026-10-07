@@ -41,6 +41,23 @@ fn codex_context_arguments_and_telemetry() {
     );
     assert_eq!(es.iter().filter(|e| e.kind == "message").count(), 1);
     assert!(s.instruction_hash.is_some());
+    let mut history = State::default();
+    adapters::parse(
+        "codex",
+        &serde_json::json!({"type":"session_meta","payload":{"history_base":{"thread_id":"history-parent"}}}),
+        &mut history,
+    );
+    assert_eq!(history.parent_id.as_deref(), Some("history-parent"));
+    let array = adapters::parse(
+        "codex",
+        &serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":{"command":["printf", "literal quote's"]}}}),
+        &mut history,
+    );
+    assert_eq!(array.events[0].sites[0].program.as_deref(), Some("printf"));
+    assert_eq!(
+        array.events[0].sites[0].argv,
+        ["'printf'", "'literal quote'\\''s'"]
+    );
     assert!(
         es.iter()
             .filter(|e| e.kind == "tool_result")
@@ -60,6 +77,14 @@ fn pi_model_tool_call_and_camel_case_flag() {
         1
     );
     assert_eq!(es.iter().filter(|e| e.ok.is_none()).count(), 5);
+    let r = adapters::parse(
+        "pi",
+        &serde_json::json!({"type":"message","id":"numeric-system","message":{"role":"system","timestamp":1234,"content":"synthetic system"}}),
+        &mut State::default(),
+    );
+    assert_eq!(r.events[0].kind, "message");
+    assert_eq!(r.events[0].role, "system");
+    assert_eq!(r.events[0].ts.as_deref(), Some("1970-01-01T00:00:01.234Z"));
 }
 
 fn snapshot(store: &Store) -> Vec<String> {
@@ -365,7 +390,7 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
         .as_array()
         .unwrap()
         .iter()
-        .take(2)
+        .filter(|b| matches!(b["type"].as_str(), Some("thinking" | "image" | "fallback")))
         .map(|b| b.as_object().unwrap().len() - 1)
         .sum();
     assert_eq!(payload_fields, 0);

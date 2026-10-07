@@ -159,6 +159,43 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
     assert_eq!(failures[0]["numerator"], 1);
     assert_eq!(failures[0]["denominator"], 1);
+    let grouped = counting::count(
+        &store.db,
+        "commands",
+        "harness,model,role,week,kind",
+        Some("rg"),
+        &Filters::default(),
+    )
+    .unwrap();
+    assert_eq!(grouped.len(), 1);
+    for (key, expected) in [
+        ("harness", "claude"),
+        ("model", "claude-sonnet"),
+        ("role", "assistant"),
+        ("week", "2026-W40"),
+        ("kind", "unknown"),
+    ] {
+        assert_eq!(grouped[0][key], expected);
+    }
+    assert_eq!(grouped[0]["numerator"], 1);
+    assert!(
+        counting::count(
+            &store.db,
+            "commands",
+            "model,model",
+            None,
+            &Filters::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("duplicate")
+    );
+    assert!(
+        counting::count(&store.db, "commands", "invalid", None, &Filters::default())
+            .unwrap_err()
+            .to_string()
+            .contains("--by accepts")
+    );
     let sessions = [
         "claude-fixture".to_owned(),
         dir.path()
@@ -201,6 +238,49 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
     assert!(counting::sql(&store.db, "SELECT 1; DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
     assert_eq!(counting::doctor(&store.db).unwrap()["parse_errors"], 0);
+}
+
+#[test]
+fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
+    let data = concat!(
+        "{\"type\":\"assistant\",\"sessionId\":\"doctor\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"bad\",\"name\":\"Bash\",\"input\":{\"command\":\"echo 'unterminated\"}}]}}\n",
+        "{\"type\":\"user\",\"sessionId\":\"doctor\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"bad\",\"is_error\":true,\"content\":\"DENIED: synthetic policy\"}]}}\n",
+        "{\"type\":\"future-shape\"}\n{invalid\n{\"partial\":"
+    );
+    let (_, store) = indexed("claude", data);
+    let d = counting::doctor(&store.db).unwrap();
+    for (key, expected) in [
+        ("files", 1),
+        ("sessions", 1),
+        ("events", 4),
+        ("canonical_events", 4),
+        ("parse_errors", 1),
+        ("incomplete_files", 1),
+        ("unknown_models", 4),
+        ("unknown_session_kinds", 1),
+        ("unclassified_denials", 1),
+    ] {
+        assert_eq!(d[key], expected, "{key}");
+    }
+    assert_eq!(d["unknown_shapes"]["numerator"], 2);
+    assert_eq!(d["unknown_shapes"]["denominator"], 4);
+    assert_eq!(d["unknown_shapes"]["rate"], 0.5);
+    assert_eq!(
+        d["unknown_shapes"]["signatures"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(d["unparsed_shell_calls"]["numerator"], 1);
+    assert_eq!(d["unparsed_shell_calls"]["denominator"], 1);
+    assert_eq!(d["unparsed_shell_calls"]["rate"], 1.0);
+    assert!(counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n").unwrap_err().to_string().contains("10000 rows"));
+    let start = std::time::Instant::now();
+    let err = counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
+    assert!(err.to_string().contains("interrupted"), "{err}");
+    assert!(start.elapsed() < std::time::Duration::from_secs(4));
+    assert_eq!(
+        counting::sql(&store.db, "SELECT 1 AS n").unwrap()[0]["n"],
+        1
+    );
 }
 
 #[test]
