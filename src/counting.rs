@@ -144,9 +144,6 @@ pub fn count(
                 obj.insert((*key).into(), json!(r.get::<_, i64>(keys.len() + i)?));
             }
             obj.insert("unclassified_unit".into(), json!(unclassified_unit));
-            if metric == "commands" {
-                obj.insert("outcome_scope".into(), json!("call"));
-            }
             Ok(Json::Object(obj))
         })
         .collect::<rusqlite::Result<Vec<_>>>()?;
