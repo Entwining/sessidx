@@ -461,6 +461,11 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "0xabcdef0123456789abcdef0123456789abcdef01",
         "01234567-89ab-cdef-0123-456789abcdef",
         "/synthetic/long-project-directory/source.rs",
+        "tools.exec_command",
+        "os.path.join",
+        "std::fs::File::try_lock",
+        "a.b.c_d2",
+        "_module_42::Foo_Bar1/Item99",
     ] {
         let hits = search_hits(
             &store.db,
@@ -480,10 +485,35 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "0xabcdef0123456789abcdef0123456789abcdef01",
         "01234567-89ab-cdef-0123-456789abcdef",
         "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ",
+        "tools.exec_command",
+        "std::fs::File::try_lock",
+        "ghp_AlphabeticSyntheticToken",
+        "_module_42::Foo_Bar1/Item99",
+        "module.name:invalidColon9",
+        "module..missing_segment9",
+        "a1b2.c3d4_e5F6.g7H8",
     ] {
         assert!(!context[0].snippet.contains(value));
     }
     let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
+    assert_eq!(input.len(), 1);
+    assert!(input[0].snippet.contains("tools.exec_command"));
+    assert!(!input[0].snippet.contains("std::fs::File::try_lock"));
+    let stored: String = store
+        .db
+        .query_row("SELECT text FROM events WHERE kind='tool_call'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let args: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(
+        args["namespace_members"],
+        "01234567-89ab-cdef-0123-456789abcdef"
+    );
+    assert_eq!(
+        args["schema_properties"],
+        "0123456789abcdef1032547698badcfe89abcdef"
+    );
     assert!(
         search_hits(
             &store.db,

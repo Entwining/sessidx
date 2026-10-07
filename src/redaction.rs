@@ -82,6 +82,7 @@ pub fn redact(text: &str) -> String {
             || path
             || URL.is_match(identifier)
             || EMAIL.is_match(identifier)
+            || identifier_shaped(run)
         {
             return run.to_owned();
         }
@@ -103,6 +104,18 @@ pub fn redact(text: &str) -> String {
         }
     })
     .into_owned()
+}
+
+fn identifier_shaped(run: &str) -> bool {
+    run.split(['.', '/', '-'])
+        .flat_map(|segment| segment.split("::"))
+        .all(|segment| {
+            let letters = segment.trim_end_matches(|c: char| c.is_ascii_digit());
+            !letters.is_empty()
+                && letters
+                    .bytes()
+                    .all(|b| b.is_ascii_alphabetic() || b == b'_')
+        })
 }
 
 pub fn redact_metadata(text: &str) -> String {
