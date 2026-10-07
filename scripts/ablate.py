@@ -39,7 +39,7 @@ rows = [
 ]
 
 def run_test(name):
-    result = subprocess.run(['cargo', 'test', name, '--', '--exact'], cwd=root, capture_output=True, text=True, timeout=180)
+    result = subprocess.run(['cargo', 'test', '--test', test_targets[name], name, '--', '--exact'], cwd=root, capture_output=True, text=True, timeout=180)
     output = result.stdout + result.stderr
     return result.returncode, f'test {name} ... ok' in output, f'test {name} ... FAILED' in output, ('assertion' in output or 'canary leaked' in output)
 
@@ -138,6 +138,13 @@ rows.extend([
 ])
 rows.append(('diagnostic_source', 'src/adapters/claude.rs', '.get("source")', '.get("removed-source")', 'diagnostic_attachments_are_tool_outputs_without_creating_results', 'pi_empty_response_and_explicit_message_model_override'))
 rows.append(('transport_stdout_control', 'src/outcomes.rs', ' | "output" | "stdout" | "stderr"', '', 'result_envelopes_exclude_quoted_markers_and_preserve_native_denials', 'claude_blocks_flags_and_synthetic_model'))
+test_sources = [(path.stem, path.read_text()) for path in (root / 'tests').glob('*.rs')]
+test_targets = {}
+for name in {name for row in rows for name in row[4:]}:
+    targets = [target for target, source in test_sources if f'fn {name}(' in source]
+    if len(targets) != 1:
+        raise RuntimeError(f'{name}: expected one integration test target')
+    test_targets[name] = targets[0]
 results = []
 if len(sys.argv) > 2:
     rows = [row for row in rows if row[0] in sys.argv[2:]]
