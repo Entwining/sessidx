@@ -6,13 +6,24 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
     r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]+",
     r"\b(?:sk-[A-Za-z0-9_\-]{8,}|(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9_\-]{8,})",
-    r#"(?i)["']?(?:[A-Za-z0-9_\-]*(?:api[_-]?key|secret|password|passwd|token|credential)[A-Za-z0-9_\-]*|authorization|\bkey)["']?\s*[=:]\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#,
 ].into_iter().map(|p| Regex::new(p).unwrap()).collect()
 });
-static RUNS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=\-]{16,}").unwrap());
+static ASSIGNMENTS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"["']?([A-Za-z0-9_\-]+)["']?\s*[=:]\s*"#).unwrap());
+static ASSIGNED_VALUE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,"'<>}]+)"#).unwrap()
+});
+static RUNS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z0-9_+/=.!@$%:&?\-]{16,}").unwrap());
 static CREDENTIAL_NAME: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|credential|authorization)|(?i)^key$")
+    Regex::new(r"(?i)(api[_-]?key|secret|password|passwd|token|credential|authorization)|^key$|(?:private[_-]?key|auth|sig|signature|bearer)$")
         .unwrap()
+});
+static EMAIL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[A-Za-z0-9.!#$%&*+/=?^_`{|}~\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$").unwrap()
+});
+static URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^https?://[A-Za-z0-9.\-]+(?::[0-9]+)?(?:[/?][^@]*)?$").unwrap()
 });
 
 pub fn redact_value(v: &mut serde_json::Value) {
@@ -48,17 +59,30 @@ pub fn redact(text: &str) -> String {
     let out = redact_metadata(text);
     RUNS.replace_all(&out, |caps: &regex::Captures<'_>| {
         let run = &caps[0];
-        let hex = run
+        let identifier = run.trim_end_matches(['.', '!', '?', ':']);
+        let hex = identifier
             .strip_prefix("0x")
-            .or_else(|| run.strip_prefix("0X"))
-            .unwrap_or(run);
-        let uuid = run.len() == 36
-            && run
+            .or_else(|| identifier.strip_prefix("0X"))
+            .unwrap_or(identifier);
+        let uuid = identifier.len() == 36
+            && identifier
                 .split('-')
                 .zip([8, 4, 4, 4, 12])
                 .all(|(s, n)| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit()));
         // Body identifiers and credential-context controls: testdata/identifiers.jsonl.
-        if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || run.starts_with('/') {
+        let path = identifier.starts_with('/')
+            && identifier.split('/').filter(|s| !s.is_empty()).count() >= 2
+            && identifier.split('/').skip(1).all(|s| {
+                !s.is_empty()
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"_-.~".contains(&b))
+            });
+        if hex.bytes().all(|b| b.is_ascii_hexdigit())
+            || uuid
+            || path
+            || URL.is_match(identifier)
+            || EMAIL.is_match(identifier)
+        {
             return run.to_owned();
         }
         let mut counts = HashMap::new();
@@ -86,7 +110,20 @@ pub fn redact_metadata(text: &str) -> String {
     for pattern in PATTERNS.iter() {
         out = pattern.replace_all(&out, "[REDACTED]").into_owned();
     }
-    out
+    let mut redacted = String::new();
+    let mut offset = 0;
+    for caps in ASSIGNMENTS.captures_iter(&out) {
+        let assignment = caps.get(0).unwrap();
+        if assignment.start() >= offset && CREDENTIAL_NAME.is_match(&caps[1]) {
+            if let Some(value) = ASSIGNED_VALUE.find(&out[assignment.end()..]) {
+                redacted.push_str(&out[offset..assignment.start()]);
+                redacted.push_str("[REDACTED]");
+                offset = assignment.end() + value.end();
+            }
+        }
+    }
+    redacted.push_str(&out[offset..]);
+    redacted
 }
 
 pub fn spaced_cjk(text: &str) -> String {

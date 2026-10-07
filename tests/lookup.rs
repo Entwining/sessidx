@@ -272,7 +272,7 @@ pub fn canaries() -> Vec<String> {
 #[test]
 fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
-    let values = canaries();
+    let mut values = canaries();
     let line = |id: &str, typ: &str, value: serde_json::Value| {
         serde_json::json!({"type":typ,"uuid":id,"sessionId":"canary-session","cwd":"/synthetic","message":value}).to_string()+"\n"
     };
@@ -298,17 +298,84 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             m,
         );
     }
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../testdata/credential-context.json")).unwrap();
+    for (i, f) in fixture["labels"].as_array().unwrap().iter().enumerate() {
+        let label = f["label"].as_str().unwrap();
+        let value = f["value"].as_str().unwrap();
+        values.push(value.into());
+        let mut input = serde_json::json!({"command":format!("printf 'needle {label}={value}'")});
+        input
+            .as_object_mut()
+            .unwrap()
+            .insert(label.into(), value.into());
+        for (kind, message) in [
+            (
+                "user",
+                serde_json::json!({"role":"user","content":format!("needle {label}: {value}")}),
+            ),
+            (
+                "assistant",
+                serde_json::json!({"role":"assistant","content":[{"type":"tool_use","id":format!("label-{i}"),"name":"Bash","input":input}]}),
+            ),
+            (
+                "user",
+                serde_json::json!({"role":"user","content":[{"type":"tool_result","tool_use_id":format!("label-{i}"),"is_error":false,"content":format!("needle {label}={value}")}]}),
+            ),
+        ] {
+            data += &line(&format!("label-{i}-{kind}"), kind, message);
+        }
+    }
+    for key in ["symbol", "slash"] {
+        let value = fixture[key].as_str().unwrap();
+        values.push(value.into());
+        data += &line(
+            key,
+            "user",
+            serde_json::json!({"role":"user","content":format!("needle my password is {value} ok")}),
+        );
+        data += &line(
+            &format!("{key}-input"),
+            "assistant",
+            serde_json::json!({"role":"assistant","content":[{"type":"tool_use","id":key,"name":"Bash","input":{"command":format!("printf 'needle {value}'")}}]}),
+        );
+        data += &line(
+            &format!("{key}-result"),
+            "user",
+            serde_json::json!({"role":"user","content":[{"type":"tool_result","tool_use_id":key,"is_error":false,"content":format!("needle {value}")}]}),
+        );
+    }
+    data += &line(
+        "public-identifiers",
+        "user",
+        serde_json::json!({"role":"user","content":format!("needle {}",fixture["identifiers"].as_array().unwrap().iter().map(|v|v.as_str().unwrap()).collect::<Vec<_>>().join(" "))}),
+    );
     let (dir, store, roots) = setup("claude", &data);
     assert_canaries_absent_from_storage(
         dir.path(),
         &values.iter().map(String::as_str).collect::<Vec<_>>(),
     );
+    for v in fixture["identifiers"].as_array().unwrap() {
+        let value = v.as_str().unwrap();
+        let hits = search_hits(&store.db, value, &Filters::default(), 20, 0).unwrap();
+        assert!(
+            hits.iter().any(|h| h.snippet.contains(value)),
+            "public identifier lost"
+        );
+    }
     let mut outputs = Vec::new();
     for args in [
         vec!["index"],
         vec!["search", "needle"],
-        vec!["grep", "needle", "--session", "canary-session"],
-        vec!["show", "canary-session"],
+        vec![
+            "grep",
+            "needle",
+            "--session",
+            "canary-session",
+            "--limit",
+            "1000",
+        ],
+        vec!["show", "canary-session", "--limit", "1000"],
         vec!["grep", "needle"],
         vec!["count", "commands"],
         vec!["count", "failures"],
