@@ -60,15 +60,9 @@ pub fn redact(text: &str) -> String {
     RUNS.replace_all(&out, |caps: &regex::Captures<'_>| {
         let run = &caps[0];
         let identifier = run.trim_end_matches(['.', '!', '?', ':']);
-        let hex = identifier
-            .strip_prefix("0x")
-            .or_else(|| identifier.strip_prefix("0X"))
-            .unwrap_or(identifier);
-        let uuid = identifier.len() == 36
-            && identifier
-                .split('-')
-                .zip([8, 4, 4, 4, 12])
-                .all(|(s, n)| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        if URL.is_match(identifier) {
+            return redact_url(run);
+        }
         // Body identifiers and credential-context controls: testdata/identifiers.jsonl.
         let path = identifier.starts_with('/')
             && identifier.split('/').filter(|s| !s.is_empty()).count() >= 2
@@ -77,33 +71,81 @@ pub fn redact(text: &str) -> String {
                     && s.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"_-.~".contains(&b))
             });
-        if hex.bytes().all(|b| b.is_ascii_hexdigit())
-            || uuid
-            || path
-            || URL.is_match(identifier)
-            || EMAIL.is_match(identifier)
-            || identifier_shaped(run)
-        {
+        if path || EMAIL.is_match(identifier) {
             return run.to_owned();
         }
-        let mut counts = HashMap::new();
-        for byte in run.bytes() {
-            *counts.entry(byte).or_insert(0usize) += 1;
-        }
-        let entropy: f64 = counts
-            .values()
-            .map(|&n| {
-                let p = n as f64 / run.len() as f64;
-                -p * p.log2()
-            })
-            .sum();
-        if entropy >= 3.5 {
-            "[REDACTED]".to_owned()
-        } else {
-            run.to_owned()
-        }
+        redact_run(run)
     })
     .into_owned()
+}
+
+fn redact_url(run: &str) -> String {
+    let scheme = run.find("://").unwrap() + 3;
+    let end = run[scheme..]
+        .find(['/', '?'])
+        .map_or(run.len(), |i| scheme + i);
+    let mut out = run[..end].to_owned();
+    let (path, query) = run[end..]
+        .split_once('?')
+        .map_or((&run[end..], None), |(path, query)| (path, Some(query)));
+    let component = |text: &str| {
+        RUNS.replace_all(text, |caps: &regex::Captures<'_>| redact_run(&caps[0]))
+            .into_owned()
+    };
+    for (i, segment) in path.split('/').enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(&component(segment));
+    }
+    if let Some(query) = query {
+        out.push('?');
+        for (i, pair) in query.split('&').enumerate() {
+            if i > 0 {
+                out.push('&');
+            }
+            if let Some((name, value)) = pair.split_once('=') {
+                out.push_str(name);
+                out.push('=');
+                out.push_str(&component(value));
+            } else {
+                out.push_str(&component(pair));
+            }
+        }
+    }
+    out
+}
+
+fn redact_run(run: &str) -> String {
+    let identifier = run.trim_end_matches(['.', '!', '?', ':']);
+    let hex = identifier
+        .strip_prefix("0x")
+        .or_else(|| identifier.strip_prefix("0X"))
+        .unwrap_or(identifier);
+    let uuid = identifier.len() == 36
+        && identifier
+            .split('-')
+            .zip([8, 4, 4, 4, 12])
+            .all(|(s, n)| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit()));
+    if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || identifier_shaped(run) {
+        return run.to_owned();
+    }
+    let mut counts = HashMap::new();
+    for byte in run.bytes() {
+        *counts.entry(byte).or_insert(0usize) += 1;
+    }
+    let entropy: f64 = counts
+        .values()
+        .map(|&n| {
+            let p = n as f64 / run.len() as f64;
+            -p * p.log2()
+        })
+        .sum();
+    if entropy >= 3.5 {
+        "[REDACTED]".to_owned()
+    } else {
+        run.to_owned()
+    }
 }
 
 fn identifier_shaped(run: &str) -> bool {

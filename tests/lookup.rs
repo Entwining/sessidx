@@ -327,23 +327,28 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             data += &line(&format!("label-{i}-{kind}"), kind, message);
         }
     }
-    for key in ["symbol", "slash"] {
+    for key in ["symbol", "slash", "url_path", "url_query"] {
         let value = fixture[key].as_str().unwrap();
         values.push(value.into());
+        let carrier = match key {
+            "url_path" => format!("https://hooks.slack.com/services/T123/B456/{value}"),
+            "url_query" => format!("https://example.invalid/search?ref={value}"),
+            _ => value.to_owned(),
+        };
         data += &line(
             key,
             "user",
-            serde_json::json!({"role":"user","content":format!("needle my password is {value} ok")}),
+            serde_json::json!({"role":"user","content":format!("needle my password is {carrier} ok")}),
         );
         data += &line(
             &format!("{key}-input"),
             "assistant",
-            serde_json::json!({"role":"assistant","content":[{"type":"tool_use","id":key,"name":"Bash","input":{"command":format!("printf 'needle {value}'")}}]}),
+            serde_json::json!({"role":"assistant","content":[{"type":"tool_use","id":key,"name":"Bash","input":{"command":format!("printf 'needle {carrier}'")}}]}),
         );
         data += &line(
             &format!("{key}-result"),
             "user",
-            serde_json::json!({"role":"user","content":[{"type":"tool_result","tool_use_id":key,"is_error":false,"content":format!("needle {value}")}]}),
+            serde_json::json!({"role":"user","content":[{"type":"tool_result","tool_use_id":key,"is_error":false,"content":format!("needle {carrier}")}]}),
         );
     }
     data += &line(
