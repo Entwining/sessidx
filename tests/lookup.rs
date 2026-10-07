@@ -273,6 +273,25 @@ fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
     assert!(store.refresh(&roots, true, None).unwrap().stale);
 }
 
+#[test]
+fn a_path_reindexed_under_another_harness_is_parsed_again() {
+    let (_dir, mut store, roots) = setup("claude", include_str!("../testdata/pi.jsonl"));
+    let pi = [Root {
+        harness: "pi".into(),
+        path: roots[0].path.clone(),
+    }];
+    assert_eq!(store.refresh(&pi, false, None).unwrap().files_changed, 1);
+    let (files, sessions): (String, String) = store
+        .db
+        .query_row(
+            "SELECT f.harness,s.harness||'/'||s.session_id FROM files f JOIN sessions s ON s.file_id=f.id",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((files.as_str(), sessions.as_str()), ("pi", "pi/pi-fixture"));
+}
+
 pub fn canaries() -> Vec<String> {
     (0..6)
         .map(|n| {

@@ -278,11 +278,14 @@ impl Store {
             meta.ctime_nsec()
         );
         let path_text = path.to_string_lossy();
-        let old = self.db.query_row("SELECT id,dev,inode,size,mtime,prefix_hash,prefix_len,bytes_indexed,lines_indexed,state_json,parse_errors,index_status FROM files WHERE path=?", [path_text.as_ref()], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, u64>(1)?, r.get::<_, u64>(2)?, r.get::<_, u64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, u64>(6)?, r.get::<_, u64>(7)?, r.get::<_, u64>(8)?, r.get::<_, String>(9)?, r.get::<_, u64>(10)?,r.get::<_,String>(11)?))
+        let old = self.db.query_row("SELECT id,dev,inode,size,mtime,prefix_hash,prefix_len,bytes_indexed,lines_indexed,state_json,parse_errors,index_status,harness FROM files WHERE path=?", [path_text.as_ref()], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, u64>(1)?, r.get::<_, u64>(2)?, r.get::<_, u64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, u64>(6)?, r.get::<_, u64>(7)?, r.get::<_, u64>(8)?, r.get::<_, String>(9)?, r.get::<_, u64>(10)?,r.get::<_,String>(11)?, r.get::<_, String>(12)?))
         }).optional()?;
+        // Another harness parses the same bytes differently, so neither the
+        // cached rows nor an append to them can be reused.
         if let Some(ref o) = old {
-            if o.1 == meta.dev()
+            if o.12 == harness
+                && o.1 == meta.dev()
                 && o.2 == meta.ino()
                 && o.3 == source_size
                 && o.4 == mtime
@@ -304,7 +307,8 @@ impl Store {
         file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
         let append = old.as_ref().is_some_and(|o| {
-            o.1 == meta.dev()
+            o.12 == harness
+                && o.1 == meta.dev()
                 && o.2 == meta.ino()
                 && source_size >= o.3
                 && o.6 <= prefix_len
