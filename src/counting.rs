@@ -2,9 +2,9 @@ use crate::{
     query::Filters,
     redaction::{redact, redact_metadata},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{
-    Connection, params_from_iter,
+    Connection,
     types::{Value, ValueRef},
 };
 use serde_json::{Value as Json, json};
@@ -36,22 +36,20 @@ pub fn count(
         keys.push(key);
         expressions.push(expression);
     }
-    let (clause, mut args) = filters.sql()?;
-    let selected = if let Some(program) = program {
-        args.insert(0, Value::Text(program.into()));
+    let (clause, args) = filters.sql()?;
+    let selected = if program.is_some() {
         match metric {
-            "commands" => "c.program=?PROGRAM",
+            "commands" => "c.program=:program",
             "failures" => {
-                "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program=?PROGRAM)"
+                "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program=:program)"
             }
             _ => {
-                "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program=?PROGRAM)"
+                "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program=:program)"
             }
         }
     } else {
         "1=1"
     };
-    let selected = selected.replace("?PROGRAM", "?1");
     let unknown_program = if program.is_none() {
         "0"
     } else if metric == "denials" {
@@ -114,9 +112,19 @@ pub fn count(
     let sql = format!(
         "SELECT {prefix}coalesce({numerator},0),coalesce({denominator},0),coalesce({unclassified},0) FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id {join} WHERE {clause} AND e.kind='{kind}'{group}"
     );
-    let values = db
-        .prepare(&sql)?
-        .query_map(params_from_iter(args), |r| {
+    let mut stmt = db.prepare(&sql)?;
+    let mut args = args.into_iter();
+    for i in 1..=stmt.parameter_count() {
+        let value = if stmt.parameter_name(i) == Some(":program") {
+            Value::Text(program.context("program parameter missing")?.into())
+        } else {
+            args.next().context("filter parameter missing")?
+        };
+        stmt.raw_bind_parameter(i, value)?;
+    }
+    let values = stmt
+        .raw_query()
+        .mapped(|r| {
             let mut obj = serde_json::Map::new();
             for (i, key) in keys.iter().enumerate() {
                 obj.insert(
@@ -140,7 +148,7 @@ pub fn count(
                 obj.insert("outcome_scope".into(), json!("call"));
             }
             Ok(Json::Object(obj))
-        })?
+        })
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(values)
 }
