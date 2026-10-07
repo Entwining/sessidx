@@ -475,6 +475,8 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "std::fs::File::try_lock.",
         "--max-output-tokens",
         "--dangerously-skip-permissions",
+        "/path/to/session.jsonl:42",
+        "/path/to/session.jsonl:42:7",
     ] {
         let hits = search_hits(
             &store.db,
@@ -502,6 +504,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "module..missing_segment9",
         "a1b2.c3d4_e5F6.g7H8",
         "--invalid--flagSyntaxExtra",
+        "/path/to/session.jsonl:42:7:3",
     ] {
         assert!(
             !context[0].snippet.contains(value),

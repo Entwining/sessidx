@@ -63,10 +63,21 @@ pub fn redact(text: &str) -> String {
         if URL.is_match(identifier) {
             return redact_url(run);
         }
+        let mut location = identifier;
+        for _ in 0..2 {
+            if let Some((path, number)) = location.rsplit_once(':')
+                && !number.is_empty()
+                && number.bytes().all(|b| b.is_ascii_digit())
+            {
+                location = path;
+            } else {
+                break;
+            }
+        }
         // Body identifiers and credential-context controls: testdata/identifiers.jsonl.
-        let path = identifier.starts_with('/')
-            && identifier.split('/').filter(|s| !s.is_empty()).count() >= 2
-            && identifier.split('/').skip(1).all(|s| {
+        let path = location.starts_with('/')
+            && location.split('/').filter(|s| !s.is_empty()).count() >= 2
+            && location.split('/').skip(1).all(|s| {
                 !s.is_empty()
                     && s.bytes()
                         .all(|b| b.is_ascii_alphanumeric() || b"_-.~".contains(&b))

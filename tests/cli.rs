@@ -71,6 +71,40 @@ fn stream(out: &Output, exit: i32) -> Vec<Value> {
 }
 
 #[test]
+fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("index.db");
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_sessidx"))
+            .arg("--db")
+            .arg(&db)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let help = invoke(&["--help"]);
+    assert_eq!(help.status.code(), Some(0));
+    assert!(help.stderr.is_empty());
+    assert!(
+        String::from_utf8_lossy(&help.stdout).contains("sessidx show /path/to/session.jsonl:42")
+    );
+    let version = invoke(&["--version"]);
+    assert_eq!(version.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout),
+        concat!("sessidx ", env!("CARGO_PKG_VERSION"), "\n")
+    );
+    let value = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
+    let error = invoke(&["search", "needle", "--harness", value]);
+    let rows = stream(&error, 2);
+    assert!(rows[0]["error"].as_str().unwrap().contains("[REDACTED]"));
+    assert!(!String::from_utf8_lossy(&error.stdout).contains(value));
+    assert!(error.stderr.is_empty());
+    assert!(!db.exists());
+}
+
+#[test]
 fn cli_validates_enum_values_and_unions_harnesses() {
     let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, store, roots) = fixture();

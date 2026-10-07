@@ -409,7 +409,7 @@ fn main() {
         Err(e) => {
             let code = e.exit_code();
             if code == 0 {
-                println!("{}", redact(&e.to_string()));
+                print!("{e}");
             } else {
                 fail(&e.to_string());
             }
