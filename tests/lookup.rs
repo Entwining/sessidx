@@ -261,6 +261,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
 
 #[test]
 fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (dir, mut store, roots) = setup("codex", include_str!("fixtures/codex.jsonl"));
     fs::rename(&roots[0].path, dir.path().join("moved")).unwrap();
     let missing = store.refresh(&roots, false, None).unwrap();
@@ -280,6 +281,7 @@ fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
 
 #[test]
 fn a_path_reindexed_under_another_harness_is_parsed_again() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let (_dir, mut store, roots) = setup("claude", include_str!("fixtures/pi.jsonl"));
     let pi = [Root {
         harness: "pi".into(),

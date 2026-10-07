@@ -106,6 +106,7 @@ fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
 
 #[test]
 fn skill_names_only_commands_and_options_the_cli_accepts() {
+    let _processes = CLI_PROCESS_LOCK.lock().unwrap();
     let skill = include_str!("../skills/sessidx/SKILL.md");
     let mut help = String::new();
     let verbs = regex::Regex::new(r"`sessidx ([a-z]+)").unwrap();
