@@ -207,7 +207,7 @@ fn end(
 }
 
 fn run(cli: Cli) -> Result<i32> {
-    let home = PathBuf::from(std::env::var_os("HOME").context("HOME missing")?);
+    let home = std::env::home_dir().context("home directory unknown")?;
     let path = cli
         .db
         .unwrap_or_else(|| home.join(".cache/sessidx/index.db"));

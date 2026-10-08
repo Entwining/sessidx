@@ -1,1 +1,10 @@
 allow-unwrap-in-tests = true
+disallowed-methods = [
+  { path = "std::env::var", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::env::var_os", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::env::vars", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::env::vars_os", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+]
+disallowed-macros = [
+  { path = "core::option_env", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+]

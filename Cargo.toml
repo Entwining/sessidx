@@ -11,6 +11,7 @@ repository = "https://github.com/Entwining/sessidx"
 unsafe_code = "forbid"
 
 [lints.clippy]
+allow_attributes_without_reason = "warn"
 dbg_macro = "warn"
 todo = "warn"
 
