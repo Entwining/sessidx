@@ -6,7 +6,7 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
     r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]+",
     r"\b(?:sk-[A-Za-z0-9_\-]{8,}|(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9_\-]{8,})",
-    r"\b(?:hf_[A-Za-z]{34}\b|SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43})",
+    r"\b(?:hf_[A-Za-z]{34}\b|SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}(?P<end>[^A-Za-z0-9_\-]|$))",
 ].into_iter().map(|p| Regex::new(p).expect("static regex is valid")).collect()
 });
 static ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
@@ -208,8 +208,10 @@ fn identifier_shaped(run: &str) -> bool {
 
 pub fn redact_metadata(text: &str) -> String {
     let mut out = text.to_owned();
+    // A pattern that must see the character after its token captures it as `end`,
+    // which the replacement keeps; the regex crate has no lookahead.
     for pattern in PATTERNS.iter() {
-        out = pattern.replace_all(&out, "[REDACTED]").into_owned();
+        out = pattern.replace_all(&out, "[REDACTED]${end}").into_owned();
     }
     let mut redacted = String::new();
     let mut offset = 0;

@@ -511,6 +511,9 @@ fn fixed_length_tokens_redact_only_their_exact_shape() {
         ("hf_hub_download".to_owned(), false),
         (format!("SG.{}.{}", body(22), body(43)), true),
         (format!("SG.{}.{}", body(21), body(43)), false),
+        (format!("SG.{}.{}", body(22), body(44)), false),
+        (format!("SG.{}.{}9", body(22), body(43)), false),
+        (format!("SG.{}.{}_", body(22), body(43)), false),
     ] {
         let input = format!("needle {token} tail");
         let expected = if redacted {
