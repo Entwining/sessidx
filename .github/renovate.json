@@ -45,8 +45,8 @@
       "automerge": true
     },
     {
-      "description": "With warnings denied, a new Clippy or linter release can fail CI. Keep these updates out of the routine group so a failure blocks only them.",
-      "matchPackageNames": ["rust", "cargo-deny", "github.com/rhysd/actionlint"],
+      "description": "With warnings denied, a new Clippy, linter, or cargo-about release can fail CI. Keep these updates out of the routine group so a failure blocks only them.",
+      "matchPackageNames": ["rust", "cargo-deny", "cargo-about", "github.com/rhysd/actionlint"],
       "groupName": "Rust toolchain and linters",
       "automerge": true
     },
