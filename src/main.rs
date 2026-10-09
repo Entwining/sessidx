@@ -433,7 +433,7 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         emit("row", json!({"data":row}))?;
     }
     end(
-        &json!(refresh),
+        &refresh,
         &Coverage {
             records: rows.len(),
             ..Coverage::default()
