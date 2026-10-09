@@ -166,20 +166,35 @@ fn redact_run(run: &str, identifier: &str) -> String {
     }
 }
 
+// Rules: docs/formats.md `code_identifiers`, `relative_path_shape`, `numeric_identifier_pieces`.
 fn identifier_shaped(run: &str) -> bool {
     let run = run
         .strip_prefix("--")
         .or_else(|| run.strip_prefix('-'))
         .unwrap_or(run);
-    run.split(['.', '/', '-'])
-        .flat_map(|segment| segment.split("::"))
-        .all(|segment| {
-            let letters = segment.trim_end_matches(|c: char| c.is_ascii_digit());
-            !letters.is_empty()
-                && letters
+    let run = run.strip_prefix('/').unwrap_or(run);
+    let mut alphabetic = false;
+    let shaped = run.split('/').all(|segment| {
+        if matches!(segment, "." | ".." | "@") {
+            return true;
+        }
+        let segment = segment.trim_start_matches('.');
+        let segment = segment.strip_prefix('@').unwrap_or(segment);
+        segment
+            .split(['.', '-', '@'])
+            .flat_map(|piece| piece.split("::"))
+            .all(|piece| {
+                let letters = piece.trim_end_matches(|c: char| c.is_ascii_digit());
+                if letters.is_empty() {
+                    return !piece.is_empty();
+                }
+                alphabetic |= letters.bytes().any(|b| b.is_ascii_alphabetic());
+                letters
                     .bytes()
                     .all(|b| b.is_ascii_alphabetic() || b == b'_')
-        })
+            })
+    });
+    shaped && alphabetic
 }
 
 pub fn redact_metadata(text: &str) -> String {

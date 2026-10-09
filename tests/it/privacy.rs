@@ -240,6 +240,21 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "src/redaction.rs:83",
         "a/b.rs:12:5",
         "crates/core/src/main.rs:107",
+        ".github/workflows/check.yml",
+        "./scripts/upload.sh",
+        "../../sessidx/src/main.rs",
+        "node_modules/.bin/eslint",
+        ".cargo/mutants.toml",
+        "docs/releases/0.0.2.md",
+        "claude-sonnet-4-5-20250929",
+        "@types/node/index.d.ts",
+        "/synthetic/node_modules/@scope/pkg/index.js",
+        "react-dom@18.2.0-beta.4",
+        "@/components/ui/SearchBox.tsx",
+        "...ponentSearchBoxHeader",
+        "..SearchOptions::default",
+        "/compact_summary_handoff",
+        "alphaBetaGammaDelta/../omegaPsi",
     ] {
         let hits = search_hits(
             &store.db,
@@ -274,6 +289,14 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:12:5",
         "order:9182736455647382",
         "aBcDeFgHiJkLmNoP:42",
+        "./vR9xT6qA2nL8cP4hY0sD7f/G3jK5mB1wZ",
+        ".vR9xT6qA2nL8cP4hY0sD7fG3jK5",
+        "/vR9xT6qA2nL8cP4hY0sD7fG3jK5mB",
+        "2026/10/10/vR9xT6qA2nL8cP4hY0",
+        "alphaBetaGammaDelta/@@omegaPsi",
+        "alphaBetaGammaDelta/.../omegaPsi",
+        "0123456789.0123456789-0123456789/0123456789",
+        "0123456789/0123456789/0123456789/_",
     ] {
         assert!(
             !context[0].snippet.contains(value),
@@ -325,6 +348,44 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
             .snippet
             .contains("vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ")
     );
+}
+
+#[test]
+fn path_and_version_structure_never_exempts_random_pieces() {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut piece = || {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let mut bytes: Vec<u8> = (0..12)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                ALPHABET[(state % ALPHABET.len() as u64) as usize]
+            })
+            .collect();
+        // A digit between letters, as in generated tokens, keeps the piece out of the identifier shape.
+        bytes[4..7].copy_from_slice(b"q7Z");
+        String::from_utf8(bytes).unwrap()
+    };
+    for layout in [
+        "./<1>/<2>",
+        "../<1>/<2>",
+        ".<1><2>",
+        "<1>/.<2>",
+        "@<1>/<2>",
+        "@/<1>/<2>",
+        "...<1><2>",
+        "..<1>::<2>",
+        "/<1><2>",
+        "<1>/<2>/0.0.2",
+        "<1>-<2>-20250929",
+        "<1>@<2>",
+    ] {
+        for _ in 0..200 {
+            let token = layout.replace("<1>", &piece()).replace("<2>", &piece());
+            assert_eq!(redaction::redact(&token), "[REDACTED]", "{layout}");
+        }
+    }
 }
 
 #[test]
