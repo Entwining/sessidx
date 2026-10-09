@@ -1,4 +1,49 @@
 use crate::common::{serial, sessidx};
+use std::path::Path;
+
+#[test]
+fn readme_examples_print_their_shown_output_for_the_readme_fixture() {
+    let _serial = serial();
+    let readme = include_str!("../../README.md");
+    let home = tempfile::tempdir().unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/readme");
+    // The README's commands use the default roots and database, so the scratch
+    // HOME links those roots to the fixture and the pipelines run verbatim.
+    for (root, dir) in [
+        (".claude/projects", "claude"),
+        (".codex/sessions", "codex"),
+        (".pi/agent/sessions", "pi"),
+    ] {
+        let link = home.path().join(root);
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(fixture.join(dir), link).unwrap();
+    }
+    let bin = Path::new(env!("CARGO_BIN_EXE_sessidx")).parent().unwrap();
+    let mut examples: Vec<(&str, String)> = Vec::new();
+    let mut in_console = false;
+    for line in readme.lines() {
+        if line.starts_with("```") {
+            in_console = line == "```console";
+        } else if let (true, Some(command)) = (in_console, line.strip_prefix("$ ")) {
+            examples.push((command, String::new()));
+        } else if in_console {
+            let shown = &mut examples.last_mut().unwrap().1;
+            shown.push_str(line);
+            shown.push('\n');
+        }
+    }
+    assert_eq!(examples.len(), 2, "README console examples not found");
+    for (command, shown) in examples {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", command])
+            .env("HOME", home.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}: {out:?}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), shown, "{command}");
+    }
+}
 
 #[test]
 fn skill_names_only_commands_and_options_the_cli_accepts() {
