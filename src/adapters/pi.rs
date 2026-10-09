@@ -54,7 +54,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 };
             }
             let mut events = Vec::new();
-            // Pi empty replies: tests/counting.rs::pi_empty_response_and_explicit_message_model_override.
+            // Pi empty replies: tests/it/messages.rs::pi_empty_response_and_explicit_message_model_override.
             if role == "assistant" || role == "user" || role == "system" {
                 let mut e = Event::new(role, "message", "message.role");
                 let mut body = message_text(&m["content"]);

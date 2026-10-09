@@ -104,7 +104,7 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
             _ => {}
         }
     }
-    // Tool output and UTF-8 clipping: tests/lookup.rs::tool_output_prefix_is_bounded_and_raw_tail_remains_reachable.
+    // Tool output and UTF-8 clipping: tests/it/output_prefix.rs::tool_output_prefix_is_bounded_and_raw_tail_remains_reachable.
     let mut text = String::with_capacity(LIMIT);
     append(output, &mut text, &mut e.text_truncated);
     let redacted = crate::redaction::redact_serialized(&text);
