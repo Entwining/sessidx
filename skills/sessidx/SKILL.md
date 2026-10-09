@@ -13,7 +13,7 @@ Every command writes JSON Lines to stdout: data records with a `type` field, the
 
 - `end.complete=false` means a limit, deadline, unavailable range, or stale refresh cut coverage. An empty incomplete result is not evidence of absence.
 - `end.refresh.missing_roots` lists each absent session directory as the `HARNESS=PATH` that `--root` accepts. One that never held indexed sessions, such as a harness the user does not run or `~/.codex/archived_sessions` before any thread is archived, leaves the result complete; one that disappeared after indexing makes the refresh stale.
-- `end.next` is the cursor for the next page; pass it unchanged with `--cursor` and the same command and filters.
+- `end.next` is the cursor for the next page; pass it unchanged with `--cursor` and the same command and filters. `search` pages cover the first 100 ranked sessions; past them `next` is null with `complete=false`, so narrow the query to reach the rest.
 - `end.error` carries the failure and its recovery instruction. Exit codes: 0 data, 1 no data, 2 error.
 
 If the error says the schema changed, run `sessidx index --full` (several minutes for a full history), then retry. A `writer_busy` refresh means another process is indexing; the query still answers from committed data and reports `stale`. A `continuation` in `end.refresh` means the two-second refresh stopped before indexing everything, as on first use; run `sessidx index` once (several minutes for a full history), then retry.
