@@ -259,5 +259,14 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
     })();
     db.progress_handler(0, None::<fn() -> bool>)?;
     db.execute_batch("PRAGMA query_only=OFF;")?;
-    result
+    result.map_err(|e| match e.downcast_ref::<rusqlite::Error>() {
+        Some(rusqlite::Error::SqliteFailure(f, _))
+            if f.code == rusqlite::ErrorCode::OperationInterrupted =>
+        {
+            anyhow::anyhow!(
+                "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
+            )
+        }
+        _ => e,
+    })
 }

@@ -157,7 +157,15 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
     assert!(excess.unwrap_err().to_string().contains("10000 rows"));
     let start = std::time::Instant::now();
     let err = counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
-    assert!(err.to_string().contains("interrupted"), "{err}");
+    assert_eq!(
+        err.to_string(),
+        "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
+    );
+    let overflow = counting::sql(&store.db, "SELECT abs(-9223372036854775808) AS n").unwrap_err();
+    assert!(
+        overflow.to_string().contains("integer overflow"),
+        "{overflow}"
+    );
     assert!(start.elapsed() < std::time::Duration::from_secs(4));
     assert_eq!(
         counting::sql(&store.db, "SELECT 1 AS n").unwrap()[0]["n"],
