@@ -42,10 +42,15 @@ jobs:
       # The Homebrew formula renders this file into each bottle; a license the
       # configuration cannot place would otherwise fail only at release.
       # cargo metadata needs every target's crates, which no build fetches.
+      # cargo-about only logs a dropped notice, such as a clarification whose
+      # checksum no longer matches, so any warning or error fails the step.
       - name: Render third-party licenses
         run: |
           cargo fetch --locked
-          cargo about generate --frozen --fail -o "$RUNNER_TEMP/LICENSE-THIRD-PARTY.md" about.hbs
+          log="$RUNNER_TEMP/cargo-about.log"
+          cargo about generate --frozen --fail -o "$RUNNER_TEMP/LICENSE-THIRD-PARTY.md" about.hbs 2> "$log" || { cat "$log" >&2; exit 1; }
+          cat "$log" >&2
+          if grep -Eq 'WARN|ERROR' "$log"; then exit 1; fi
       - name: Test
         run: |
           test "$(uname -m)" = arm64
