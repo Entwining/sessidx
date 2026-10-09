@@ -20,6 +20,9 @@ jobs:
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-deny@0.20.2
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-about@0.9.2
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
@@ -36,6 +39,13 @@ jobs:
         run: cargo clippy --all-targets --locked
         env:
           CARGO_BUILD_WARNINGS: deny
+      # The Homebrew formula renders this file into each bottle; a license the
+      # configuration cannot place would otherwise fail only at release.
+      # cargo metadata needs every target's crates, which no build fetches.
+      - name: Render third-party licenses
+        run: |
+          cargo fetch --locked
+          cargo about generate --frozen --fail -o "$RUNNER_TEMP/LICENSE-THIRD-PARTY.md" about.hbs
       - name: Test
         run: |
           test "$(uname -m)" = arm64
