@@ -206,7 +206,10 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
             None,
         )
         .unwrap();
-    assert_eq!(missing.missing_roots, ["pi"]);
+    assert_eq!(
+        missing.missing_roots,
+        [format!("pi={}", roots[0].path.join("absent").display())]
+    );
     assert!(!missing.stale);
     let filters = Filters {
         harness: vec![sessidx::query::Harness::Codex],
@@ -234,7 +237,10 @@ fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
     let (dir, mut store, roots) = indexed("codex", include_str!("../fixtures/codex.jsonl"));
     fs::rename(&roots[0].path, dir.path().join("moved")).unwrap();
     let missing = store.refresh(&roots, false, None).unwrap();
-    assert_eq!(missing.missing_roots, ["codex"]);
+    assert_eq!(
+        missing.missing_roots,
+        [format!("codex={}", roots[0].path.display())]
+    );
     assert!(missing.stale);
     let files: i64 = store
         .db
@@ -246,6 +252,46 @@ fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
     assert!(store.refresh(&roots, false, None).unwrap().stale);
     store.refresh(&[], true, None).unwrap();
     assert!(!store.refresh(&roots, false, None).unwrap().stale);
+}
+
+#[test]
+fn an_archived_codex_thread_stays_findable_under_its_new_path() {
+    let serial = serial();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("index.db");
+    let sessions = dir.path().join(".codex/sessions/2026/10/01");
+    let archived = dir.path().join(".codex/archived_sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(
+        sessions.join("rollout.jsonl"),
+        include_str!("../fixtures/codex.jsonl"),
+    )
+    .unwrap();
+    let run =
+        |args: &[&str], exit| stream(&sessidx(&serial, &db, &[], args).output().unwrap(), exit);
+    let claude = format!("claude={}", dir.path().join(".claude/projects").display());
+    let pi = format!("pi={}", dir.path().join(".pi/agent/sessions").display());
+    let index = run(&["index"], 0);
+    assert_eq!(
+        index[0]["missing_roots"],
+        serde_json::json!([claude, format!("codex={}", archived.display()), pi])
+    );
+    assert_eq!(index[0]["stale"], false);
+    let before = run(&["show", "codex-fixture"], 0).len();
+    let moved = archived.join("rollout.jsonl");
+    fs::create_dir_all(&archived).unwrap();
+    fs::rename(sessions.join("rollout.jsonl"), &moved).unwrap();
+    let index = run(&["index"], 0);
+    assert_eq!(index[0]["missing_roots"], serde_json::json!([claude, pi]));
+    let shown = run(&["show", "codex-fixture"], 0);
+    assert_eq!(shown.len(), before);
+    for record in shown.iter().filter(|r| r["type"] == "record") {
+        assert_eq!(record["path"], moved.to_str().unwrap());
+    }
+    let files = run(&["sql", "SELECT path FROM files"], 0);
+    let paths: Vec<_> = files.iter().filter(|r| r["type"] == "row").collect();
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0]["data"]["path"], moved.to_str().unwrap());
 }
 
 #[test]

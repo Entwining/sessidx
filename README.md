@@ -22,7 +22,7 @@ This installs `~/.local/bin/sessidx`; put that directory on `PATH`. From a check
 
 ## Use
 
-`sessidx index` builds the index from `~/.claude/projects`, `~/.codex/sessions`, and `~/.pi/agent/sessions`; a long history takes several minutes the first time. After that, each query refreshes the index incrementally within a two-second budget.
+`sessidx index` builds the index from `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`; a long history takes several minutes the first time. After that, each query refreshes the index incrementally within a two-second budget.
 
 ```sh
 sessidx index

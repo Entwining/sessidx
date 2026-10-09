@@ -50,9 +50,15 @@ fn sql_without_an_index_names_the_build_command() {
     );
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     let out = sessidx(&serial, &db, &[], &["index"]).output().unwrap();
+    let home = dir.path().display();
     assert_eq!(
         stream(&out, 0)[0]["missing_roots"],
-        json!(["claude", "codex", "pi"])
+        json!([
+            format!("claude={home}/.claude/projects"),
+            format!("codex={home}/.codex/sessions"),
+            format!("codex={home}/.codex/archived_sessions"),
+            format!("pi={home}/.pi/agent/sessions"),
+        ])
     );
 }
 

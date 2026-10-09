@@ -203,8 +203,8 @@ impl Store {
         } else {
             Vec::new()
         };
-        // A missing root that never held indexed files is a harness this user
-        // does not have; one that did (moved, unmounted) leaves its rows unverified.
+        // A missing root that never held indexed files is one this user does not
+        // have; one that did (moved, unmounted) leaves its rows unverified.
         let unverified = roots.iter().find(|r| {
             !r.path.exists()
                 && indexed

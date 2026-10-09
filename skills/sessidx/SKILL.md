@@ -12,6 +12,7 @@ allowed-tools: Bash(sessidx:*) Bash(jq:*) Read
 Every command writes JSON Lines to stdout: data records with a `type` field, then exactly one `end` record. Judge the result by `end`, not by the exit code alone:
 
 - `end.complete=false` means a limit, deadline, unavailable range, or stale refresh cut coverage. An empty incomplete result is not evidence of absence.
+- `end.refresh.missing_roots` lists each absent session directory as the `HARNESS=PATH` that `--root` accepts. One that never held indexed sessions, such as a harness the user does not run or `~/.codex/archived_sessions` before any thread is archived, leaves the result complete; one that disappeared after indexing makes the refresh stale.
 - `end.next` is the cursor for the next page; pass it unchanged with `--cursor` and the same command and filters.
 - `end.error` carries the failure and its recovery instruction. Exit codes: 0 data, 1 no data, 2 error.
 
