@@ -389,7 +389,7 @@ pub fn scan(
         "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --harness"
     );
     let deadline = Instant::now() + budget;
-    db.progress_handler(1000, Some(move || Instant::now() >= deadline));
+    db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
     let result: Result<(Vec<Hit>, Coverage)> = (|| {
         let pattern = Regex::new(pattern).context("invalid grep regex")?;
         let (clause, mut args) = filters.sql(db)?;
@@ -444,7 +444,7 @@ pub fn scan(
         }
         Ok((hits, coverage))
     })();
-    db.progress_handler(0, None::<fn() -> bool>);
+    db.progress_handler(0, None::<fn() -> bool>)?;
     result
 }
 
