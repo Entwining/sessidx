@@ -14,12 +14,9 @@ use serde_json::{Value as Json, json};
 use std::time::{Duration, Instant};
 
 /// `canonical_events` and `call_outcomes` with the views' columns and rules,
-/// limited to tool calls and results before ranking copies. Through the views,
-/// every count joined the strings of all events before the kind filter applied.
-/// Adapters attach shell sites only to local and server tool calls, so
-/// `--program` lookups see every site.
-/// `session_ref` and `call_ref` let call lookups use the `events_call` index;
-/// matching them through the views scanned every event of the session.
+/// limited to tool calls and results before ranking copies. Rule:
+/// docs/formats.md `count_view_parity`. Adapters attach shell sites only to
+/// local and server tool calls, so `--program` lookups see every site.
 const TOOL_EVENTS: &str = "WITH canonical_events AS MATERIALIZED (
  SELECT c.id,c.file_id,c.session_ref,session.value AS session_id,c.ts,model.value AS model,coalesce(role.value,'unknown') AS role,kind.value AS kind,
  CASE WHEN c.call_id IS NULL THEN NULL ELSE lower(hex(c.call_id)) END AS call_id,c.call_id AS call_ref,c.ok

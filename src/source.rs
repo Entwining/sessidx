@@ -72,10 +72,8 @@ pub fn metadata(plain: &Path) -> io::Result<Metadata> {
         })
 }
 
-/// Codex publishes a rollout's new form before removing the old one, so after
-/// the compressed form has gone missing the plain form exists again unless the
-/// session itself was removed: one plain retry resolves a change in either
-/// direction between two attempts.
+/// Rule: docs/formats.md `rollout_form_race`. The plain retry holds only while
+/// Codex publishes a rollout's new form before removing the old one.
 fn attempts(plain: &Path) -> [(PathBuf, bool); 3] {
     [
         (plain.to_path_buf(), false),
