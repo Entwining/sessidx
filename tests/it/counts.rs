@@ -1,9 +1,12 @@
 use crate::common::indexed;
 use sessidx::{
     counting::{self, By, Metric},
-    model::Harness,
+    discovery::Root,
+    model::{Harness, name},
     query::{Filters, Kind, Role},
+    store::Store,
 };
+use std::fs;
 
 #[test]
 fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
@@ -185,4 +188,136 @@ fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
     )
     .unwrap();
     assert_eq!(result[0]["unclassified"], 1);
+}
+
+#[test]
+fn counts_equal_the_public_views_over_copied_history() {
+    let dir = tempfile::tempdir().unwrap();
+    // Denied calls whose program selection depends on matching the call: two
+    // `rg` sites in one call, a call without `rg`, and a server call with `rg`.
+    let claude = format!(
+        "{}{}",
+        include_str!("../fixtures/claude.jsonl"),
+        concat!(
+            r#"{"type":"assistant","uuid":"c3","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:02Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-twice","name":"Bash","input":{"command":"rg one; rg two"}},{"type":"tool_use","id":"call-ls","name":"Bash","input":{"command":"ls src"}}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"c4","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:03Z","toolDenialKind":"hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-twice","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"c5","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:04Z","toolDenialKind":"hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-ls","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"c6","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"server_tool_use","id":"call-server","name":"Bash","input":{"command":"rg three"}}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"c7","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:06Z","toolDenialKind":"hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-server","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            "\n",
+        )
+    );
+    let mut roots = Vec::new();
+    for (harness, fixture) in [
+        (Harness::Claude, claude.as_str()),
+        (Harness::Codex, include_str!("../fixtures/codex.jsonl")),
+        (Harness::Pi, include_str!("../fixtures/pi.jsonl")),
+    ] {
+        let root = dir.path().join(name(harness));
+        fs::create_dir(&root).unwrap();
+        // A resumed or forked session repeats its parent's records with the same
+        // native IDs; the copy's own context can attribute them differently.
+        fs::write(root.join("a.jsonl"), fixture).unwrap();
+        fs::write(
+            root.join("b.jsonl"),
+            fixture.replace("gpt-fixture", "gpt-copy"),
+        )
+        .unwrap();
+        roots.push(Root {
+            harness,
+            path: root,
+        });
+    }
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    store.refresh(&roots, false, None).unwrap();
+    let rows = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert!(
+        rows("SELECT count(*) FROM canonical_events WHERE kind IN ('tool_call','tool_result')")
+            < rows("SELECT count(*) FROM events WHERE kind IN ('tool_call','tool_result')")
+    );
+    let by = [By::Harness, By::Model, By::Role, By::Week, By::Kind];
+    let keys = "f.harness,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.kind";
+    let from =
+        "FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
+    // References over the public views, with and without a program selection.
+    for program in [None, Some("rg")] {
+        let (selected_site, selected_call, unknown_call, selected_result, unknown_result) =
+            match program {
+                None => ("1", "1", "0", "1", "0"),
+                Some(_) => (
+                    "c.program='rg'",
+                    "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program='rg')",
+                    "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))",
+                    "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program='rg')",
+                    "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))",
+                ),
+            };
+        for (metric, sql) in [
+            (
+                Metric::Commands,
+                format!(
+                    "SELECT {keys},sum(c.parsed=1 AND {selected_site}),sum(c.parsed=1),sum(c.parsed=0 OR c.program IS NULL) {from} JOIN commands c ON c.event_id=e.id WHERE e.kind='tool_call' GROUP BY {keys}"
+                ),
+            ),
+            (
+                Metric::Failures,
+                format!(
+                    "SELECT {keys},sum(o.ok=0 AND {selected_call}),sum({selected_call}),sum(({selected_call} AND o.ok IS NULL) OR {unknown_call}) {from} LEFT JOIN call_outcomes o ON o.harness=f.harness AND o.session_id=e.session_id AND o.call_id=e.call_id WHERE e.kind='tool_call' GROUP BY {keys}"
+                ),
+            ),
+            (
+                Metric::Denials,
+                format!(
+                    "SELECT {keys},sum(EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id) AND {selected_result}),sum({selected_result}),sum(({selected_result} AND EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id AND d.reason_id='unknown')) OR {unknown_result}) {from} WHERE e.kind='tool_result' GROUP BY {keys}"
+                ),
+            ),
+        ] {
+            let mut expected: Vec<Vec<String>> = store
+                .db
+                .prepare(&sql)
+                .unwrap()
+                .query_map([], |r| {
+                    (0..8)
+                        .map(|i| {
+                            r.get_ref(i).map(|v| match v {
+                                rusqlite::types::ValueRef::Text(t) => {
+                                    String::from_utf8_lossy(t).into_owned()
+                                }
+                                v => v.as_i64().unwrap().to_string(),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            expected.sort();
+            let mut counted: Vec<Vec<String>> =
+                counting::count(&store.db, metric, &by, program, &Filters::default())
+                    .unwrap()
+                    .iter()
+                    .map(|row| {
+                        ["harness", "model", "role", "week", "kind"]
+                            .iter()
+                            .map(|k| row[k].as_str().unwrap().to_owned())
+                            .chain(
+                                ["numerator", "denominator", "unclassified"]
+                                    .iter()
+                                    .map(|k| row[k].to_string()),
+                            )
+                            .collect()
+                    })
+                    .collect();
+            counted.sort();
+            assert!(
+                expected.iter().any(|row| row[6] != "0"),
+                "{metric:?} {program:?} selects nothing"
+            );
+            assert_eq!(counted, expected, "{metric:?} {program:?}");
+        }
+    }
 }

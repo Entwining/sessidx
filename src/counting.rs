@@ -12,6 +12,35 @@ use rusqlite::{
 use serde_json::{Value as Json, json};
 use std::time::{Duration, Instant};
 
+/// `canonical_events` and `call_outcomes` with the views' columns and rules,
+/// limited to tool calls and results before ranking copies. Through the views,
+/// every count joined the strings of all events before the kind filter applied.
+/// Adapters attach shell sites only to local and server tool calls, so
+/// `--program` lookups see every site.
+/// `session_ref` and `call_ref` let call lookups use the `events_call` index;
+/// matching them through the views scanned every event of the session.
+const TOOL_EVENTS: &str = "WITH canonical_events AS MATERIALIZED (
+ SELECT c.id,c.file_id,c.session_ref,session.value AS session_id,c.ts,model.value AS model,coalesce(role.value,'unknown') AS role,kind.value AS kind,
+ CASE WHEN c.call_id IS NULL THEN NULL ELSE lower(hex(c.call_id)) END AS call_id,c.call_id AS call_ref,c.ok
+ FROM (SELECT l.id,l.file_id,l.session_ref,l.ts,l.model_ref,d.role_ref,d.kind_ref,d.call_id,d.ok,row_number() OVER (
+ PARTITION BY f.harness,coalesce(l.native_id,l.id),d.kind_ref ORDER BY coalesce(f.first_ts,'9999'),f.path,l.line_no,l.ordinal) AS copy_rank
+ FROM event_details d CROSS JOIN locations l ON l.id=d.event_id JOIN files f ON f.id=l.file_id
+ WHERE d.kind_ref IN (SELECT id FROM strings WHERE value IN ('tool_call','server_tool_call','tool_result'))) c
+ JOIN strings session ON session.id=c.session_ref LEFT JOIN strings model ON model.id=c.model_ref
+ LEFT JOIN strings role ON role.id=c.role_ref JOIN strings kind ON kind.id=c.kind_ref
+ WHERE c.copy_rank=1),
+call_outcomes AS MATERIALIZED (
+ SELECT f.harness,e.session_id,e.call_id,CASE WHEN sum(ok=0)>0 THEN 0 WHEN sum(ok=1)>0 THEN 1 END AS ok
+ FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id)";
+
+/// Calls whose canonical event holds a site of `:program`, joined to results
+/// instead of probed per result: with a GROUP BY, SQLite 3.46 plans that probe
+/// as a scan of `canonical_events` for every result.
+const PROGRAM_CALLS: &str = ",
+program_calls AS MATERIALIZED (
+ SELECT DISTINCT cf.harness,ce.session_ref,ce.call_ref FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id
+ WHERE cp.program=:program AND ce.call_ref IS NOT NULL)";
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum Metric {
     Commands,
@@ -48,23 +77,22 @@ pub fn count(
         });
     }
     let (clause, args) = filters.sql(db)?;
+    let denials_by_program = program.is_some() && matches!(metric, Metric::Denials);
     let selected = if program.is_some() {
         match metric {
             Metric::Commands => "c.program=:program",
             Metric::Failures => {
                 "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program=:program)"
             }
-            Metric::Denials => {
-                "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program=:program)"
-            }
+            Metric::Denials => "pc.call_ref IS NOT NULL",
         }
     } else {
         "1=1"
     };
     let unknown_program = if program.is_none() {
         "0"
-    } else if matches!(metric, Metric::Denials) {
-        "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))"
+    } else if denials_by_program {
+        "EXISTS(SELECT 1 FROM event_details cd JOIN commands cp ON cp.event_id=cd.event_id JOIN locations cl ON cl.id=cd.event_id JOIN files cf ON cf.id=cl.file_id WHERE cd.session_ref=e.session_ref AND cd.call_id=e.call_ref AND cf.harness=f.harness AND (cp.parsed=0 OR cp.program IS NULL))"
     } else {
         "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))"
     };
@@ -102,7 +130,11 @@ pub fn count(
             selected_denominator.as_str(),
             unknown_denials.as_str(),
             "tool_result_events_with_unknown_denial_reason_or_program",
-            "",
+            if denials_by_program {
+                "LEFT JOIN program_calls pc ON pc.harness=f.harness AND pc.session_ref=e.session_ref AND pc.call_ref=e.call_ref"
+            } else {
+                ""
+            },
             "tool_result",
         ),
     };
@@ -120,8 +152,13 @@ pub fn count(
             expressions.join(",")
         )
     };
+    let program_calls = if denials_by_program {
+        PROGRAM_CALLS
+    } else {
+        ""
+    };
     let sql = format!(
-        "SELECT {prefix}coalesce({numerator},0),coalesce({denominator},0),coalesce({unclassified},0) FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id {join} WHERE {clause} AND e.kind='{kind}'{group}"
+        "{TOOL_EVENTS}{program_calls} SELECT {prefix}coalesce({numerator},0),coalesce({denominator},0),coalesce({unclassified},0) FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id {join} WHERE {clause} AND e.kind='{kind}'{group}"
     );
     let mut stmt = db.prepare(&sql)?;
     let mut args = args.into_iter();
