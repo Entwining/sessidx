@@ -70,7 +70,22 @@ When a harness deletes an old session file, sessidx drops its rows too, so the s
 
 ## Use it from an agent
 
-The [`sessidx` skill](skills/sessidx/SKILL.md) teaches an agent with a shell when to reach for sessidx and how to read its results. With `sessidx` on `PATH`, install it for your user with the GitHub CLI:
+The [`sessidx` skill](skills/sessidx/SKILL.md) teaches an agent with a shell when to reach for sessidx and how to read its results. With `sessidx` on `PATH`, install it for your user through one of these installers; using two for the same agent loads the skill twice.
+
+As a Claude Code plugin, updated with `claude plugin update sessidx@entwining`:
+
+```sh
+claude plugin marketplace add Entwining/sessidx
+claude plugin install sessidx@entwining
+```
+
+With [`skills`](https://github.com/vercel-labs/skills) for Claude Code, Codex, Pi, and other agents (pass `-a` once per agent), updated with `npx skills update -g`:
+
+```sh
+npx skills add Entwining/sessidx -g -a claude-code -a codex -a pi
+```
+
+With the GitHub CLI, updated with `gh skill update sessidx`:
 
 ```sh
 gh skill install Entwining/sessidx sessidx --scope user
