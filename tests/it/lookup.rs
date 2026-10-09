@@ -283,3 +283,98 @@ fn grep_reads_each_range_from_its_own_file() {
         ["a", "b"]
     );
 }
+
+#[test]
+fn cwd_filter_selects_the_directory_and_children_but_not_a_prefix_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let logs = dir.path().join("logs");
+    fs::create_dir(&logs).unwrap();
+    for (session, cwd) in [
+        ("exact", "/x/proj"),
+        ("child", "/x/proj/child"),
+        ("sibling", "/x/projx"),
+    ] {
+        fs::write(
+            logs.join(format!("{session}.jsonl")),
+            serde_json::json!({"type":"user","uuid":session,"sessionId":session,"cwd":cwd,"message":{"role":"user","content":"cwdneedle"}}).to_string() + "\n",
+        )
+        .unwrap();
+    }
+    let mut store = sessidx::store::Store::open(&dir.path().join("index.db")).unwrap();
+    store
+        .refresh(
+            &[Root {
+                harness: Harness::Claude,
+                path: logs,
+            }],
+            false,
+            None,
+        )
+        .unwrap();
+    for cwd in ["/x/proj", "/x/proj/", "/x/proj//"] {
+        let filters = Filters {
+            cwd: Some(cwd.into()),
+            ..Filters::default()
+        };
+        let mut sessions: Vec<_> = search_hits(&store.db, "cwdneedle", &filters, 20, 0)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.session_id)
+            .collect();
+        sessions.sort();
+        assert_eq!(sessions, ["child", "exact"], "{cwd}");
+    }
+}
+
+#[test]
+fn search_terms_are_literal_phrases_joined_with_and() {
+    let data: String = [
+        ("adjacent", "alpha beta"),
+        ("apart", "beta gamma alpha"),
+        ("and_word", "alpha and beta"),
+        ("or_word", "alpha or gamma"),
+        ("not_word", "alpha not gamma"),
+        ("near_word", "NEAR(alpha delta beta)"),
+        ("prefix_word", "alph"),
+    ]
+    .iter()
+    .map(|(session, text)| {
+        serde_json::json!({"type":"user","uuid":session,"sessionId":session,"message":{"role":"user","content":text}}).to_string() + "\n"
+    })
+    .collect();
+    let (_dir, store, _) = indexed(Harness::Claude, &data);
+    let sessions = |q: &str| {
+        let mut found: Vec<_> = query::search(&store.db, q, &Filters::default(), 20, 0)
+            .map_err(|e| format!("{e:#}"))?
+            .sessions
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+        found.sort();
+        Ok::<_, String>(found)
+    };
+    let both = ["adjacent", "and_word", "apart", "near_word"];
+    let mut failures = Vec::new();
+    for (q, expected) in [
+        ("alpha beta", &both[..]),
+        ("\"alpha beta\"", &["adjacent"]),
+        ("alpha\"beta", &["adjacent"]),
+        ("alpha AND beta", &["and_word"]),
+        ("alpha OR gamma", &["or_word"]),
+        ("alpha NOT gamma", &["not_word"]),
+        ("NEAR(alpha beta)", &["near_word"]),
+        ("alph*", &["prefix_word"]),
+        ("alpha -beta", &both),
+        ("(alpha beta", &both),
+    ] {
+        let found = sessions(q);
+        if !found.as_ref().is_ok_and(|f| *f == expected) {
+            failures.push(format!("{q}: {found:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+    let empty = query::search(&store.db, " \t", &Filters::default(), 20, 0)
+        .err()
+        .unwrap();
+    assert!(format!("{empty:#}").contains("search query is empty"));
+}

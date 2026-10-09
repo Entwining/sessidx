@@ -13,5 +13,12 @@
   {"harness":"codex","ok":false,"source":"hook","output":{"isError":false,"content":[{"type":"text","text":"Script error:\nCommand blocked by PreToolUse hook: rg has no --include flag."}]}},
   {"harness":"codex","ok":false,"output":"Script failed\nWall time: 0.1\nOutput:\nsynthetic stderr"},
   {"harness":"codex","ok":false,"exit_code":2,"output":[{"exit_code":0,"output":"first"},{"exit_code":2,"output":"second"}]},
-  {"harness":"codex","ok":null,"output":{"meta":{"exit_code":2},"check":{"isError":true}}}
+  {"harness":"codex","ok":null,"output":{"meta":{"exit_code":2},"check":{"isError":true}}},
+  {"harness":"claude","ok":false,"source":"guard","output":"DENIED: rg has no --include flag."},
+  {"harness":"claude","ok":false,"source":"guard","output":"Blocked by agent-guard: rg has no --include flag."},
+  {"harness":"pi","ok":false,"source":"guard","output":"Blocked by agent-guard: synthetic policy."},
+  {"harness":"codex","ok":false,"exit_code":2,"output":{"results":[{"exit_code":2,"output":"synthetic results item"}]}},
+  {"harness":"codex","ok":false,"exit_code":2,"output":{"items":[{"exit_code":2,"output":"synthetic items entry"}]}},
+  {"harness":"codex","ok":false,"source":"batch_hook","output":{"results":{"isError":false,"content":[{"status":"rejected","reason":"Command blocked by PreToolUse hook: rg has no --include flag."}]}}},
+  {"harness":"codex","ok":false,"source":"batch_hook","output":{"items":{"isError":false,"content":[{"status":"rejected","reason":"Command blocked by PreToolUse hook: rg has no --include flag."}]}}}
 ]

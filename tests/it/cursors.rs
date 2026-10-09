@@ -371,3 +371,61 @@ fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
     );
     assert_eq!(valid[0]["session_id"], "rank-b");
 }
+
+#[test]
+fn garbage_and_edited_cursor_fields_are_rejected() {
+    let serial = serial();
+    let (_dir, store, roots) = three_harnesses();
+    let search = |cursor: &str, exit| {
+        let out = sessidx(
+            &serial,
+            &store.path,
+            &roots,
+            &["search", "sharedneedle", "--limit", "1", "--cursor", cursor],
+        )
+        .output()
+        .unwrap();
+        stream(&out, exit)
+    };
+    let first = stream(
+        &sessidx(
+            &serial,
+            &store.path,
+            &roots,
+            &["search", "sharedneedle", "--limit", "1"],
+        )
+        .output()
+        .unwrap(),
+        0,
+    );
+    let cursor = first.last().unwrap()["next"].as_str().unwrap();
+    let garbage = search("not-a-cursor", 2);
+    assert!(
+        garbage[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("invalid cursor")
+    );
+    let original: serde_json::Value = serde_json::from_str(cursor).unwrap();
+    search(&original.to_string(), 0);
+    let revision = original["revision"].as_i64().unwrap();
+    for (field, value) in [
+        ("version", json!(2)),
+        ("position", json!(-1)),
+        ("high_water", json!(-1)),
+        ("revision", json!(-1)),
+        ("revision", json!(revision + 1)),
+    ] {
+        let label = format!("{field}={value}");
+        let mut edited = original.clone();
+        edited[field] = value;
+        let rows = search(&edited.to_string(), 2);
+        assert!(
+            rows[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("restart without --cursor"),
+            "{label}"
+        );
+    }
+}

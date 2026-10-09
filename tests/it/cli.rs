@@ -335,3 +335,25 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
     assert_eq!(search(&["--until", "2026-10-01T02:00:00+02:00"], 1), 0);
     assert_eq!(search(&["--until", "2026-10-01T02:00:01+02:00"], 0), 3);
 }
+
+#[test]
+fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
+    let serial = serial();
+    let (_dir, store, roots) = three_harnesses();
+    for args in [
+        vec!["grep", "absentneedle", "--harness", "claude"],
+        vec!["show", "absent-session"],
+        vec!["count", "commands", "--harness", "pi"],
+        vec!["sql", "SELECT 1 AS n WHERE 0"],
+    ] {
+        let rows = stream(
+            &sessidx(&serial, &store.path, &roots, &args)
+                .output()
+                .unwrap(),
+            1,
+        );
+        assert_eq!(rows.len(), 1, "{args:?}");
+        assert_eq!(rows[0]["complete"], true, "{args:?}");
+        assert!(rows[0].get("error").is_none(), "{args:?}");
+    }
+}

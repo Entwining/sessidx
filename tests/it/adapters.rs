@@ -262,3 +262,40 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
         .unwrap();
     assert_eq!((r.records, r.parse_errors), (2, 1));
 }
+
+#[test]
+fn codex_parent_fields_follow_their_precedence() {
+    let spawn =
+        serde_json::json!({"subagent":{"thread_spawn":{"parent_thread_id":"spawn-parent"}}});
+    let history = serde_json::json!({"thread_id":"history-parent"});
+    let mut failures = Vec::new();
+    for (payload, expected) in [
+        (
+            serde_json::json!({"parent_thread_id":"top-parent","forked_from_id":"fork-parent","source":spawn.clone(),"history_base":history.clone()}),
+            "top-parent",
+        ),
+        (
+            serde_json::json!({"forked_from_id":"fork-parent","source":spawn.clone(),"history_base":history.clone()}),
+            "fork-parent",
+        ),
+        (
+            serde_json::json!({"forked_from_id":"fork-parent","history_base":history.clone()}),
+            "fork-parent",
+        ),
+        (
+            serde_json::json!({"source":spawn,"history_base":history}),
+            "spawn-parent",
+        ),
+    ] {
+        let mut s = State::default();
+        adapters::parse(
+            Harness::Codex,
+            &serde_json::json!({"type":"session_meta","payload":payload}),
+            &mut s,
+        );
+        if s.parent_id.as_deref() != Some(expected) {
+            failures.push(format!("{payload} -> {:?}", s.parent_id));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

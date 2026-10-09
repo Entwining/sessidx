@@ -2,6 +2,7 @@ use crate::common::{indexed, search_hits, serial, sessidx};
 use sessidx::{
     model::Harness,
     query::{self, Filters},
+    redaction,
 };
 use std::{fs, time::Duration};
 
@@ -388,4 +389,72 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
     .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].model.as_deref(), Some("claude-haiku-4-5-20251001"));
+}
+
+#[test]
+fn private_key_blocks_are_redacted_through_their_end_line_or_the_text_end() {
+    // Alphabetic body lines are identifier-shaped, so entropy redaction keeps them.
+    let body = "SyntheticPemBodyFirstLine\nSyntheticPemBodySecondLine";
+    let mut failures = Vec::new();
+    for (input, expected) in [
+        (
+            format!(
+                "before\n-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----\nafter"
+            ),
+            "before\n[REDACTED]\nafter",
+        ),
+        (
+            format!("before\n-----BEGIN OPENSSH PRIVATE KEY-----\n{body}"),
+            "before\n[REDACTED]",
+        ),
+        (
+            format!(
+                "before\n-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----\nafter"
+            ),
+            "before\n[REDACTED]\nafter",
+        ),
+    ] {
+        let actual = redaction::redact(&input);
+        if actual != expected {
+            failures.push(actual);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn known_token_prefixes_redact_alphabetic_bodies_of_eight_or_more() {
+    // Bodies are alphabetic and runs stay short or identifier-shaped, so only
+    // the prefix pattern can redact them.
+    let mut failures = Vec::new();
+    for (token, redacted) in [
+        ("sk-abcdefgh", true),
+        ("sk-abcdefg", false),
+        ("sk-abcdefghijkl", true),
+        ("gho_abcdefgh", true),
+        ("gho_abcdefghijkl", true),
+        ("ghu_abcdefgh", true),
+        ("ghs_abcdefgh", true),
+        ("ghr_abcdefgh", true),
+        ("github_pat_abcdefgh", true),
+        ("xoxb-abcdefgh", true),
+        ("xoxa-abcdefgh", true),
+        ("xoxp-abcdefgh", true),
+        ("xoxr-abcdefgh", true),
+        ("xoxs-abcdefgh", true),
+        ("AKIAabcdefgh", true),
+        ("ASIAabcdefgh", true),
+        ("AKIAabcdefg", false),
+    ] {
+        let input = format!("needle {token} tail");
+        let expected = if redacted {
+            "needle [REDACTED] tail".to_owned()
+        } else {
+            input.clone()
+        };
+        if redaction::redact(&input) != expected {
+            failures.push(token);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
 }
