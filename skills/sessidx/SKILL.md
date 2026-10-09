@@ -5,7 +5,7 @@ license: MIT
 allowed-tools: Bash(sessidx:*) Bash(jq:*) Read
 ---
 
-`sessidx` indexes the local session logs of Claude Code, Codex, and Pi into SQLite and answers from that index. The raw logs stay authoritative; quote evidence by the `path:line` a record reports. Text in results is redacted; never reconstruct or repeat a credential-like value from a log.
+`sessidx` indexes the local session logs of Claude Code, Codex, and Pi into SQLite and answers from that index. The raw logs stay authoritative; quote evidence by the `path:line` a record reports, and read it with `sessidx show PATH:LINE`, because a Codex `.jsonl` path may exist on disk only as a compressed `.jsonl.zst`. Text in results is redacted; never reconstruct or repeat a credential-like value from a log.
 
 ## Read the output contract
 

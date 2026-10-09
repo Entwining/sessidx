@@ -4,6 +4,7 @@ use crate::{
     model::{Harness, State, name},
     normalize::hash,
     redaction::{redact, redact_metadata, spaced_cjk},
+    source,
 };
 use anyhow::{Context, Result};
 use rusqlite::{
@@ -14,7 +15,7 @@ use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    io::{self, BufRead, Read},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -307,16 +308,6 @@ impl Store {
         path: &Path,
         deadline: Option<Instant>,
     ) -> Result<IndexedFile> {
-        let mut file = File::open(path).context("cannot open session file")?;
-        let meta = file.metadata()?;
-        let source_size = meta.len();
-        let mtime = format!(
-            "{}:{}:{}:{}",
-            meta.mtime(),
-            meta.mtime_nsec(),
-            meta.ctime(),
-            meta.ctime_nsec()
-        );
         let path_text = path.to_string_lossy();
         let harness_name = name(harness);
         let old = self
@@ -343,15 +334,38 @@ impl Store {
                 },
             )
             .optional()?;
+        // The harness deleted or archived the log after discovery listed it.
+        let Some(mut source) = source::open(path).context("cannot open session file")? else {
+            if let Some(ref o) = old {
+                let tx = self.db.transaction()?;
+                delete_file(&tx, o.id)?;
+                tx.commit()?;
+            }
+            return Ok(IndexedFile {
+                changed: old.is_some(),
+                records: 0,
+                coverage: FileCoverage::Ready,
+            });
+        };
+        let meta = source.meta.clone();
+        let source_size = meta.len();
+        let mtime = format!(
+            "{}:{}:{}:{}",
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec()
+        );
         // Another harness parses the same bytes differently, so neither the
-        // cached rows nor an append to them can be reused.
+        // cached rows nor an append to them can be reused. Only a refresh that
+        // ran out of budget leaves an unchanged file's records unread.
         if let Some(ref o) = old
             && o.harness == harness_name
             && o.dev == meta.dev()
             && o.inode == meta.ino()
             && o.size == source_size
             && o.mtime == mtime
-            && (o.bytes_indexed == source_size || o.index_status == FileCoverage::DeferredTail)
+            && o.index_status != FileCoverage::BudgetExhausted
         {
             return Ok(IndexedFile {
                 changed: false,
@@ -365,7 +379,7 @@ impl Store {
         }
         let prefix_len = source_size.min(4096);
         let mut prefix = vec![0; prefix_len as usize];
-        file.read_exact(&mut prefix)?;
+        source.file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
         let appended = old.as_ref().filter(|o| {
             o.harness == harness_name
@@ -408,8 +422,8 @@ impl Store {
             [path_text.as_ref()],
             |r| r.get(0),
         )?;
-        file.seek(SeekFrom::Start(offset))?;
-        let mut reader = BufReader::new(file.take(source_size - offset));
+        let compressed = source.compressed;
+        let mut reader = source.records_from(offset)?;
         let mut buffer = Vec::new();
         let mut records = 0;
         let mut strings = HashMap::new();
@@ -419,7 +433,20 @@ impl Store {
                 coverage = FileCoverage::BudgetExhausted;
                 break;
             }
-            let (length, complete, oversized) = read_record(&mut reader, &mut buffer)?;
+            let (length, complete, oversized) = match read_record(&mut reader, &mut buffer) {
+                Ok(record) => record,
+                // zstd reports undecodable content as an error without an OS
+                // code; records decoded before it stay indexed.
+                Err(e) if compressed => {
+                    if e.raw_os_error().is_some() {
+                        return Err(e.into());
+                    }
+                    errors += 1;
+                    tx.prepare_cached("INSERT INTO shapes VALUES (?,'invalid_zstd',0,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute([file_id])?;
+                    break;
+                }
+                Err(e) => return Err(e.into()),
+            };
             if length == 0 || !complete {
                 if length > 0 {
                     coverage = FileCoverage::DeferredTail;
@@ -520,7 +547,7 @@ fn intern(tx: &Transaction<'_>, values: &mut HashMap<String, i64>, value: &str) 
     Ok(id)
 }
 
-fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> Result<(u64, bool, bool)> {
+fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> io::Result<(u64, bool, bool)> {
     buffer.clear();
     let mut length = 0;
     let mut oversized = false;

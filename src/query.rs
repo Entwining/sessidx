@@ -12,8 +12,8 @@ use serde::Serialize;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
 use std::{
-    fs::File,
-    os::unix::fs::{FileExt, MetadataExt},
+    os::unix::fs::MetadataExt,
+    path::Path,
     sync::LazyLock,
     time::{Duration, Instant},
 };
@@ -333,7 +333,7 @@ pub fn search(
 fn read_range(
     db: &Connection,
     item: &Hit,
-    source: &mut Option<((u64, u64), File)>,
+    source: &mut Option<((u64, u64), crate::source::Ranges)>,
 ) -> Result<Vec<u8>> {
     anyhow::ensure!(
         item.byte_len <= MAX_RECORD as u64,
@@ -344,26 +344,24 @@ fn read_range(
             "SELECT f.dev,f.inode,l.raw_hash FROM locations l JOIN files f ON f.id=l.file_id WHERE l.id=?",
         )?
         .query_row([item.event_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-    let named = std::fs::metadata(&item.path)?;
-    let (file, meta) = match source {
-        Some((identity, file)) if *identity == (named.dev(), named.ino()) => {
-            let meta = file.metadata()?;
-            (&*file, meta)
-        }
+    let named = crate::source::metadata(Path::new(&item.path))?;
+    let (identity, ranges) = match source {
+        Some((identity, ranges)) if *identity == (named.dev(), named.ino()) => (*identity, ranges),
         _ => {
-            let file = File::open(&item.path)?;
-            let meta = file.metadata()?;
-            (&source.insert(((meta.dev(), meta.ino()), file)).1, meta)
+            let opened = crate::source::open(Path::new(&item.path))?
+                .context("source removed; run sessidx index")?;
+            let identity = (opened.meta.dev(), opened.meta.ino());
+            (identity, &mut source.insert((identity, opened.ranges())).1)
         }
     };
     anyhow::ensure!(
-        meta.dev() == expected.0
-            && meta.ino() == expected.1
-            && meta.len() >= item.byte_off + item.byte_len,
-        "source replaced or truncated; run sessidx index"
+        identity == (expected.0, expected.1),
+        "source replaced; run sessidx index"
     );
     let mut bytes = vec![0; item.byte_len as usize];
-    file.read_exact_at(&mut bytes, item.byte_off)?;
+    ranges
+        .read_exact_at(&mut bytes, item.byte_off)
+        .context("source truncated; run sessidx index")?;
     anyhow::ensure!(
         Sha256::digest(&bytes)[..] == expected.2,
         "source range changed; run sessidx index"

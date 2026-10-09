@@ -28,10 +28,19 @@ exclude_re = [
   'src/query\.rs:\d+:\d+: replace && with \|\| in scan',
   # The read limit differs only when a file grows between stat and read, and the
   # next refresh resumes from the indexed offset either way.
-  'src/store\.rs:\d+:\d+: replace - with \+ in Store::index_file',
+  'src/source\.rs:\d+:\d+: replace - with \+ in Source::records_from',
+  # The plain and compressed paths share a directory, so an error other than
+  # NotFound for one recurs for the other and metadata fails either way.
+  'replace match guard e\.kind\(\) == io::ErrorKind::NotFound with true in metadata',
+  # Restarting the decoder for every range reads the same bytes; continuing
+  # forward only saves decoding the frames again.
+  'replace match guard position <= offset with false in Ranges::read_exact_at',
+  # Telling a failing plain read from undecodable compressed content needs an
+  # injected I/O fault that a test cannot raise.
+  'replace match guard compressed with true in Store::index_file',
   # The handle is reused only when the path names its inode, so reopening the
   # path for every range reads the same file; reuse only saves an open per row.
   'src/query\.rs:\d+:\d+: replace match guard \*identity == \(named\.dev\(\), named\.ino\(\)\) with false in read_range',
   # A reader that never reports end of input hangs; the timeout is the detection.
-  'replace read_record -> Result<\(u64, bool, bool\)> with Ok\(\(1, true, (true|false)\)\)',
+  'replace read_record -> (io::)?Result<\(u64, bool, bool\)> with Ok\(\(1, true, (true|false)\)\)',
 ]

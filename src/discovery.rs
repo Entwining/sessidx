@@ -25,7 +25,7 @@ pub fn defaults(home: &Path) -> Vec<Root> {
 }
 
 pub struct Discovered {
-    /// Harness and path of every session file, sorted by path.
+    /// Harness and plain path of every session file, sorted by path.
     pub files: Vec<(Harness, PathBuf)>,
     /// Each root that does not exist, as the `HARNESS=PATH` that `--root` accepts.
     pub missing_roots: Vec<String>,
@@ -41,13 +41,16 @@ pub fn files(roots: &[Root]) -> Result<Discovered> {
         }
         for entry in WalkDir::new(&root.path).follow_links(false) {
             let entry = entry.context("session discovery failed")?;
-            if entry.file_type().is_file() && entry.path().extension().is_some_and(|v| v == "jsonl")
+            if entry.file_type().is_file()
+                && let Some(plain) = crate::source::plain_path(entry.path())
             {
-                files.push((root.harness, entry.into_path()));
+                files.push((root.harness, plain));
             }
         }
     }
     files.sort_by(|a, b| a.1.cmp(&b.1));
+    // A rollout caught between its plain and compressed forms is one session.
+    files.dedup_by(|a, b| a.1 == b.1);
     Ok(Discovered {
         files,
         missing_roots,

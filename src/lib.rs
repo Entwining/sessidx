@@ -10,4 +10,5 @@ pub mod outcomes;
 pub mod query;
 pub mod redaction;
 pub mod shell;
+pub mod source;
 pub mod store;

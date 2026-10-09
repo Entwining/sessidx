@@ -2,6 +2,7 @@ mod adapters;
 mod cli;
 mod commands;
 mod common;
+mod compressed;
 mod counts;
 mod cursors;
 mod docs;
