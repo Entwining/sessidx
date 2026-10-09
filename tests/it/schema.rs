@@ -1,5 +1,5 @@
 use crate::common::{serial, sessidx, snapshot, stream};
-use sessidx::{discovery::Root, store::Store};
+use sessidx::{discovery::Root, model::Harness, store::Store};
 use std::{fs, os::unix::fs::PermissionsExt};
 
 #[test]
@@ -34,7 +34,7 @@ fn previous_schema_requires_explicit_locked_rebuild() {
     )
     .unwrap();
     let roots = [Root {
-        harness: "codex".into(),
+        harness: Harness::Codex,
         path: root,
     }];
     let mut upgrade = Store::open_for_rebuild(&path).unwrap();
@@ -130,7 +130,7 @@ fn initial_schema_creation_respects_the_writer_lock() {
     let r = second.refresh(&[], false, None).unwrap();
     assert!(r.writer_busy && r.stale);
     let roots = [Root {
-        harness: "codex".into(),
+        harness: Harness::Codex,
         path: dir.path().into(),
     }];
     let rows = stream(

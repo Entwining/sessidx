@@ -1,13 +1,14 @@
 use crate::common::{indexed, search_hits, serial};
 use sessidx::{
     discovery::Root,
+    model::Harness,
     query::{self, Filters},
 };
 use std::{fs, time::Duration};
 
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
-    let (_dir, store, _) = indexed("claude", include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, _) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters {
         session: Some("claude-fixture".into()),
         ..Filters::default()
@@ -46,7 +47,7 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
 
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
-    let (_dir, store, _) = indexed("claude", include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, _) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters::default();
     assert_eq!(
         search_hits(&store.db, "太长", &filters, 20, 0)
@@ -78,7 +79,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
             &store.db,
             "Latin",
             &Filters {
-                harness: vec![sessidx::query::Harness::Pi],
+                harness: vec![Harness::Pi],
                 ..filters.clone()
             },
             20,
@@ -108,7 +109,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
     .unwrap();
     assert_eq!(shown.len(), 1);
     assert!(!coverage.incomplete);
-    let (_dir, store, _) = indexed("codex", include_str!("../fixtures/codex.jsonl"));
+    let (_dir, store, _) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     assert_eq!(
         query::show(&store.db, "codex://threads/codex-fixture", 3, 100, 0)
             .unwrap()
@@ -120,7 +121,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
 
 #[test]
 fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() {
-    let (dir, store, _) = indexed("codex", include_str!("../fixtures/codex.jsonl"));
+    let (dir, store, _) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     assert!(
         query::scan(
             &store.db,
@@ -134,11 +135,11 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
     );
     for narrowed in [
         Filters {
-            since: Some("2026-10-01".into()),
+            since: Some("2026-10-01T00:00:00Z".parse().unwrap()),
             ..Filters::default()
         },
         Filters {
-            until: Some("2026-10-01".into()),
+            until: Some("2026-10-01T00:00:00Z".parse().unwrap()),
             ..Filters::default()
         },
         Filters {
@@ -189,7 +190,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let data = (0..25)
         .map(|i| message("crowded", i, "2026-10-02T00:00:00Z", "groupneedle"))
         .collect::<String>();
-    let (dir, mut store, mut roots) = indexed("claude", &data);
+    let (dir, mut store, mut roots) = indexed(Harness::Claude, &data);
     fs::write(
         roots[0].path.join("older.jsonl"),
         message("older", 0, "2026-10-01T00:00:00Z", "groupneedle"),
@@ -236,7 +237,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let codex = dir.path().join("codex.jsonl");
     fs::write(&codex, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"crowded\"}}\n{\"type\":\"response_item\",\"timestamp\":\"2026-10-02T00:00:00Z\",\"payload\":{\"type\":\"message\",\"id\":\"same-session-other-harness\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"groupneedle\"}]}}\n").unwrap();
     roots.push(Root {
-        harness: "codex".into(),
+        harness: Harness::Codex,
         path: codex,
     });
     store.refresh(&roots, false, None).unwrap();
@@ -263,12 +264,12 @@ fn grep_reads_each_range_from_its_own_file() {
     }
     let mut store = sessidx::store::Store::open(&dir.path().join("index.db")).unwrap();
     let roots = [Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: root,
     }];
     store.refresh(&roots, false, None).unwrap();
     let filters = Filters {
-        harness: vec![sessidx::query::Harness::Pi],
+        harness: vec![Harness::Pi],
         ..Filters::default()
     };
     let (hits, coverage) =

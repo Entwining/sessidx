@@ -1,5 +1,5 @@
 use crate::{
-    model::{Event, Record, State},
+    model::{Event, Harness, Record, State},
     normalize::{arguments, message_text, shell, string, timestamp},
 };
 use serde_json::Value;
@@ -157,7 +157,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     if e.ok.is_some() {
                         e.ok_source = "flag".into();
                     }
-                    crate::outcomes::classify(&mut e, &b["content"], "claude");
+                    crate::outcomes::classify(&mut e, &b["content"], Harness::Claude);
                     crate::normalize::output_prefix(&mut e, &b["content"]);
                     if let Some(kind) = v.get("toolDenialKind").and_then(Value::as_str) {
                         e.denials.retain(|(source, _)| source != "native_denial");

@@ -1,11 +1,17 @@
 use crate::common::{events, indexed};
-use sessidx::{adapters, discovery::Root, model::State, store::Store};
+use clap::ValueEnum;
+use sessidx::{
+    adapters,
+    discovery::Root,
+    model::{Harness, State},
+    store::Store,
+};
 use sha2::Digest;
 use std::fs;
 
 #[test]
 fn claude_blocks_flags_and_synthetic_model() {
-    let (s, es) = events("claude", include_str!("../fixtures/claude.jsonl"));
+    let (s, es) = events(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
     assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
     assert_eq!(
         es.iter()
@@ -24,9 +30,9 @@ fn claude_blocks_flags_and_synthetic_model() {
 
 #[test]
 fn codex_context_arguments_and_telemetry() {
-    let (mut s, es) = events("codex", include_str!("../fixtures/codex.jsonl"));
+    let (mut s, es) = events(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     adapters::parse(
-        "codex",
+        Harness::Codex,
         &serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\nlater fallback"}]}}),
         &mut s,
     );
@@ -44,19 +50,19 @@ fn codex_context_arguments_and_telemetry() {
     );
     let mut history = State::default();
     adapters::parse(
-        "codex",
+        Harness::Codex,
         &serde_json::json!({"type":"session_meta","payload":{"history_base":{"thread_id":"history-parent"}}}),
         &mut history,
     );
     assert_eq!(history.parent_id.as_deref(), Some("history-parent"));
     let search = adapters::parse(
-        "codex",
+        Harness::Codex,
         &serde_json::json!({"type":"response_item","payload":{"type":"tool_search_call","call_id":"search"}}),
         &mut history,
     );
     assert_eq!(search.events[0].tool.as_deref(), Some("tool_search"));
     let array = adapters::parse(
-        "codex",
+        Harness::Codex,
         &serde_json::json!({"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":{"command":["printf", "literal quote's"]}}}),
         &mut history,
     );
@@ -74,7 +80,7 @@ fn codex_context_arguments_and_telemetry() {
 
 #[test]
 fn pi_model_tool_call_and_camel_case_flag() {
-    let (s, es) = events("pi", include_str!("../fixtures/pi.jsonl"));
+    let (s, es) = events(Harness::Pi, include_str!("../fixtures/pi.jsonl"));
     assert_eq!(s.model.as_deref(), Some("pi-model"));
     assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
     assert_eq!(
@@ -85,7 +91,7 @@ fn pi_model_tool_call_and_camel_case_flag() {
     );
     assert_eq!(es.iter().filter(|e| e.ok.is_none()).count(), 5);
     let r = adapters::parse(
-        "pi",
+        Harness::Pi,
         &serde_json::json!({"type":"message","id":"numeric-system","message":{"role":"system","timestamp":1234,"content":"synthetic system"}}),
         &mut State::default(),
     );
@@ -103,7 +109,7 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
     let mut mismatches = Vec::new();
     for variant in variants.as_array().unwrap() {
         let r = adapters::parse(
-            variant["harness"].as_str().unwrap(),
+            Harness::from_str(variant["harness"].as_str().unwrap(), false).unwrap(),
             &variant["record"],
             &mut State::default(),
         );
@@ -147,14 +153,14 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
     assert!(mismatches.is_empty(), "{mismatches:?}");
     let future =
         serde_json::json!({"type":"unknown-future-shape","message":{"content":"negative control"}});
-    for h in ["claude", "codex", "pi"] {
+    for &h in Harness::value_variants() {
         assert!(!adapters::parse(h, &future, &mut State::default()).known);
     }
 }
 
 #[test]
 fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
-    let (_, store, _) = indexed("claude", include_str!("../fixtures/structure.jsonl"));
+    let (_, store, _) = indexed(Harness::Claude, include_str!("../fixtures/structure.jsonl"));
     let n: i64 = store
         .db
         .query_row(
@@ -165,7 +171,7 @@ fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
         .unwrap();
     assert_eq!(n, 3);
     let (_, store, _) = indexed(
-        "codex",
+        Harness::Codex,
         "{\"type\":\"inter_agent_communication_metadata\",\"payload\":{}}\n",
     );
     let n:i64=store.db.query_row("SELECT coalesce(sum(n),0) FROM shapes WHERE signature LIKE 'inter_agent_communication_metadata/%'",[],|r|r.get(0)).unwrap();
@@ -180,7 +186,7 @@ fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
             v["shape"] == "assistant / server_tool_use"
                 || v["shape"] == "assistant / advisor_tool_result"
         })
-        .flat_map(|v| adapters::parse("claude", &v["record"], &mut State::default()).events)
+        .flat_map(|v| adapters::parse(Harness::Claude, &v["record"], &mut State::default()).events)
         .collect();
     assert_eq!(
         es.iter()
@@ -200,7 +206,7 @@ fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
 fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
     let raw = include_bytes!("../fixtures/opaque.jsonl");
     let original: serde_json::Value = serde_json::from_slice(raw).unwrap();
-    let filtered = sessidx::normalize::record_for_index(raw, "pi").unwrap();
+    let filtered = sessidx::normalize::record_for_index(raw, Harness::Pi).unwrap();
     let payload_fields: usize = filtered["message"]["content"]
         .as_array()
         .unwrap()
@@ -209,8 +215,8 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
         .map(|b| b.as_object().unwrap().len() - 1)
         .sum();
     assert_eq!(payload_fields, 0);
-    let original = adapters::parse("pi", &original, &mut State::default());
-    let filtered = adapters::parse("pi", &filtered, &mut State::default());
+    let original = adapters::parse(Harness::Pi, &original, &mut State::default());
+    let filtered = adapters::parse(Harness::Pi, &filtered, &mut State::default());
     let snapshot = |r: sessidx::model::Record| {
         r.events
             .into_iter()
@@ -220,17 +226,17 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
     assert_eq!(snapshot(original), snapshot(filtered));
     let scalar = b"true";
     assert_eq!(
-        sessidx::normalize::record_for_index(scalar, "pi").unwrap(),
+        sessidx::normalize::record_for_index(scalar, Harness::Pi).unwrap(),
         serde_json::json!(true)
     );
     assert_eq!(
-        sessidx::normalize::record_for_index(br#"{"message":"plain"}"#, "claude").unwrap(),
+        sessidx::normalize::record_for_index(br#"{"message":"plain"}"#, Harness::Claude).unwrap(),
         serde_json::json!({"message":"plain"})
     );
     assert!(
         sessidx::normalize::record_for_index(
             b"{\"message\":{\"content\":[{\"type\":\"thinking\",\"thinkingSignature\":invalid}]}}",
-            "pi"
+            Harness::Pi
         )
         .is_err()
     );
@@ -247,7 +253,7 @@ fn opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved() {
     let large = record("large", 2 << 20) + &record("oversized", sessidx::store::MAX_RECORD + 1);
     fs::write(dir.path().join("large.jsonl"), large).unwrap();
     let roots = [Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: dir.path().into(),
     }];
     let r = Store::open(&dir.path().join("index.db"))

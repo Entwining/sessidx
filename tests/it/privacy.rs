@@ -1,5 +1,8 @@
 use crate::common::{indexed, search_hits, serial, sessidx};
-use sessidx::query::{self, Filters};
+use sessidx::{
+    model::Harness,
+    query::{self, Filters},
+};
 use std::{fs, time::Duration};
 
 fn assert_canaries_absent_from_storage(dir: &std::path::Path, values: &[&str]) {
@@ -116,7 +119,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         "user",
         serde_json::json!({"role":"user","content":format!("needle {}",fixture["identifiers"].as_array().unwrap().iter().map(|v|v.as_str().unwrap()).collect::<Vec<_>>().join(" "))}),
     );
-    let (dir, store, roots) = indexed("claude", &data);
+    let (dir, store, roots) = indexed(Harness::Claude, &data);
     assert_canaries_absent_from_storage(
         dir.path(),
         &values.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -189,7 +192,7 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
         values["query_short"].as_str().unwrap()
     );
     let data=serde_json::json!({"type":"user","uuid":"privacy-user","sessionId":"privacy","message":{"role":"user","content":text}}).to_string()+"\n"+&serde_json::json!({"type":"assistant","uuid":"privacy-input","sessionId":"privacy","message":{"role":"assistant","content":[{"type":"tool_use","id":"privacy-call","name":"Bash","input":{"command":"printf needle","part_one":values["part_one"],"part_two":values["part_two"]}}]}}).to_string()+"\n";
-    let (dir, store, _) = indexed("claude", &data);
+    let (dir, store, _) = indexed(Harness::Claude, &data);
     let output = query::show(&store.db, "privacy", 0, 20, 0)
         .unwrap()
         .0
@@ -213,7 +216,10 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 
 #[test]
 fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
-    let (_, store, _) = indexed("claude", include_str!("../fixtures/identifiers.jsonl"));
+    let (_, store, _) = indexed(
+        Harness::Claude,
+        include_str!("../fixtures/identifiers.jsonl"),
+    );
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
         "0xabcdef0123456789abcdef0123456789abcdef01",
@@ -322,7 +328,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
 
 #[test]
 fn pi_sections_share_the_native_message_and_are_redacted() {
-    let (dir, store, _) = indexed("pi", include_str!("../fixtures/pi-sections.jsonl"));
+    let (dir, store, _) = indexed(Harness::Pi, include_str!("../fixtures/pi-sections.jsonl"));
     for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
         let hits = search_hits(&store.db, term, &Filters::default(), 20, 0).unwrap();
         assert_eq!(hits.len(), 1, "{term}");
@@ -344,7 +350,7 @@ fn pi_sections_share_the_native_message_and_are_redacted() {
 fn scan_matches_original_ranges_before_redacting_display() {
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";
-    let (_dir, store, _) = indexed("claude", &data);
+    let (_dir, store, _) = indexed(Harness::Claude, &data);
     let (hits, c) = query::scan(
         &store.db,
         token,
@@ -367,7 +373,7 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
     let session = "rollout-2026-05-01T10-30-00-syntheticId7QwX9rTbM3k";
     let cwd = "/synthetic/Code/GitHub/project-with-native-identifiers";
     let data=serde_json::json!({"type":"session_meta","payload":{"id":session,"cwd":cwd}}).to_string()+"\n"+&serde_json::json!({"type":"turn_context","payload":{"model":"claude-haiku-4-5-20251001"}}).to_string()+"\n"+&serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}}).to_string()+"\n";
-    let (_, store, _) = indexed("codex", &data);
+    let (_, store, _) = indexed(Harness::Codex, &data);
     let hits = search_hits(
         &store.db,
         "needle",

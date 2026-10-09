@@ -22,10 +22,6 @@ exclude_re = [
   # JavaScript \0 escapes: no recorded cmd literal contains one.
   'src/code_mode\.rs:\d+:\d+: replace match guard !chars\.peek\(\)\.is_some_and\(\|c\| c\.is_ascii_digit\(\)\) with (true|false) in literal',
   'src/code_mode\.rs:\d+:\d+: delete ! in literal',
-  # For failures the call-id join selects the same command rows as the
-  # event-local test, because every shell call carries a native call ID. The
-  # column keeps the caught arm deletion in the outcome expression testable.
-  'src/counting\.rs:\d+:13: delete match arm "failures" in count',
   # A real interrupt always comes after the deadline; only an injected
   # non-interrupt SQLite failure mid-scan tells these guards apart.
   'replace match guard e\.code == rusqlite::ErrorCode::OperationInterrupted && Instant::now\(\) >= deadline with true in scan',

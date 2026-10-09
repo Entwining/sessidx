@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use sessidx::{
     adapters,
     discovery::Root,
-    model::{Event, State},
+    model::{Event, Harness, State, name},
     query::{self, Filters},
     store::Store,
 };
@@ -30,7 +30,7 @@ pub fn sessidx(_serial: &MutexGuard<()>, db: &Path, roots: &[Root], args: &[&str
     cmd.arg("--db").arg(db);
     for r in roots {
         cmd.arg("--root")
-            .arg(format!("{}={}", r.harness, r.path.display()));
+            .arg(format!("{}={}", name(r.harness), r.path.display()));
     }
     cmd.args(args);
     cmd
@@ -71,14 +71,14 @@ pub fn stream(out: &Output, exit: i32) -> Vec<Value> {
     records
 }
 
-pub fn indexed(harness: &str, content: &str) -> (tempfile::TempDir, Store, Vec<Root>) {
+pub fn indexed(harness: Harness, content: &str) -> (tempfile::TempDir, Store, Vec<Root>) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
     fs::write(root.join("session.jsonl"), content).unwrap();
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     let roots = vec![Root {
-        harness: harness.into(),
+        harness,
         path: root,
     }];
     store.refresh(&roots, false, None).unwrap();
@@ -89,14 +89,14 @@ pub fn three_harnesses() -> (tempfile::TempDir, Store, Vec<Root>) {
     let dir = tempfile::tempdir().unwrap();
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     let mut roots = Vec::new();
-    for h in ["claude", "codex", "pi"] {
-        let path = dir.path().join(format!("{h}.jsonl"));
-        let mut records: Vec<Value> = (0..2).map(|i| match h {
-            "claude" => json!({"type":"user","uuid":format!("c-{i}"),"sessionId":"claude-session","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}}),
-            "codex" => json!({"type":"response_item","timestamp":"2026-10-01T00:00:00Z","payload":{"type":"message","id":format!("x-{i}"),"role":"user","content":[{"type":"input_text","text":"sharedneedle"}]}}),
-            _ => json!({"type":"message","id":format!("p-{i}"),"timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}}),
+    for harness in [Harness::Claude, Harness::Codex, Harness::Pi] {
+        let path = dir.path().join(format!("{}.jsonl", name(harness)));
+        let mut records: Vec<Value> = (0..2).map(|i| match harness {
+            Harness::Claude => json!({"type":"user","uuid":format!("c-{i}"),"sessionId":"claude-session","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}}),
+            Harness::Codex => json!({"type":"response_item","timestamp":"2026-10-01T00:00:00Z","payload":{"type":"message","id":format!("x-{i}"),"role":"user","content":[{"type":"input_text","text":"sharedneedle"}]}}),
+            Harness::Pi => json!({"type":"message","id":format!("p-{i}"),"timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}}),
         }).collect();
-        if h == "claude" {
+        if harness == Harness::Claude {
             records.push(json!({"type":"assistant","uuid":"c-call","sessionId":"claude-session","message":{"role":"assistant","content":[{"type":"tool_use","id":"call","name":"Bash","input":{"command":"rg needle ."}}]}}));
         }
         fs::write(
@@ -104,10 +104,7 @@ pub fn three_harnesses() -> (tempfile::TempDir, Store, Vec<Root>) {
             records.iter().map(|v| format!("{v}\n")).collect::<String>(),
         )
         .unwrap();
-        roots.push(Root {
-            harness: h.into(),
-            path,
-        });
+        roots.push(Root { harness, path });
     }
     store.refresh(&roots, false, None).unwrap();
     (dir, store, roots)
@@ -132,7 +129,7 @@ pub fn snapshot(store: &Store) -> Vec<String> {
         .query_map([], |r| { Ok((0..10).map(|i| match r.get_ref(i).unwrap() { rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(), rusqlite::types::ValueRef::Integer(n) => n.to_string(), _ => String::new() }).collect::<Vec<_>>().join("|")) }).unwrap().map(Result::unwrap).collect()
 }
 
-pub fn events(h: &str, fixture: &str) -> (State, Vec<Event>) {
+pub fn events(h: Harness, fixture: &str) -> (State, Vec<Event>) {
     let mut s = State::default();
     let es = fixture
         .lines()

@@ -1,5 +1,5 @@
 use crate::{
-    model::{Event, Record, State},
+    model::{Event, Harness, Record, State},
     normalize::{arguments, message_text, shell, string, text, timestamp},
 };
 use serde_json::Value;
@@ -44,7 +44,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 if e.ok.is_some() {
                     e.ok_source = "flag".into();
                 }
-                crate::outcomes::classify(&mut e, &m["content"], "pi");
+                crate::outcomes::classify(&mut e, &m["content"], Harness::Pi);
                 crate::normalize::output_prefix(&mut e, &m["content"]);
                 e.native_id = string(v, "id");
                 e.ts = ts;

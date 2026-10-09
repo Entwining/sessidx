@@ -1,6 +1,7 @@
 use crate::common::{indexed, serial, sessidx, snapshot, stream};
 use sessidx::{
     discovery::Root,
+    model::Harness,
     query::{self, Filters},
     store::Store,
 };
@@ -15,7 +16,7 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
     let path = root.join("s.jsonl");
     let fixture = include_str!("../fixtures/codex.jsonl");
     let roots = [Root {
-        harness: "codex".into(),
+        harness: Harness::Codex,
         path: root,
     }];
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
@@ -99,7 +100,7 @@ fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
     );
     fs::write(&path, &data).unwrap();
     let roots = [Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: dir.path().into(),
     }];
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
@@ -130,7 +131,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
     let tail = "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"second\"}}";
     fs::write(&path, format!("{first}{tail}")).unwrap();
     let roots = [Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: dir.path().into(),
     }];
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
@@ -183,7 +184,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
 #[test]
 fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     let _serial = serial();
-    let (_dir, mut store, roots) = indexed("codex", include_str!("../fixtures/codex.jsonl"));
+    let (_dir, mut store, roots) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     let lock = store.lock().unwrap().unwrap();
     let busy = store
         .refresh(&roots, false, Some(Duration::from_secs(2)))
@@ -199,7 +200,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     let missing = store
         .refresh(
             &[Root {
-                harness: "pi".into(),
+                harness: Harness::Pi,
                 path: roots[0].path.join("absent"),
             }],
             false,
@@ -212,7 +213,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     );
     assert!(!missing.stale);
     let filters = Filters {
-        harness: vec![sessidx::query::Harness::Codex],
+        harness: vec![Harness::Codex],
         ..Filters::default()
     };
     let (hits, c) = query::scan(&store.db, ".", &filters, 1, 0, Duration::from_secs(2)).unwrap();
@@ -234,7 +235,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
 #[test]
 fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
     let _serial = serial();
-    let (dir, mut store, roots) = indexed("codex", include_str!("../fixtures/codex.jsonl"));
+    let (dir, mut store, roots) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     fs::rename(&roots[0].path, dir.path().join("moved")).unwrap();
     let missing = store.refresh(&roots, false, None).unwrap();
     assert_eq!(
@@ -297,9 +298,9 @@ fn an_archived_codex_thread_stays_findable_under_its_new_path() {
 #[test]
 fn a_path_reindexed_under_another_harness_is_parsed_again() {
     let _serial = serial();
-    let (_dir, mut store, roots) = indexed("claude", include_str!("../fixtures/pi.jsonl"));
+    let (_dir, mut store, roots) = indexed(Harness::Claude, include_str!("../fixtures/pi.jsonl"));
     let pi = [Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: roots[0].path.clone(),
     }];
     assert_eq!(store.refresh(&pi, false, None).unwrap().files_changed, 1);

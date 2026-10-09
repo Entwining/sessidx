@@ -1,25 +1,38 @@
 use crate::common::indexed;
 use sessidx::{
-    counting,
-    query::{Filters, Harness, Kind, Role},
+    counting::{self, By, Metric},
+    model::Harness,
+    query::{Filters, Kind, Role},
 };
 
 #[test]
 fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
-    let (_dir, store, roots) = indexed("claude", include_str!("../fixtures/claude.jsonl"));
-    let commands =
-        counting::count(&store.db, "commands", "", Some("rg"), &Filters::default()).unwrap();
+    let (_dir, store, roots) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
+    let commands = counting::count(
+        &store.db,
+        Metric::Commands,
+        &[],
+        Some("rg"),
+        &Filters::default(),
+    )
+    .unwrap();
     assert_eq!(commands[0]["unit"], "static_shell_command_sites");
     assert_eq!(commands[0]["numerator"], 1);
     assert_eq!(commands[0]["denominator"], 2);
-    let failures =
-        counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
+    let failures = counting::count(
+        &store.db,
+        Metric::Failures,
+        &[],
+        Some("rg"),
+        &Filters::default(),
+    )
+    .unwrap();
     assert_eq!(failures[0]["numerator"], 1);
     assert_eq!(failures[0]["denominator"], 1);
     let grouped = counting::count(
         &store.db,
-        "commands",
-        "harness,model,role,week,kind",
+        Metric::Commands,
+        &[By::Harness, By::Model, By::Role, By::Week, By::Kind],
         Some("rg"),
         &Filters::default(),
     )
@@ -35,21 +48,6 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         assert_eq!(grouped[0][key], expected);
     }
     assert_eq!(grouped[0]["numerator"], 1);
-    let duplicate = counting::count(
-        &store.db,
-        "commands",
-        "model,model",
-        None,
-        &Filters::default(),
-    );
-    assert!(duplicate.is_err());
-    assert!(duplicate.unwrap_err().to_string().contains("duplicate"));
-    assert!(
-        counting::count(&store.db, "commands", "invalid", None, &Filters::default())
-            .unwrap_err()
-            .to_string()
-            .contains("--by accepts")
-    );
     let sessions = [
         "claude-fixture".to_owned(),
         roots[0]
@@ -59,12 +57,19 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
             .into_owned(),
     ];
     for (metric, role, expected) in [
-        ("commands", Role::Assistant, commands),
-        ("failures", Role::Assistant, failures),
+        (Metric::Commands, Role::Assistant, commands),
+        (Metric::Failures, Role::Assistant, failures),
         (
-            "denials",
+            Metric::Denials,
             Role::Tool,
-            counting::count(&store.db, "denials", "", Some("rg"), &Filters::default()).unwrap(),
+            counting::count(
+                &store.db,
+                Metric::Denials,
+                &[],
+                Some("rg"),
+                &Filters::default(),
+            )
+            .unwrap(),
         ),
     ] {
         for session in &sessions {
@@ -73,18 +78,18 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
                 role: Some(role),
                 kind: Some(Kind::Unknown),
                 session: Some(session.clone()),
-                since: Some("2026-10-01".into()),
-                until: Some("2026-10-02".into()),
+                since: Some("2026-10-01T00:00:00Z".parse().unwrap()),
+                until: Some("2026-10-02T00:00:00Z".parse().unwrap()),
                 cwd: Some("/synthetic".into()),
                 ..Filters::default()
             };
             assert_eq!(
-                counting::count(&store.db, metric, "", Some("rg"), &filters).unwrap(),
+                counting::count(&store.db, metric, &[], Some("rg"), &filters).unwrap(),
                 expected,
-                "{metric} {session}"
+                "{metric:?} {session}"
             );
-            filters.since = Some("2026-10-02".into());
-            let empty = counting::count(&store.db, metric, "", Some("rg"), &filters).unwrap();
+            filters.since = Some("2026-10-02T00:00:00Z".parse().unwrap());
+            let empty = counting::count(&store.db, metric, &[], Some("rg"), &filters).unwrap();
             assert_eq!(empty[0]["numerator"], 0);
             assert_eq!(empty[0]["denominator"], 0);
             assert_eq!(empty[0]["unclassified"], 0);
@@ -116,7 +121,7 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         "{\"type\":\"user\",\"sessionId\":\"doctor\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"bad\",\"is_error\":true,\"content\":\"DENIED: synthetic policy\"}]}}\n",
         "{\"type\":\"future-shape\"}\n{invalid\n{\"partial\":"
     );
-    let (_, store, _) = indexed("claude", data);
+    let (_, store, _) = indexed(Harness::Claude, data);
     let d = counting::doctor(&store.db).unwrap();
     for (key, expected) in [
         ("files", 1),
@@ -160,12 +165,24 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
 #[test]
 fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
     let fixture=include_str!("../fixtures/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}},{"type":"tool_use","id":"no-command","name":"Bash","input":{}}]}}).to_string()+"\n"+&serde_json::json!({"type":"user","uuid":"bad-result","sessionId":"claude-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"bad-shell","content":"done"}]}}).to_string()+"\n";
-    let (_, store, _) = indexed("claude", &fixture);
-    let result =
-        counting::count(&store.db, "failures", "", Some("rg"), &Filters::default()).unwrap();
+    let (_, store, _) = indexed(Harness::Claude, &fixture);
+    let result = counting::count(
+        &store.db,
+        Metric::Failures,
+        &[],
+        Some("rg"),
+        &Filters::default(),
+    )
+    .unwrap();
     assert_eq!(result[0]["denominator"], 1);
     assert_eq!(result[0]["unclassified"], 2);
-    let result =
-        counting::count(&store.db, "denials", "", Some("rg"), &Filters::default()).unwrap();
+    let result = counting::count(
+        &store.db,
+        Metric::Denials,
+        &[],
+        Some("rg"),
+        &Filters::default(),
+    )
+    .unwrap();
     assert_eq!(result[0]["unclassified"], 1);
 }

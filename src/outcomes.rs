@@ -1,4 +1,7 @@
-use crate::{model::Event, normalize::text};
+use crate::{
+    model::{Event, Harness},
+    normalize::text,
+};
 use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -11,8 +14,8 @@ static PARTIAL_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#""status"\s*:\s*"rejected"\s*,\s*"reason"\s*:\s*("(?:\\.|[^"\\])*")"#)
         .expect("static regex is valid")
 });
-pub fn classify(e: &mut Event, output: &Value, harness: &str) {
-    if harness != "codex" {
+pub fn classify(e: &mut Event, output: &Value, harness: Harness) {
+    if harness != Harness::Codex {
         flag_denials(output, harness, e, &mut true);
         return;
     }
@@ -228,7 +231,7 @@ pub fn reason_id(s: &str) -> &'static str {
     "unknown"
 }
 
-fn flag_denials(v: &Value, harness: &str, e: &mut Event, leading: &mut bool) {
+fn flag_denials(v: &Value, harness: Harness, e: &mut Event, leading: &mut bool) {
     match v {
         Value::String(s) => {
             denials(s, harness, e, *leading);
@@ -250,12 +253,12 @@ fn flag_denials(v: &Value, harness: &str, e: &mut Event, leading: &mut bool) {
     }
 }
 
-fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
+fn denials(s: &str, harness: Harness, e: &mut Event, leading: bool) {
     // Native success and hook-check errors: tests/fixtures/hook-check.jsonl.
-    if harness != "codex" && e.ok == Some(true) {
+    if harness != Harness::Codex && e.ok == Some(true) {
         return;
     }
-    if harness == "codex" {
+    if harness == Harness::Codex {
         let Some(payload) = s.trim_start().strip_prefix("Script error:") else {
             return;
         };
@@ -281,7 +284,7 @@ fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
             && (line.starts_with("DENIED:") || line.starts_with("Blocked by agent-guard:"))
         {
             Some("guard")
-        } else if harness == "claude"
+        } else if harness == Harness::Claude
             && e.ok == Some(false)
             && s.trim_start().starts_with(line)
             && line
@@ -291,7 +294,7 @@ fn denials(s: &str, harness: &str, e: &mut Event, leading: bool) {
             && line.contains("denied")
         {
             Some("native_denial")
-        } else if harness == "pi"
+        } else if harness == Harness::Pi
             && leading
             && e.ok == Some(false)
             && s.trim_start().starts_with(line)

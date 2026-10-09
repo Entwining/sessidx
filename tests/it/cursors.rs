@@ -1,6 +1,10 @@
 use crate::common::{serial, sessidx, stream, three_harnesses};
 use serde_json::json;
-use sessidx::{discovery::Root, store::Store};
+use sessidx::{
+    discovery::Root,
+    model::{Harness, name},
+    store::Store,
+};
 use std::fs;
 
 #[test]
@@ -126,20 +130,20 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
         let root = if verb == "search" {
             roots
                 .iter()
-                .find(|r| r.harness == expected[0]["harness"])
+                .find(|r| name(r.harness) == expected[0]["harness"])
                 .unwrap()
         } else {
             &roots[0]
         };
         let id = format!("added-{verb}");
-        let record = match root.harness.as_str() {
-            "claude" => {
+        let record = match root.harness {
+            Harness::Claude => {
                 json!({"type":"user","uuid":id,"sessionId":"claude-session","timestamp":"2030-01-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}})
             }
-            "codex" => {
+            Harness::Codex => {
                 json!({"type":"response_item","timestamp":"2030-01-01T00:00:00Z","payload":{"type":"message","id":id,"role":"user","content":[{"type":"input_text","text":"sharedneedle"}]}})
             }
-            _ => {
+            Harness::Pi => {
                 json!({"type":"message","id":id,"timestamp":"2030-01-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}})
             }
         };
@@ -236,7 +240,7 @@ fn search_pagination_is_bounded_by_a_frozen_session_prefix() {
     }
     let store = Store::open(&dir.path().join("index.db")).unwrap();
     let roots = [Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: logs,
     }];
     let half = (reachable / 2).to_string();
@@ -295,7 +299,7 @@ fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
         let path = dir.path().join(format!("{name}.jsonl"));
         fs::write(&path, format!("{}\n", json!({"type":"message","id":name,"timestamp":format!("{year}-01-01T00:00:00Z"),"message":{"role":"user","content":text}}))).unwrap();
         roots.push(Root {
-            harness: "pi".into(),
+            harness: Harness::Pi,
             path,
         });
     }
@@ -344,7 +348,7 @@ fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
     let newer = dir.path().join("newer.jsonl");
     fs::write(&newer,"{\"type\":\"message\",\"id\":\"newer\",\"message\":{\"role\":\"user\",\"content\":\"ordinary\"}}\n").unwrap();
     roots.push(Root {
-        harness: "pi".into(),
+        harness: Harness::Pi,
         path: newer.clone(),
     });
     stream(

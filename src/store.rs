@@ -1,12 +1,15 @@
 use crate::{
     adapters,
     discovery::{self, Root},
-    model::State,
+    model::{Harness, State, name},
     normalize::hash,
     redaction::{redact, redact_metadata, spaced_cjk},
 };
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, OptionalExtension, ToSql, Transaction, params,
+    types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef},
+};
 use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
@@ -47,14 +50,43 @@ enum FileCoverage {
     DeferredTail,
     BudgetExhausted,
 }
-impl FileCoverage {
-    fn as_str(self) -> &'static str {
-        match self {
+impl ToSql for FileCoverage {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(match self {
             Self::Ready => "ready",
             Self::DeferredTail => "deferred_tail",
             Self::BudgetExhausted => "budget_exhausted",
         }
+        .into())
     }
+}
+impl FromSql for FileCoverage {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "ready" => Ok(Self::Ready),
+            "deferred_tail" => Ok(Self::DeferredTail),
+            "budget_exhausted" => Ok(Self::BudgetExhausted),
+            other => Err(FromSqlError::Other(
+                format!("unknown index_status {other}").into(),
+            )),
+        }
+    }
+}
+/// The files row of a previously indexed path.
+struct FileRow {
+    id: i64,
+    dev: u64,
+    inode: u64,
+    size: u64,
+    mtime: String,
+    prefix_hash: String,
+    prefix_len: u64,
+    bytes_indexed: u64,
+    lines_indexed: u64,
+    state_json: String,
+    parse_errors: u64,
+    index_status: FileCoverage,
+    harness: String,
 }
 struct IndexedFile {
     changed: bool,
@@ -215,7 +247,7 @@ impl Store {
         if let (true, Some(root)) = (full, unverified) {
             anyhow::bail!(
                 "{} root {} is missing but holds indexed sessions; restore it, or rebuild with --root for each root that remains",
-                root.harness,
+                name(root.harness),
                 root.path.display()
             );
         }
@@ -244,7 +276,7 @@ impl Store {
                 report.continuation = Some(path.to_string_lossy().into_owned());
                 break;
             }
-            let result = self.index_file(&harness, &path, deadline)?;
+            let result = self.index_file(harness, &path, deadline)?;
             report.files_changed += usize::from(result.changed);
             report.records += result.records;
             if result.coverage == FileCoverage::DeferredTail {
@@ -271,7 +303,7 @@ impl Store {
 
     fn index_file(
         &mut self,
-        harness: &str,
+        harness: Harness,
         path: &Path,
         deadline: Option<Instant>,
     ) -> Result<IndexedFile> {
@@ -286,23 +318,45 @@ impl Store {
             meta.ctime_nsec()
         );
         let path_text = path.to_string_lossy();
-        let old = self.db.query_row("SELECT id,dev,inode,size,mtime,prefix_hash,prefix_len,bytes_indexed,lines_indexed,state_json,parse_errors,index_status,harness FROM files WHERE path=?", [path_text.as_ref()], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, u64>(1)?, r.get::<_, u64>(2)?, r.get::<_, u64>(3)?, r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, u64>(6)?, r.get::<_, u64>(7)?, r.get::<_, u64>(8)?, r.get::<_, String>(9)?, r.get::<_, u64>(10)?,r.get::<_,String>(11)?, r.get::<_, String>(12)?))
-        }).optional()?;
+        let harness_name = name(harness);
+        let old = self
+            .db
+            .query_row(
+                "SELECT * FROM files WHERE path=?",
+                [path_text.as_ref()],
+                |r| {
+                    Ok(FileRow {
+                        id: r.get("id")?,
+                        dev: r.get("dev")?,
+                        inode: r.get("inode")?,
+                        size: r.get("size")?,
+                        mtime: r.get("mtime")?,
+                        prefix_hash: r.get("prefix_hash")?,
+                        prefix_len: r.get("prefix_len")?,
+                        bytes_indexed: r.get("bytes_indexed")?,
+                        lines_indexed: r.get("lines_indexed")?,
+                        state_json: r.get("state_json")?,
+                        parse_errors: r.get("parse_errors")?,
+                        index_status: r.get("index_status")?,
+                        harness: r.get("harness")?,
+                    })
+                },
+            )
+            .optional()?;
         // Another harness parses the same bytes differently, so neither the
         // cached rows nor an append to them can be reused.
         if let Some(ref o) = old
-            && o.12 == harness
-            && o.1 == meta.dev()
-            && o.2 == meta.ino()
-            && o.3 == source_size
-            && o.4 == mtime
-            && (o.7 == source_size || o.11 == "deferred_tail")
+            && o.harness == harness_name
+            && o.dev == meta.dev()
+            && o.inode == meta.ino()
+            && o.size == source_size
+            && o.mtime == mtime
+            && (o.bytes_indexed == source_size || o.index_status == FileCoverage::DeferredTail)
         {
             return Ok(IndexedFile {
                 changed: false,
                 records: 0,
-                coverage: if o.11 == "deferred_tail" {
+                coverage: if o.index_status == FileCoverage::DeferredTail {
                     FileCoverage::DeferredTail
                 } else {
                     FileCoverage::Ready
@@ -314,16 +368,21 @@ impl Store {
         file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
         let appended = old.as_ref().filter(|o| {
-            o.12 == harness
-                && o.1 == meta.dev()
-                && o.2 == meta.ino()
-                && source_size >= o.3
-                && o.6 <= prefix_len
-                && hash(&prefix[..o.6 as usize]) == o.5
-                && (source_size > o.3 || o.4 == mtime)
+            o.harness == harness_name
+                && o.dev == meta.dev()
+                && o.inode == meta.ino()
+                && source_size >= o.size
+                && o.prefix_len <= prefix_len
+                && hash(&prefix[..o.prefix_len as usize]) == o.prefix_hash
+                && (source_size > o.size || o.mtime == mtime)
         });
         let (mut offset, mut line, mut state, mut errors) = if let Some(o) = appended {
-            (o.7, o.8, serde_json::from_str::<State>(&o.9)?, o.10)
+            (
+                o.bytes_indexed,
+                o.lines_indexed,
+                serde_json::from_str::<State>(&o.state_json)?,
+                o.parse_errors,
+            )
         } else {
             let state = State {
                 session_id: path
@@ -341,9 +400,9 @@ impl Store {
         if appended.is_none()
             && let Some(ref o) = old
         {
-            delete_file(&tx, o.0)?;
+            delete_file(&tx, o.id)?;
         }
-        tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
+        tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
         let file_id: i64 = tx.query_row(
             "SELECT id FROM files WHERE path=?",
             [path_text.as_ref()],
@@ -431,8 +490,8 @@ impl Store {
             }
             offset += length;
         }
-        tx.execute("INSERT INTO sessions(file_id,harness,session_id,cwd,parent_id,kind,kind_source,instruction_hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,cwd=excluded.cwd,parent_id=excluded.parent_id,kind=excluded.kind,kind_source=excluded.kind_source,instruction_hash=excluded.instruction_hash", params![file_id,harness,state.session_id,state.cwd,state.parent_id,state.kind,state.kind_source,state.instruction_hash])?;
-        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=?,first_ts=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage.as_str(),state.first_ts,file_id])?;
+        tx.execute("INSERT INTO sessions(file_id,harness,session_id,cwd,parent_id,kind,kind_source,instruction_hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,cwd=excluded.cwd,parent_id=excluded.parent_id,kind=excluded.kind,kind_source=excluded.kind_source,instruction_hash=excluded.instruction_hash", params![file_id,harness_name,state.session_id,state.cwd,state.parent_id,state.kind,state.kind_source,state.instruction_hash])?;
+        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=?,first_ts=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage,state.first_ts,file_id])?;
         tx.commit()?;
         Ok(IndexedFile {
             changed: true,

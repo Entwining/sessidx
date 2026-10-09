@@ -1,10 +1,17 @@
 use crate::common::{events, indexed, serial};
-use sessidx::{adapters, counting, discovery::Root, model::State, query::Filters};
+use clap::ValueEnum;
+use sessidx::{
+    adapters,
+    counting::{self, Metric},
+    discovery::Root,
+    model::{Harness, State},
+    query::Filters,
+};
 use std::fs;
 
 #[test]
 fn codex_text_array_batch_failures_and_quoted_negative_control() {
-    let (_, es) = events("codex", include_str!("../fixtures/outcomes.jsonl"));
+    let (_, es) = events(Harness::Codex, include_str!("../fixtures/outcomes.jsonl"));
     assert_eq!(
         es.iter()
             .filter(|e| e.ok == Some(false) && e.ok_source == "text")
@@ -38,7 +45,7 @@ fn codex_text_array_batch_failures_and_quoted_negative_control() {
 
 #[test]
 fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_control() {
-    let (_, store, _) = indexed("codex", include_str!("../fixtures/truncated.jsonl"));
+    let (_, store, _) = indexed(Harness::Codex, include_str!("../fixtures/truncated.jsonl"));
     let mut stmt = store
         .db
         .prepare(
@@ -77,27 +84,27 @@ fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_contr
 fn successful_stdout_guard_examples_are_not_denials() {
     for (harness, value) in [
         (
-            "claude",
+            Harness::Claude,
             serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"DENIED: rg has no --include flag."}]}}),
         ),
         (
-            "pi",
+            Harness::Pi,
             serde_json::json!({"type":"message","message":{"role":"toolResult","content":"DENIED: rg has no --include flag."}}),
         ),
         (
-            "claude",
+            Harness::Claude,
             serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":"DENIED: rg has no --include flag."}]}}),
         ),
         (
-            "pi",
+            Harness::Pi,
             serde_json::json!({"type":"message","message":{"role":"toolResult","isError":false,"content":"DENIED: rg has no --include flag."}}),
         ),
         (
-            "codex",
+            Harness::Codex,
             serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":"Process exited with code 0\nOutput:\nDENIED: rg has no --include flag."}}),
         ),
         (
-            "claude",
+            Harness::Claude,
             serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"Permission to use Bash has been denied.\nPreToolUse:Bash hook error: quoted log line"}]}}),
         ),
     ] {
@@ -105,14 +112,17 @@ fn successful_stdout_guard_examples_are_not_denials() {
         assert_eq!(
             r.events.iter().flat_map(|e| &e.denials).count(),
             0,
-            "{harness}"
+            "{harness:?}"
         );
     }
 }
 
 #[test]
 fn claude_hook_check_errors_respect_native_success_flags() {
-    let (_, store, _) = indexed("claude", include_str!("../fixtures/hook-check.jsonl"));
+    let (_, store, _) = indexed(
+        Harness::Claude,
+        include_str!("../fixtures/hook-check.jsonl"),
+    );
     let mut stmt = store
         .db
         .prepare("SELECT source,reason_id FROM denials ORDER BY id")
@@ -138,7 +148,7 @@ fn claude_hook_check_errors_respect_native_success_flags() {
 fn call_outcomes_are_isolated_by_harness() {
     let _serial = serial();
     let (dir, mut store, _) = indexed(
-        "claude",
+        Harness::Claude,
         "{\"type\":\"assistant\",\"sessionId\":\"shared-session\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"shared-call\",\"name\":\"Bash\",\"input\":{\"command\":\"rg word\"}}]}}\n{\"type\":\"user\",\"sessionId\":\"shared-session\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"shared-call\",\"is_error\":true}]}}\n",
     );
     let other = dir.path().join("codex");
@@ -147,7 +157,7 @@ fn call_outcomes_are_isolated_by_harness() {
     store
         .refresh(
             &[Root {
-                harness: "codex".into(),
+                harness: Harness::Codex,
                 path: other,
             }],
             false,
@@ -156,11 +166,11 @@ fn call_outcomes_are_isolated_by_harness() {
         .unwrap();
     let rows = counting::count(
         &store.db,
-        "failures",
-        "",
+        Metric::Failures,
+        &[],
         None,
         &Filters {
-            harness: vec![sessidx::query::Harness::Codex],
+            harness: vec![Harness::Codex],
             ..Filters::default()
         },
     )
@@ -177,7 +187,7 @@ fn codex_mcp_transport_error_flag_is_text_evidence_with_content_control() {
         serde_json::json!({"status":"fulfilled","value":{"isError":false,"content":[{"type":"text","text":"=== refusal.txt ===\nScript error: Command blocked by PreToolUse hook: rg has no --include flag."}]}}),
         serde_json::json!({"opaque":"synthetic result"}),
         serde_json::json!([{ "isError":true },{ "isError":false }]),
-    ].iter().flat_map(|v|adapters::parse("codex",&serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":v.to_string()}}),&mut state).events).collect();
+    ].iter().flat_map(|v|adapters::parse(Harness::Codex,&serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":v.to_string()}}),&mut state).events).collect();
     assert_eq!(
         es.iter()
             .filter(|e| e.ok == Some(false) && e.ok_source == "text")
@@ -199,9 +209,9 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
     let fixtures: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/envelopes.json")).unwrap();
     for (i, f) in fixtures.as_array().unwrap().iter().enumerate() {
-        let harness = f["harness"].as_str().unwrap();
+        let harness = Harness::from_str(f["harness"].as_str().unwrap(), false).unwrap();
         let mut e = sessidx::model::Event::new("tool", "tool_result", "fixture");
-        if harness != "codex" {
+        if harness != Harness::Codex {
             e.ok = f["ok"].as_bool();
         }
         sessidx::outcomes::classify(&mut e, &f["output"], harness);
@@ -219,7 +229,7 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         ("user-rejected", "user_rejected"),
     ] {
         let record = serde_json::json!({"type":"user","toolDenialKind":kind,"message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied."}]}});
-        let r = adapters::parse("claude", &record, &mut State::default());
+        let r = adapters::parse(Harness::Claude, &record, &mut State::default());
         assert_eq!(
             r.events[0].denials,
             [(source.into(), "unknown".into())],

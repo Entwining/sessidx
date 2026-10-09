@@ -29,7 +29,7 @@ Report the session's harness, ID, path, and the `path:line` evidence you read, a
 
 ## Count behavior
 
-Use `sessidx count commands|failures|denials` instead of tallying search hits, which are ranked and deduplicated per session. `--by` takes any of `harness,model,role,week,kind`; `--program NAME` selects shell commands by program; shared filters narrow the window. Every row states its `unit`, `numerator`, `denominator`, and `unclassified` count; report all four, because:
+Use `sessidx count commands|failures|denials` instead of tallying search hits, which are ranked and deduplicated per session. `--by` takes any of `harness,model,role,week,kind`, or no value for one total row; `--program NAME` selects shell commands by program; shared filters narrow the window. Every row states its `unit`, `numerator`, `denominator`, and `unclassified` count; report all four, because:
 
 - `commands` counts static shell syntax sites, not executions; unparsed shell calls appear only as unclassified.
 - `failures` counts native tool-call attempts; `denials` counts tool-result events with recognized denial evidence. A call whose result carries no failure evidence stays unclassified rather than successful (common for Codex `exec` wrappers, whose completion does not prove the inner commands succeeded), so with a large `unclassified` the failure rate is a lower bound.

@@ -3,25 +3,21 @@ mod codex;
 mod pi;
 
 use crate::{
-    model::{Record, State},
+    model::{Harness, Record, State},
     redaction::{redact, redact_metadata},
 };
 use serde_json::Value;
 
-pub fn parse(harness: &str, v: &Value, state: &mut State) -> Record {
+pub fn parse(harness: Harness, v: &Value, state: &mut State) -> Record {
     if let Some(ts) = crate::normalize::timestamp(v)
         && state.first_ts.is_none()
     {
         state.first_ts = Some(ts);
     }
     let mut r = match harness {
-        "claude" => claude::parse(v, state),
-        "codex" => codex::parse(v, state),
-        "pi" => pi::parse(v, state),
-        _ => Record {
-            events: Vec::new(),
-            known: false,
-        },
+        Harness::Claude => claude::parse(v, state),
+        Harness::Codex => codex::parse(v, state),
+        Harness::Pi => pi::parse(v, state),
     };
     if r.events.is_empty() {
         let mut e = crate::model::Event::new("unknown", "context", "root.type");

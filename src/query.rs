@@ -1,4 +1,5 @@
 use crate::{
+    model::{Harness, name},
     redaction::{redact, spaced_cjk},
     store::MAX_RECORD,
 };
@@ -16,14 +17,6 @@ use std::{
     sync::LazyLock,
     time::{Duration, Instant},
 };
-
-#[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub enum Harness {
-    Claude,
-    Codex,
-    Pi,
-}
 
 #[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -55,11 +48,11 @@ pub struct Filters {
     #[arg(long, value_enum)]
     pub kind: Option<Kind>,
     /// Only events at or after this RFC 3339 time or UTC YYYY-MM-DD date
-    #[arg(long, value_name = "TIME")]
-    pub since: Option<String>,
+    #[arg(long, value_name = "TIME", value_parser = date)]
+    pub since: Option<DateTime<Utc>>,
     /// Only events before this RFC 3339 time or UTC YYYY-MM-DD date
-    #[arg(long, value_name = "TIME")]
-    pub until: Option<String>,
+    #[arg(long, value_name = "TIME", value_parser = date)]
+    pub until: Option<DateTime<Utc>>,
     /// Only sessions whose working directory is DIR or below it
     #[arg(long, value_name = "DIR")]
     pub cwd: Option<String>,
@@ -96,34 +89,11 @@ impl Filters {
                 "f.harness IN ({})",
                 vec!["?"; self.harness.len()].join(",")
             ));
-            args.extend(self.harness.iter().map(|h| {
-                Value::Text(
-                    h.to_possible_value()
-                        .expect("ValueEnum variants are not skipped")
-                        .get_name()
-                        .into(),
-                )
-            }));
+            args.extend(self.harness.iter().map(|h| Value::Text(name(*h))));
         }
         for (field, value) in [
-            (
-                "e.role",
-                self.role.map(|r| {
-                    r.to_possible_value()
-                        .expect("ValueEnum variants are not skipped")
-                        .get_name()
-                        .to_owned()
-                }),
-            ),
-            (
-                "s.kind",
-                self.kind.map(|k| {
-                    k.to_possible_value()
-                        .expect("ValueEnum variants are not skipped")
-                        .get_name()
-                        .to_owned()
-                }),
-            ),
+            ("e.role", self.role.map(name)),
+            ("s.kind", self.kind.map(name)),
         ] {
             if let Some(value) = value {
                 conditions.push(format!("{field}=?"));
@@ -155,7 +125,9 @@ impl Filters {
         for (op, value) in [(">=", &self.since), ("<", &self.until)] {
             if let Some(value) = value {
                 conditions.push(format!("e.ts{op}?"));
-                args.push(Value::Text(date(value)?));
+                args.push(Value::Text(
+                    value.to_rfc3339_opts(SecondsFormat::Millis, true),
+                ));
             }
         }
         if let Some(cwd) = &self.cwd {
@@ -168,16 +140,14 @@ impl Filters {
     }
 }
 
-pub fn date(s: &str) -> Result<String> {
-    let dt = if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        dt.with_timezone(&Utc)
-    } else {
-        NaiveDate::parse_from_str(s, "%Y-%m-%d")
-            .context("date must be RFC 3339 or YYYY-MM-DD")?
-            .and_time(NaiveTime::MIN)
-            .and_utc()
-    };
-    Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+fn date(s: &str) -> Result<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    Ok(NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .context("date must be RFC 3339 or YYYY-MM-DD")?
+        .and_time(NaiveTime::MIN)
+        .and_utc())
 }
 
 #[derive(Debug, Serialize)]

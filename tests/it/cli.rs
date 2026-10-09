@@ -228,3 +228,110 @@ fn cli_writer_contention_returns_stale_without_waiting() {
     assert_eq!(rows.last().unwrap()["complete"], false);
     assert_eq!(rows.last().unwrap()["refresh"]["writer_busy"], true);
 }
+
+#[test]
+fn cli_rejects_malformed_values_in_one_end_record_naming_the_flag() {
+    let serial = serial();
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("index.db");
+    for (args, expected) in [
+        (
+            vec!["search", "x", "--limit", "0"],
+            vec!["'--limit <LIMIT>'", "1..=1000"],
+        ),
+        (
+            vec!["show", "x", "--limit", "1001"],
+            vec!["'--limit <LIMIT>'", "1..=1000"],
+        ),
+        (
+            vec!["count", "commands", "--by", "harness,week,foo"],
+            vec!["'foo' for '--by", "harness, model, role, week, kind"],
+        ),
+        (
+            vec!["--root", "claude_code=/synthetic", "sql", "SELECT 1"],
+            vec![
+                "'--root <HARNESS=PATH>'",
+                "'claude_code'",
+                "claude, codex, pi",
+            ],
+        ),
+        (
+            vec!["--root", "/synthetic", "index"],
+            vec!["'--root <HARNESS=PATH>'", "HARNESS=PATH"],
+        ),
+        (
+            vec!["grep", "x", "--since", "2026-13-01"],
+            vec!["'--since <TIME>'", "RFC 3339 or YYYY-MM-DD"],
+        ),
+        (
+            vec!["search", "x", "--until", "yesterday"],
+            vec!["'--until <TIME>'", "RFC 3339 or YYYY-MM-DD"],
+        ),
+        (
+            vec!["count", "commands", "--by", "harness", "--by", "model"],
+            vec!["'--by [<BY>]' cannot be used multiple times"],
+        ),
+        (
+            vec!["count", "commands", "--by", "model,role,model"],
+            vec!["--by repeats model"],
+        ),
+    ] {
+        let out = sessidx(&serial, &db, &[], &args).output().unwrap();
+        assert!(!db.exists(), "{args:?} opened the store");
+        let rows = stream(&out, 2);
+        let error = rows[0]["error"].as_str().unwrap();
+        for part in expected {
+            assert!(error.contains(part), "{args:?}: {error}");
+        }
+        assert!(!error.contains('\u{1b}'), "{args:?}: {error}");
+        assert!(out.stderr.is_empty());
+    }
+}
+
+#[test]
+fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
+    let serial = serial();
+    let (_dir, store, roots) = three_harnesses();
+    let count = |args: &[&str], exit| {
+        let mut args = args.to_vec();
+        args.insert(0, "count");
+        let rows = stream(
+            &sessidx(&serial, &store.path, &roots, &args)
+                .output()
+                .unwrap(),
+            exit,
+        );
+        rows[..rows.len() - 1].to_vec()
+    };
+    let keys = |row: &serde_json::Value| {
+        let mut keys: Vec<_> = ["harness", "model", "role", "week", "kind"]
+            .into_iter()
+            .filter(|k| row.get(k).is_some())
+            .collect();
+        keys.sort();
+        keys
+    };
+    let grouped = count(&["commands"], 0);
+    assert_eq!(grouped.len(), 1);
+    assert_eq!(keys(&grouped[0]), ["harness", "model", "role", "week"]);
+    assert_eq!(grouped[0]["harness"], "claude");
+    let total = count(&["commands", "--by"], 0);
+    assert_eq!(total.len(), 1);
+    assert!(keys(&total[0]).is_empty());
+    assert_eq!(total[0]["denominator"], 1);
+    let chosen = count(&["commands", "--by", "kind,harness"], 0);
+    assert_eq!(keys(&chosen[0]), ["harness", "kind"]);
+    let search = |bound: &[&str], exit| {
+        let mut args = vec!["search", "sharedneedle"];
+        args.extend(bound);
+        let out = sessidx(&serial, &store.path, &roots, &args)
+            .output()
+            .unwrap();
+        stream(&out, exit).len() - 1
+    };
+    // Every synthetic message is at 2026-10-01T00:00:00Z.
+    assert_eq!(search(&["--since", "2026-10-01"], 0), 3);
+    assert_eq!(search(&["--since", "2026-10-01T00:00:00.001Z"], 1), 0);
+    assert_eq!(search(&["--until", "2026-10-01T02:00:00+02:00"], 1), 0);
+    assert_eq!(search(&["--until", "2026-10-01T02:00:01+02:00"], 0), 3);
+}

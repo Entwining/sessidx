@@ -1,8 +1,10 @@
 use crate::{
+    model::name,
     query::Filters,
     redaction::{redact, redact_metadata},
 };
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use rusqlite::{
     Connection,
     types::{Value, ValueRef},
@@ -10,40 +12,49 @@ use rusqlite::{
 use serde_json::{Value as Json, json};
 use std::time::{Duration, Instant};
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Metric {
+    Commands,
+    Failures,
+    Denials,
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+pub enum By {
+    Harness,
+    Model,
+    Role,
+    Week,
+    Kind,
+}
+
 pub fn count(
     db: &Connection,
-    metric: &str,
-    by: &str,
+    metric: Metric,
+    by: &[By],
     program: Option<&str>,
     filters: &Filters,
 ) -> Result<Vec<Json>> {
-    anyhow::ensure!(
-        ["commands", "failures", "denials"].contains(&metric),
-        "metric must be commands, failures, or denials"
-    );
     let mut keys = Vec::new();
     let mut expressions = Vec::new();
-    for key in by.split(',').filter(|s| !s.is_empty()) {
-        let expression = match key {
-            "harness" => "f.harness",
-            "model" => "coalesce(e.model,'unknown')",
-            "role" => "e.role",
-            "week" => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
-            "kind" => "s.kind",
-            _ => anyhow::bail!("--by accepts harness,model,role,week,kind"),
-        };
-        anyhow::ensure!(!keys.contains(&key), "duplicate --by field");
-        keys.push(key);
-        expressions.push(expression);
+    for &key in by {
+        keys.push(name(key));
+        expressions.push(match key {
+            By::Harness => "f.harness",
+            By::Model => "coalesce(e.model,'unknown')",
+            By::Role => "e.role",
+            By::Week => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
+            By::Kind => "s.kind",
+        });
     }
     let (clause, args) = filters.sql(db)?;
     let selected = if program.is_some() {
         match metric {
-            "commands" => "c.program=:program",
-            "failures" => {
+            Metric::Commands => "c.program=:program",
+            Metric::Failures => {
                 "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program=:program)"
             }
-            _ => {
+            Metric::Denials => {
                 "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program=:program)"
             }
         }
@@ -52,7 +63,7 @@ pub fn count(
     };
     let unknown_program = if program.is_none() {
         "0"
-    } else if metric == "denials" {
+    } else if matches!(metric, Metric::Denials) {
         "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))"
     } else {
         "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))"
@@ -65,7 +76,7 @@ pub fn count(
         "sum(CASE WHEN ({selected} AND EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id AND d.reason_id='unknown')) OR {unknown_program} THEN 1 ELSE 0 END)"
     );
     let (unit, numerator, denominator, unclassified, unclassified_unit, join, kind) = match metric {
-        "commands" => (
+        Metric::Commands => (
             "static_shell_command_sites",
             format!("sum(CASE WHEN c.parsed=1 AND {selected} THEN 1 ELSE 0 END)"),
             "sum(c.parsed=1)",
@@ -74,7 +85,7 @@ pub fn count(
             "JOIN commands c ON c.event_id=e.id",
             "tool_call",
         ),
-        "failures" => (
+        Metric::Failures => (
             "tool_call_attempts",
             format!("sum(CASE WHEN o.ok=0 AND {selected} THEN 1 ELSE 0 END)"),
             selected_denominator.as_str(),
@@ -83,7 +94,7 @@ pub fn count(
             "LEFT JOIN call_outcomes o ON o.harness=f.harness AND o.session_id=e.session_id AND o.call_id=e.call_id",
             "tool_call",
         ),
-        _ => (
+        Metric::Denials => (
             "tool_result_events",
             format!(
                 "sum(CASE WHEN EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id) AND {selected} THEN 1 ELSE 0 END)"
@@ -127,12 +138,9 @@ pub fn count(
         .mapped(|r| {
             let mut obj = serde_json::Map::new();
             for (i, key) in keys.iter().enumerate() {
-                obj.insert(
-                    (*key).into(),
-                    json!(redact_metadata(&r.get::<_, String>(i)?)),
-                );
+                obj.insert(key.clone(), json!(redact_metadata(&r.get::<_, String>(i)?)));
             }
-            obj.insert("metric".into(), json!(metric));
+            obj.insert("metric".into(), json!(name(metric)));
             obj.insert("unit".into(), json!(unit));
             if let Some(program) = program {
                 obj.insert("program".into(), json!(redact(program)));

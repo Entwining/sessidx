@@ -1,5 +1,9 @@
 use crate::common::{indexed, search_hits};
-use sessidx::query::{self, Filters};
+use clap::ValueEnum;
+use sessidx::{
+    model::Harness,
+    query::{self, Filters},
+};
 use std::time::Duration;
 
 #[test]
@@ -9,12 +13,12 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
     let prefix = format!("outputneedle {}", "x".repeat(2047 - "outputneedle ".len()));
     let text = format!("{prefix}太tailoutside");
     for f in fixture.as_array().unwrap().iter().take(3) {
-        let h = f["harness"].as_str().unwrap();
+        let h = Harness::from_str(f["harness"].as_str().unwrap(), false).unwrap();
         let mut record = f["record"].clone();
         let field = match h {
-            "claude" => "/message/content/0/content",
-            "codex" => "/payload/output/0/text",
-            _ => "/message/content/0/text",
+            Harness::Claude => "/message/content/0/content",
+            Harness::Codex => "/payload/output/0/text",
+            Harness::Pi => "/message/content/0/text",
         };
         *record.pointer_mut(field).unwrap() = serde_json::json!(text);
         let (_dir, store, _) = indexed(h, &(record.to_string() + "\n"));
@@ -32,11 +36,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
             &store.db,
             "tailoutside",
             &Filters {
-                harness: vec![match h {
-                    "claude" => sessidx::query::Harness::Claude,
-                    "codex" => sessidx::query::Harness::Codex,
-                    _ => sessidx::query::Harness::Pi,
-                }],
+                harness: vec![h],
                 ..Filters::default()
             },
             20,
@@ -55,7 +55,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
     let mut s = sessidx::model::State::default();
     let mut record = fixture[0]["record"].clone();
     record["message"]["content"][0]["content"] = serde_json::json!("key=a ".repeat(341));
-    let event = sessidx::adapters::parse("claude", &record, &mut s)
+    let event = sessidx::adapters::parse(Harness::Claude, &record, &mut s)
         .events
         .remove(0);
     assert!(event.text.as_ref().unwrap().len() <= 2048);
@@ -65,7 +65,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         {"type":"text","text":""},
         {"type":"text","text":"second"}
     ]);
-    let event = sessidx::adapters::parse("claude", &record, &mut s)
+    let event = sessidx::adapters::parse(Harness::Claude, &record, &mut s)
         .events
         .remove(0);
     assert_eq!(event.text.as_deref(), Some("first\nsecond"));
@@ -77,7 +77,7 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/output-prefix.json")).unwrap();
     let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
-    let (_dir, store, _) = indexed("claude", &data);
+    let (_dir, store, _) = indexed(Harness::Claude, &data);
     let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(

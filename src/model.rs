@@ -1,4 +1,22 @@
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Harness {
+    Claude,
+    Codex,
+    Pi,
+}
+
+/// The command-line spelling of a value, which is also the text stored and reported for it.
+pub fn name(value: impl ValueEnum) -> String {
+    value
+        .to_possible_value()
+        .expect("ValueEnum variants are not skipped")
+        .get_name()
+        .to_owned()
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
