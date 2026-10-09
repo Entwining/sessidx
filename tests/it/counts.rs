@@ -190,8 +190,8 @@ fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
     assert_eq!(result[0]["unclassified"], 1);
 }
 
-#[test]
-fn counts_equal_the_public_views_over_copied_history() {
+/// Every fixture indexed from two files into one store.
+fn copied_history() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     // Denied calls whose program selection depends on matching the call: two
     // `rg` sites in one call, a call without `rg`, and a server call with `rg`.
@@ -209,13 +209,26 @@ fn counts_equal_the_public_views_over_copied_history() {
             "\n",
             r#"{"type":"user","uuid":"c7","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:06Z","toolDenialKind":"hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-server","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
             "\n",
+            r#"{"type":"user","uuid":"shared","sessionId":"claude-fixture","message":{"role":"user","content":"one"}}"#,
+            "\n",
+        )
+    );
+    // The same native ID in another harness, and on another kind in one file.
+    let pi = format!(
+        "{}{}",
+        include_str!("../fixtures/pi.jsonl"),
+        concat!(
+            r#"{"type":"message","id":"shared","message":{"role":"user","content":"two"}}"#,
+            "\n",
+            r#"{"type":"message","id":"shared","message":{"role":"toolResult","toolCallId":"call","isError":true,"content":"synthetic failure"}}"#,
+            "\n",
         )
     );
     let mut roots = Vec::new();
     for (harness, fixture) in [
         (Harness::Claude, claude.as_str()),
         (Harness::Codex, include_str!("../fixtures/codex.jsonl")),
-        (Harness::Pi, include_str!("../fixtures/pi.jsonl")),
+        (Harness::Pi, pi.as_str()),
     ] {
         let root = dir.path().join(name(harness));
         fs::create_dir(&root).unwrap();
@@ -234,6 +247,12 @@ fn counts_equal_the_public_views_over_copied_history() {
     }
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     store.refresh(&roots, false, None).unwrap();
+    (dir, store)
+}
+
+#[test]
+fn counts_equal_the_public_views_over_copied_history() {
+    let (_dir, store) = copied_history();
     let rows = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
     assert!(
         rows("SELECT count(*) FROM canonical_events WHERE kind IN ('tool_call','tool_result')")
@@ -320,4 +339,20 @@ fn counts_equal_the_public_views_over_copied_history() {
             assert_eq!(counted, expected, "{metric:?} {program:?}");
         }
     }
+}
+
+#[test]
+fn canonical_events_are_the_first_ranked_copy_of_each_native_event() {
+    let (_dir, store) = copied_history();
+    let ranked = "SELECT * FROM (SELECT e.*, row_number() OVER (PARTITION BY f.harness, CASE WHEN e.native_id IS NULL THEN 'row:'||e.id ELSE 'native:'||e.native_id END, e.kind ORDER BY coalesce(f.first_ts,'9999'),f.path,e.line_no,e.ordinal) AS copy_rank FROM events e JOIN files f ON f.id=e.file_id) WHERE copy_rank=1";
+    let rows = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
+    let canonical = rows("SELECT count(*) FROM canonical_events");
+    assert!(canonical < rows("SELECT count(*) FROM events"));
+    assert_eq!(canonical, rows(&format!("SELECT count(*) FROM ({ranked})")));
+    assert_eq!(
+        rows(&format!(
+            "SELECT count(*) FROM (SELECT * FROM canonical_events EXCEPT {ranked})"
+        )),
+        0
+    );
 }

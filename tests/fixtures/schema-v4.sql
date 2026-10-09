@@ -91,14 +91,11 @@ CREATE TABLE IF NOT EXISTS shapes (
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, content='', contentless_delete=1, tokenize='unicode61');
 CREATE TRIGGER IF NOT EXISTS events_delete AFTER DELETE ON locations BEGIN DELETE FROM fts WHERE rowid=old.id; END;
 -- Native identity, never matching text, deduplicates inherited events for counts.
--- Rule: docs/formats.md `canonical_first_copy`.
 CREATE VIEW IF NOT EXISTS canonical_events AS
- SELECT e.*, 1 AS copy_rank FROM events e JOIN locations l ON l.id=e.id JOIN files f ON f.id=l.file_id
- LEFT JOIN event_details d ON d.event_id=l.id
- WHERE l.native_id IS NULL OR NOT EXISTS (
-  SELECT 1 FROM locations l2 JOIN files f2 ON f2.id=l2.file_id LEFT JOIN event_details d2 ON d2.event_id=l2.id
-  WHERE l2.native_id=l.native_id AND f2.harness=f.harness AND d2.kind_ref IS d.kind_ref
-  AND (coalesce(f2.first_ts,'9999'),f2.path,l2.line_no,l2.ordinal) < (coalesce(f.first_ts,'9999'),f.path,l.line_no,l.ordinal));
+ SELECT * FROM (SELECT e.*, row_number() OVER (
+ PARTITION BY f.harness, CASE WHEN e.native_id IS NULL THEN 'row:'||e.id ELSE 'native:'||e.native_id END, e.kind
+ ORDER BY coalesce(f.first_ts,'9999'),f.path,e.line_no,e.ordinal) AS copy_rank FROM events e JOIN files f ON f.id=e.file_id)
+ WHERE copy_rank=1;
 CREATE VIEW IF NOT EXISTS call_outcomes AS
  SELECT f.harness,e.session_id,e.call_id,
  CASE WHEN sum(ok=0)>0 THEN 0 WHEN sum(ok=1)>0 THEN 1 END AS ok,
@@ -107,4 +104,4 @@ CREATE VIEW IF NOT EXISTS call_outcomes AS
       WHEN sum(ok_source='flag')>0 THEN 'flag'
       WHEN sum(ok_source='text')>0 THEN 'text' ELSE 'none' END AS ok_source
  FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id;
-PRAGMA user_version=5;
+PRAGMA user_version=4;
