@@ -199,13 +199,13 @@ fn emit(kind: &str, value: Value) -> Result<()> {
 }
 
 fn end(
-    refresh: Option<&Refresh>,
+    refresh: &Value,
     coverage: &Coverage,
     cursor: Option<String>,
     unit: &str,
     returned: usize,
 ) -> Result<()> {
-    let stale = refresh.is_some_and(|r| r.stale);
+    let stale = refresh["stale"] == true;
     emit(
         "end",
         json!({"complete": !coverage.incomplete && !stale, "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges,"refresh":refresh}),
@@ -290,7 +290,7 @@ fn search(
         (more && reached < query::SEARCH_PAGE_SESSIONS).then_some(reached as i64),
     )?;
     end(
-        Some(&refresh),
+        &json!(refresh),
         &Coverage {
             incomplete: more,
             records,
@@ -332,7 +332,7 @@ fn grep(
         emit("hit", serde_json::to_value(hit)?)?;
     }
     end(
-        Some(&refresh),
+        &json!(refresh),
         &coverage,
         next(&snapshot, coverage.continuation)?,
         "source_ranges",
@@ -364,7 +364,7 @@ fn show(
         emit("record", value)?;
     }
     end(
-        Some(&refresh),
+        &json!(refresh),
         &coverage,
         next(&snapshot, coverage.continuation)?,
         "source_ranges",
@@ -395,7 +395,7 @@ fn count(
         emit("count", row.clone())?;
     }
     end(
-        Some(&refresh),
+        &json!(refresh),
         &Coverage {
             records: rows.len(),
             ..Coverage::default()
@@ -411,7 +411,7 @@ fn doctor(path: &Path, roots: &[Root]) -> Result<i32> {
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
     emit("doctor", counting::doctor(&db)?)?;
-    end(Some(&refresh), &Coverage::default(), None, "diagnostic", 1)?;
+    end(&json!(refresh), &Coverage::default(), None, "diagnostic", 1)?;
     Ok(0)
 }
 
@@ -422,11 +422,8 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         path.display()
     );
     let read_lock = Store::read_lock(path)?;
-    let refresh = Refresh {
-        stale: read_lock.is_none(),
-        writer_busy: read_lock.is_none(),
-        ..Refresh::default()
-    };
+    // sql does not refresh, so its coverage holds only what the lock shows.
+    let refresh = json!({"stale": read_lock.is_none(), "writer_busy": read_lock.is_none()});
     let db =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.busy_timeout(Duration::from_millis(50))?;
@@ -436,7 +433,7 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         emit("row", json!({"data":row}))?;
     }
     end(
-        Some(&refresh),
+        &json!(refresh),
         &Coverage {
             records: rows.len(),
             ..Coverage::default()
@@ -457,7 +454,7 @@ fn index(path: &Path, roots: &[Root], full: bool) -> Result<i32> {
     let report = store.refresh(roots, full, None)?;
     emit("index", serde_json::to_value(&report)?)?;
     end(
-        Some(&report),
+        &json!(report),
         &Coverage {
             records: report.records,
             ..Coverage::default()

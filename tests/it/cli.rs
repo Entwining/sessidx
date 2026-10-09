@@ -226,7 +226,11 @@ fn cli_writer_contention_returns_stale_without_waiting() {
     );
     assert_eq!(rows.last().unwrap()["stale"], true);
     assert_eq!(rows.last().unwrap()["complete"], false);
-    assert_eq!(rows.last().unwrap()["refresh"]["writer_busy"], true);
+    // sql does not refresh, so it reports no coverage it did not measure.
+    assert_eq!(
+        rows.last().unwrap()["refresh"],
+        json!({"stale": true, "writer_busy": true})
+    );
 }
 
 #[test]
@@ -355,5 +359,11 @@ fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
         assert_eq!(rows.len(), 1, "{args:?}");
         assert_eq!(rows[0]["complete"], true, "{args:?}");
         assert!(rows[0].get("error").is_none(), "{args:?}");
+        if args[0] == "sql" {
+            assert_eq!(
+                rows[0]["refresh"],
+                json!({"stale": false, "writer_busy": false})
+            );
+        }
     }
 }
