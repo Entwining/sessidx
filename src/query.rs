@@ -9,9 +9,10 @@ use regex::Regex;
 use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value};
 use serde::Serialize;
 use serde_json::Value as Json;
+use sha2::{Digest, Sha256};
 use std::{
     fs::File,
-    io::{Read, Seek, SeekFrom},
+    os::unix::fs::{FileExt, MetadataExt},
     sync::LazyLock,
     time::{Duration, Instant},
 };
@@ -209,7 +210,7 @@ pub struct Coverage {
     pub bytes: u64,
 }
 
-const COLUMNS: &str = "f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,coalesce(e.text,''),e.byte_off,e.byte_len,e.id,e.text_truncated";
+const COLUMNS: &str = "f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
 const FROM: &str = "FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
@@ -226,12 +227,12 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
         ts: row.get(4)?,
         role: row.get(5)?,
         model: row.get(6)?,
-        snippet: redact(&row.get::<_, String>(7)?),
-        truncated: row.get(11)?,
+        snippet: String::new(),
+        truncated: row.get(10)?,
         reference,
-        byte_off: row.get(8)?,
-        byte_len: row.get(9)?,
-        event_id: row.get(10)?,
+        byte_off: row.get(7)?,
+        byte_len: row.get(8)?,
+        event_id: row.get(9)?,
     })
 }
 
@@ -314,7 +315,8 @@ pub fn search(
         )
         SELECT {COLUMNS},h.ts,h.n,(SELECT count(*) FROM all_heads),
           CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(anchor)
-            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,harness,session_id LIMIT ?)) END
+            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,harness,session_id LIMIT ?)) END,
+          coalesce(e.text,'')
         {FROM} CROSS JOIN ordering
         JOIN ranked r ON r.id=e.id JOIN heads h ON h.harness=f.harness AND h.session_id=e.session_id
         WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.harness,h.session_id,r.n"
@@ -323,15 +325,13 @@ pub fn search(
     let mut matched_sessions = 0;
     let mut order = None;
     let rows = stmt.query_map(params_from_iter(args), |r| {
-        matched_sessions = r.get(14)?;
+        matched_sessions = r.get(13)?;
         if order.is_none() {
-            order = r.get::<_, Option<String>>(15)?;
+            order = r.get::<_, Option<String>>(14)?;
         }
-        Ok((
-            hit(r)?,
-            r.get::<_, Option<String>>(12)?,
-            r.get::<_, usize>(13)?,
-        ))
+        let mut hit = hit(r)?;
+        hit.snippet = redact(&r.get::<_, String>(15)?);
+        Ok((hit, r.get::<_, Option<String>>(11)?, r.get::<_, usize>(12)?))
     })?;
     let mut sessions: Vec<Session> = Vec::new();
     for row in rows {
@@ -357,30 +357,45 @@ pub fn search(
     })
 }
 
-fn read_range(db: &Connection, item: &Hit) -> Result<Vec<u8>> {
+/// `source` keeps the last opened file with its device and inode: consecutive
+/// rows usually share it. It is reused only while the path still names that
+/// file, so a source replaced mid-query is read as reopening it would.
+fn read_range(
+    db: &Connection,
+    item: &Hit,
+    source: &mut Option<((u64, u64), File)>,
+) -> Result<Vec<u8>> {
     anyhow::ensure!(
         item.byte_len <= MAX_RECORD as u64,
         "source record exceeds display limit"
     );
-    let expected: (u64, u64, String) = db.query_row(
-        "SELECT f.dev,f.inode,e.raw_hash FROM files f JOIN events e ON e.file_id=f.id WHERE e.id=?",
-        [item.event_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    let mut file = File::open(&item.path)?;
-    use std::os::unix::fs::MetadataExt;
-    let meta = file.metadata()?;
+    let expected: (u64, u64, [u8; 32]) = db
+        .prepare_cached(
+            "SELECT f.dev,f.inode,l.raw_hash FROM locations l JOIN files f ON f.id=l.file_id WHERE l.id=?",
+        )?
+        .query_row([item.event_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let named = std::fs::metadata(&item.path)?;
+    let (file, meta) = match source {
+        Some((identity, file)) if *identity == (named.dev(), named.ino()) => {
+            let meta = file.metadata()?;
+            (&*file, meta)
+        }
+        _ => {
+            let file = File::open(&item.path)?;
+            let meta = file.metadata()?;
+            (&source.insert(((meta.dev(), meta.ino()), file)).1, meta)
+        }
+    };
     anyhow::ensure!(
         meta.dev() == expected.0
             && meta.ino() == expected.1
             && meta.len() >= item.byte_off + item.byte_len,
         "source replaced or truncated; run sessidx index"
     );
-    file.seek(SeekFrom::Start(item.byte_off))?;
     let mut bytes = vec![0; item.byte_len as usize];
-    file.read_exact(&mut bytes)?;
+    file.read_exact_at(&mut bytes, item.byte_off)?;
     anyhow::ensure!(
-        crate::normalize::hash(&bytes) == expected.2,
+        Sha256::digest(&bytes)[..] == expected.2,
         "source range changed; run sessidx index"
     );
     Ok(bytes)
@@ -411,14 +426,17 @@ pub fn scan(
         let pattern = Regex::new(pattern).context("invalid grep regex")?;
         let (clause, mut args) = filters.sql(db)?;
         args.push(Value::Integer(after));
+        // The probe reads base tables: through the events view, its string joins
+        // dominated stepping on harness-wide scans. Role mirrors the view's coalesce.
         let sql = format!(
-            "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(e2.ordinal) FROM events e2 WHERE e2.file_id=e.file_id AND e2.line_no=e.line_no AND e2.role=e.role) ORDER BY e.id"
+            "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(l.ordinal) FROM locations l LEFT JOIN event_details d ON d.event_id=l.id LEFT JOIN strings role ON role.id=d.role_ref WHERE l.file_id=e.file_id AND l.line_no=e.line_no AND coalesce(role.value,'unknown')=e.role) ORDER BY e.id"
         );
         let mut stmt = db.prepare(&sql)?;
         let mut rows = stmt.query(params_from_iter(args))?;
         let mut hits = Vec::new();
         let mut coverage = Coverage::default();
         let mut cursor = after;
+        let mut source = None;
         loop {
             if Instant::now() >= deadline || hits.len() >= limit {
                 coverage.incomplete = true;
@@ -441,7 +459,7 @@ pub fn scan(
             let mut item = hit(row)?;
             cursor = item.event_id;
             coverage.records += 1;
-            match read_range(db, &item) {
+            match read_range(db, &item, &mut source) {
                 Ok(bytes) => {
                     coverage.bytes += bytes.len() as u64;
                     if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
@@ -523,8 +541,9 @@ pub fn show_snapshot(
         ..Coverage::default()
     };
     coverage.records = hits.len();
+    let mut source = None;
     for item in &mut hits {
-        match read_range(db, item).and_then(|bytes| {
+        match read_range(db, item, &mut source).and_then(|bytes| {
             coverage.bytes += bytes.len() as u64;
             display_range(&bytes)
         }) {

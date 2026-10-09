@@ -33,6 +33,9 @@ exclude_re = [
   # The read limit differs only when a file grows between stat and read, and the
   # next refresh resumes from the indexed offset either way.
   'src/store\.rs:\d+:\d+: replace - with \+ in Store::index_file',
+  # The handle is reused only when the path names its inode, so reopening the
+  # path for every range reads the same file; reuse only saves an open per row.
+  'src/query\.rs:\d+:\d+: replace match guard \*identity == \(named\.dev\(\), named\.ino\(\)\) with false in read_range',
   # A reader that never reports end of input hangs; the timeout is the detection.
   'replace read_record -> Result<\(u64, bool, bool\)> with Ok\(\(1, true, (true|false)\)\)',
 ]

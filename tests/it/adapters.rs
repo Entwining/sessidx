@@ -40,7 +40,7 @@ fn codex_context_arguments_and_telemetry() {
     assert_eq!(es.iter().filter(|e| e.kind == "message").count(), 1);
     assert_eq!(
         s.instruction_hash.as_deref(),
-        Some(format!("{:x}", sha2::Sha256::digest("Synthetic instruction")).as_str())
+        Some(hex::encode(sha2::Sha256::digest("Synthetic instruction")).as_str())
     );
     let mut history = State::default();
     adapters::parse(

@@ -132,7 +132,7 @@ fn scope(db: &rusqlite::Connection, request: &Value) -> Result<String> {
             r.get(0)
         })?;
     hash.update(instance);
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) -> Result<Cursor> {

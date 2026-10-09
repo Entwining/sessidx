@@ -127,12 +127,9 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             assert_eq!(
                 s.instruction_hash.as_deref(),
                 Some(
-                    format!(
-                        "{:x}",
-                        sha2::Sha256::digest(
-                            "# AGENTS.md instructions\nSynthetic fallback instructions"
-                        )
-                    )
+                    hex::encode(sha2::Sha256::digest(
+                        "# AGENTS.md instructions\nSynthetic fallback instructions"
+                    ))
                     .as_str()
                 )
             );

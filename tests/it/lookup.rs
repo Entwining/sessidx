@@ -246,3 +246,39 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     assert_eq!(all.len(), 4);
     assert_eq!(all.iter().filter(|s| s.session_id == "crowded").count(), 2);
 }
+
+#[test]
+fn grep_reads_each_range_from_its_own_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("pi");
+    fs::create_dir(&root).unwrap();
+    for name in ["a", "b"] {
+        fs::write(
+            root.join(format!("{name}.jsonl")),
+            format!(
+                "{{\"type\":\"session\",\"id\":\"{name}\"}}\n{{\"type\":\"message\",\"id\":\"{name}1\",\"message\":{{\"role\":\"user\",\"content\":\"needle {name}\"}}}}\n"
+            ),
+        )
+        .unwrap();
+    }
+    let mut store = sessidx::store::Store::open(&dir.path().join("index.db")).unwrap();
+    let roots = [Root {
+        harness: "pi".into(),
+        path: root,
+    }];
+    store.refresh(&roots, false, None).unwrap();
+    let filters = Filters {
+        harness: vec![sessidx::query::Harness::Pi],
+        ..Filters::default()
+    };
+    let (hits, coverage) =
+        query::scan(&store.db, "needle", &filters, 10, 0, Duration::from_secs(2)).unwrap();
+    assert_eq!(coverage.records, 4);
+    assert_eq!(coverage.unavailable_ranges, 0);
+    assert_eq!(
+        hits.iter()
+            .map(|h| h.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+}
