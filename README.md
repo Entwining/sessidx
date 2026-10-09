@@ -22,7 +22,7 @@ This installs `~/.local/bin/sessidx`; put that directory on `PATH`. From a check
 
 ## Use
 
-`sessidx index` builds the index from `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`; a long history takes several minutes the first time. After that, each query refreshes the index incrementally within a two-second budget.
+`sessidx index` builds the index from `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`; a long history takes several minutes the first time. After that, each query refreshes the index incrementally within a two-second budget. The index follows the logs: when a harness deletes an old session file, its rows go too. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/data-usage#data-retention) (30 days by default; sessions started or last continued in Claude Desktop or Cowork are exempt by default), so raise that setting to keep a longer searchable history.
 
 ```sh
 sessidx index
@@ -50,6 +50,7 @@ gh skill install Entwining/sessidx sessidx --scope user
 - [docs/cli.md](docs/cli.md): commands, output records, exit codes, and refresh behavior.
 - [docs/design.md](docs/design.md): storage, refresh, privacy, counting units, and known limits.
 - [docs/formats.md](docs/formats.md): each normalization rule and observed log variant with its synthetic fixture and regression test.
+- [skills/sessidx/SKILL.md](skills/sessidx/SKILL.md): how an agent uses sessidx and reads its results.
 - [AGENTS.md](AGENTS.md): decisions to keep and how to change and validate the code.
 
 ## License
