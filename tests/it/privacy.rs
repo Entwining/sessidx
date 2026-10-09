@@ -1,5 +1,6 @@
 use crate::common::{indexed, search_hits, serial, sessidx};
 use sessidx::{
+    counting,
     model::Harness,
     query::{self, Filters},
     redaction,
@@ -255,6 +256,8 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "..SearchOptions::default",
         "/compact_summary_handoff",
         "alphaBetaGammaDelta/../omegaPsi",
+        "2026-10-08T15:23:34.928Z",
+        "2026-09-17T23:58:46.731942+08:00",
     ] {
         let hits = search_hits(
             &store.db,
@@ -267,6 +270,16 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.contains(value));
     }
+    // `sql` redacts every text value it returns, timestamps included.
+    let rows = counting::sql(
+        &store.db,
+        "SELECT ts FROM events WHERE session_id='identifiers' AND ts IS NOT NULL",
+    )
+    .unwrap();
+    assert_eq!(
+        rows,
+        [serde_json::json!({"ts": "2026-10-08T15:23:34.928Z"})]
+    );
     let context = search_hits(&store.db, "contextneedle", &Filters::default(), 20, 0).unwrap();
     assert_eq!(context.len(), 1);
     for value in [
@@ -297,6 +310,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "alphaBetaGammaDelta/.../omegaPsi",
         "0123456789.0123456789-0123456789/0123456789",
         "0123456789/0123456789/0123456789/_",
+        "2026-10-08T15:23:34.928Zq7Xk9Lm2",
     ] {
         assert!(
             !context[0].snippet.contains(value),

@@ -145,7 +145,15 @@ fn redact_run(run: &str, identifier: &str) -> String {
             .split('-')
             .zip([8, 4, 4, 4, 12])
             .all(|(s, n)| s.len() == n && s.bytes().all(|b| b.is_ascii_hexdigit()));
-    if hex.bytes().all(|b| b.is_ascii_hexdigit()) || uuid || identifier_shaped(identifier) {
+    // Rule: docs/formats.md `rfc3339_timestamp`. Parsed before locator removal,
+    // which would take a `+08:00` offset for a line number.
+    let timestamp =
+        chrono::DateTime::parse_from_rfc3339(run.trim_end_matches(['.', '!', '?', ':'])).is_ok();
+    if hex.bytes().all(|b| b.is_ascii_hexdigit())
+        || uuid
+        || timestamp
+        || identifier_shaped(identifier)
+    {
         return run.to_owned();
     }
     let mut counts = HashMap::new();
