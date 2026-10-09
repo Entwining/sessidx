@@ -1,0 +1,12 @@
+{
+  "name": "entwining",
+  "description": "sessidx: look up and count past local Claude Code, Codex, and Pi sessions",
+  "owner": { "name": "Entwining" },
+  "plugins": [
+    {
+      "name": "sessidx",
+      "source": "./",
+      "description": "Look up and count past local Claude Code, Codex, and Pi sessions through the sessidx CLI"
+    }
+  ]
+}
