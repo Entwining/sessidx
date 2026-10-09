@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use clap::ValueEnum;
 use rusqlite::{
     Connection,
+    fallible_iterator::FallibleIterator,
     types::{Value, ValueRef},
 };
 use serde_json::{Value as Json, json};
@@ -210,7 +211,7 @@ pub fn doctor(db: &Connection) -> Result<Json> {
 pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
     db.execute_batch("PRAGMA query_only=ON;")?;
     let deadline = Instant::now() + Duration::from_secs(2);
-    db.progress_handler(1000, Some(move || Instant::now() >= deadline));
+    db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
     let result = (|| {
         let mut batch = rusqlite::Batch::new(db, sql);
         let mut stmt = batch.next()?.ok_or_else(|| anyhow::anyhow!("empty SQL"))?;
@@ -256,7 +257,7 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
         }
         Ok(result)
     })();
-    db.progress_handler(0, None::<fn() -> bool>);
+    db.progress_handler(0, None::<fn() -> bool>)?;
     db.execute_batch("PRAGMA query_only=OFF;")?;
     result
 }

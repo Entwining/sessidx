@@ -12,7 +12,7 @@ sessidx is developed and tested only on Apple Silicon macOS.
 brew install entwining/tap/sessidx
 ```
 
-To build from source instead, you need Rust 1.98 or later and a C compiler for the bundled SQLite (the Xcode Command Line Tools); the code uses Unix file APIs:
+To build from source instead, you need Rust at or above the `rust-version` in `Cargo.toml` and a C compiler for the bundled SQLite (the Xcode Command Line Tools); the code uses Unix file APIs:
 
 ```sh
 cargo install --locked --git https://github.com/Entwining/sessidx --root ~/.local
