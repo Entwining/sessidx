@@ -272,10 +272,15 @@ impl Store {
         };
         let existing = if full { Vec::new() } else { indexed };
         let discovered: HashSet<_> = files.iter().map(|(_, p)| p.as_path()).collect();
+        let present: Vec<&Path> = roots
+            .iter()
+            .map(|r| r.path.as_path())
+            .filter(|root| root.exists())
+            .collect();
         for (id, path) in existing {
-            if roots
+            if present
                 .iter()
-                .any(|r| r.path.exists() && Path::new(&path).starts_with(&r.path))
+                .any(|root| Path::new(&path).starts_with(root))
                 && !discovered.contains(Path::new(&path))
             {
                 let tx = self.db.transaction()?;
@@ -324,28 +329,48 @@ impl Store {
         let harness_name = name(harness);
         let old = self
             .db
-            .query_row(
-                "SELECT * FROM files WHERE path=?",
-                [path_text.as_ref()],
-                |r| {
-                    Ok(FileRow {
-                        id: r.get("id")?,
-                        dev: r.get("dev")?,
-                        inode: r.get("inode")?,
-                        size: r.get("size")?,
-                        mtime: r.get("mtime")?,
-                        prefix_hash: r.get("prefix_hash")?,
-                        prefix_len: r.get("prefix_len")?,
-                        bytes_indexed: r.get("bytes_indexed")?,
-                        lines_indexed: r.get("lines_indexed")?,
-                        state_json: r.get("state_json")?,
-                        parse_errors: r.get("parse_errors")?,
-                        index_status: r.get("index_status")?,
-                        harness: r.get("harness")?,
-                    })
-                },
-            )
+            .prepare_cached("SELECT * FROM files WHERE path=?")?
+            .query_row([path_text.as_ref()], |r| {
+                Ok(FileRow {
+                    id: r.get("id")?,
+                    dev: r.get("dev")?,
+                    inode: r.get("inode")?,
+                    size: r.get("size")?,
+                    mtime: r.get("mtime")?,
+                    prefix_hash: r.get("prefix_hash")?,
+                    prefix_len: r.get("prefix_len")?,
+                    bytes_indexed: r.get("bytes_indexed")?,
+                    lines_indexed: r.get("lines_indexed")?,
+                    state_json: r.get("state_json")?,
+                    parse_errors: r.get("parse_errors")?,
+                    index_status: r.get("index_status")?,
+                    harness: r.get("harness")?,
+                })
+            })
             .optional()?;
+        // Another harness parses the same bytes differently, so neither the
+        // cached rows nor an append to them can be reused. Only a refresh that
+        // ran out of budget leaves an unchanged file's records unread. Most
+        // files a refresh visits are unchanged, so a stat decides before opening.
+        if let Some(ref o) = old
+            && o.harness == harness_name
+            && o.index_status != FileCoverage::BudgetExhausted
+            && let Ok(meta) = source::metadata(path)
+            && o.dev == meta.dev()
+            && o.inode == meta.ino()
+            && o.size == meta.len()
+            && o.mtime == change_stamp(&meta)
+        {
+            return Ok(IndexedFile {
+                changed: false,
+                records: 0,
+                coverage: if o.index_status == FileCoverage::DeferredTail {
+                    FileCoverage::DeferredTail
+                } else {
+                    FileCoverage::Ready
+                },
+            });
+        }
         // The harness deleted or archived the log after discovery listed it.
         let Some(mut source) = source::open(path).context("cannot open session file")? else {
             if let Some(ref o) = old {
@@ -361,34 +386,7 @@ impl Store {
         };
         let meta = source.meta.clone();
         let source_size = meta.len();
-        let mtime = format!(
-            "{}:{}:{}:{}",
-            meta.mtime(),
-            meta.mtime_nsec(),
-            meta.ctime(),
-            meta.ctime_nsec()
-        );
-        // Another harness parses the same bytes differently, so neither the
-        // cached rows nor an append to them can be reused. Only a refresh that
-        // ran out of budget leaves an unchanged file's records unread.
-        if let Some(ref o) = old
-            && o.harness == harness_name
-            && o.dev == meta.dev()
-            && o.inode == meta.ino()
-            && o.size == source_size
-            && o.mtime == mtime
-            && o.index_status != FileCoverage::BudgetExhausted
-        {
-            return Ok(IndexedFile {
-                changed: false,
-                records: 0,
-                coverage: if o.index_status == FileCoverage::DeferredTail {
-                    FileCoverage::DeferredTail
-                } else {
-                    FileCoverage::Ready
-                },
-            });
-        }
+        let mtime = change_stamp(&meta);
         let prefix_len = source_size.min(4096);
         let mut prefix = vec![0; prefix_len as usize];
         source.file.read_exact(&mut prefix)?;
@@ -538,6 +536,18 @@ impl Store {
             coverage,
         })
     }
+}
+
+/// The `files.mtime` value: modification and status-change times, so a rewrite
+/// that restores the size and modification time still reads as changed.
+fn change_stamp(meta: &fs::Metadata) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec()
+    )
 }
 
 fn delete_file(tx: &Transaction<'_>, id: i64) -> Result<()> {
