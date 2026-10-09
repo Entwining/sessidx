@@ -6,6 +6,7 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)",
     r"(?i)\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=\-]+",
     r"\b(?:sk-[A-Za-z0-9_\-]{8,}|(?:gh[pousr]_|github_pat_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9_\-]{8,})",
+    r"\b(?:hf_[A-Za-z]{34}\b|SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43})",
 ].into_iter().map(|p| Regex::new(p).expect("static regex is valid")).collect()
 });
 static ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
