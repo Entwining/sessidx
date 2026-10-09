@@ -35,8 +35,8 @@ call_outcomes AS MATERIALIZED (
  FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id)";
 
 /// Calls whose canonical event holds a site of `:program`, joined to results
-/// instead of probed per result: with a GROUP BY, SQLite 3.46 plans that probe
-/// as a scan of `canonical_events` for every result.
+/// instead of probed per result: with a GROUP BY, SQLite 3.46 and 3.53 plan
+/// that probe as a scan of `canonical_events` for every result.
 const PROGRAM_CALLS: &str = ",
 program_calls AS MATERIALIZED (
  SELECT DISTINCT cf.harness,ce.session_ref,ce.call_ref FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id
