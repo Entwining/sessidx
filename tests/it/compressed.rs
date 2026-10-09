@@ -1,4 +1,4 @@
-use crate::common::snapshot;
+use crate::common::{serial, snapshot};
 use sessidx::{
     discovery::Root,
     model::Harness,
@@ -92,6 +92,7 @@ fn shown(store: &Store, target: &str) -> Vec<String> {
 
 #[test]
 fn a_compressed_rollout_is_indexed_shown_and_grepped_under_its_plain_path() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let (mut store, roots, plain) = codex(dir.path());
     fs::write(zst(&plain), compress(FIXTURE.as_bytes())).unwrap();
@@ -113,6 +114,7 @@ fn a_compressed_rollout_is_indexed_shown_and_grepped_under_its_plain_path() {
 
 #[test]
 fn compression_and_materialization_keep_one_file_that_equals_a_clean_rebuild() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let (mut store, roots, plain) = codex(dir.path());
     fs::write(&plain, FIXTURE).unwrap();
@@ -158,6 +160,7 @@ fn every_frame_of_a_multi_frame_rollout_is_indexed() {
 
 #[test]
 fn an_undecodable_rollout_is_a_parse_error_that_does_not_stop_refresh() {
+    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let (mut store, roots, plain) = codex(dir.path());
     let compressed = compress(FIXTURE.as_bytes());
