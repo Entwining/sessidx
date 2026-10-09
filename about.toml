@@ -4,6 +4,7 @@ accepted = ["Apache-2.0", "MIT", "BSD-3-Clause", "Zlib", "Unicode-3.0", "Unicode
 targets = ["aarch64-apple-darwin"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+private = { ignore = true }
 
 # The crate's expression omits the Unicode data its tables are generated from.
 [regex-syntax.clarify]
