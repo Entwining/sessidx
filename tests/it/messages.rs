@@ -1,4 +1,4 @@
-use crate::common::{indexed, serial};
+use crate::common::indexed;
 use sessidx::{
     adapters,
     model::{Harness, State, name},
@@ -9,7 +9,6 @@ use std::fs;
 
 #[test]
 fn native_message_fragments_empty_replies_summary_and_history_dedup() {
-    let _serial = serial();
     let (_dir, mut store, roots) =
         indexed(Harness::Claude, include_str!("../fixtures/structure.jsonl"));
     let scalar =
@@ -155,7 +154,6 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
 
 #[test]
 fn native_copy_ownership_uses_origin_time_before_filename() {
-    let _serial = serial();
     let (_dir, mut store, roots) = indexed(
         Harness::Claude,
         "{\"type\":\"user\",\"uuid\":\"shared-native\",\"sessionId\":\"origin\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"same\"}}\n",

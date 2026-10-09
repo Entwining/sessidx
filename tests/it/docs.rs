@@ -1,9 +1,9 @@
-use crate::common::{serial, sessidx};
+use crate::common::{serial, sessidx, shell};
 use std::path::Path;
 
 #[test]
 fn readme_examples_print_their_shown_output_for_the_readme_fixture() {
-    let _serial = serial();
+    let serial = serial();
     let readme = include_str!("../../README.md");
     let home = tempfile::tempdir().unwrap();
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/readme");
@@ -34,8 +34,7 @@ fn readme_examples_print_their_shown_output_for_the_readme_fixture() {
     }
     assert_eq!(examples.len(), 2, "README console examples not found");
     for (command, shown) in examples {
-        let out = std::process::Command::new("/bin/sh")
-            .args(["-c", command])
+        let out = shell(&serial, command)
             .env("HOME", home.path())
             .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
             .output()

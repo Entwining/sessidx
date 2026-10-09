@@ -43,7 +43,16 @@ pub struct Store {
 }
 
 pub struct WriterLock {
-    _file: File,
+    file: File,
+}
+impl Drop for WriterLock {
+    /// A child process spawned while this lock is held keeps a copy of its
+    /// descriptor until it execs, and `flock` releases on close only when every
+    /// copy is closed; an explicit unlock releases it at once.
+    fn drop(&mut self) {
+        // Closing the file still releases the lock once every copy is gone.
+        let _ = self.file.unlock();
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FileCoverage {
@@ -108,7 +117,7 @@ impl WriterLock {
         } else {
             f.try_lock()
         } {
-            Ok(()) => Ok(Some(Self { _file: f })),
+            Ok(()) => Ok(Some(Self { file: f })),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
             Err(e) => Err(e.into()),
         }

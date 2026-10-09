@@ -1,4 +1,4 @@
-use crate::common::{events, indexed, serial};
+use crate::common::{events, indexed};
 use clap::ValueEnum;
 use sessidx::{
     adapters,
@@ -147,7 +147,6 @@ fn claude_hook_check_errors_respect_native_success_flags() {
 
 #[test]
 fn call_outcomes_are_isolated_by_harness() {
-    let _serial = serial();
     let (dir, mut store, _) = indexed(
         Harness::Claude,
         "{\"type\":\"assistant\",\"sessionId\":\"shared-session\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"shared-call\",\"name\":\"Bash\",\"input\":{\"command\":\"rg word\"}}]}}\n{\"type\":\"user\",\"sessionId\":\"shared-session\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"shared-call\",\"is_error\":true}]}}\n",
