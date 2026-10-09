@@ -9,6 +9,9 @@ allow = ["MIT", "Apache-2.0"]
 exceptions = [
     { allow = ["Zlib"], crate = "foldhash" },
     { allow = ["Unicode-3.0"], crate = "unicode-ident" },
+    { allow = ["BSD-3-Clause"], crate = "zstd" },
+    { allow = ["BSD-3-Clause"], crate = "zstd-safe" },
+    { allow = ["BSD-3-Clause"], crate = "zstd-sys" },
 ]
 
 [bans]
