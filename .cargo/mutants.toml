@@ -43,4 +43,9 @@ exclude_re = [
   'src/query\.rs:\d+:\d+: replace match guard \*identity == \(named\.dev\(\), named\.ino\(\)\) with false in read_range',
   # A reader that never reports end of input hangs; the timeout is the detection.
   'replace read_record -> (io::)?Result<\(u64, bool, bool\)> with Ok\(\(1, true, (true|false)\)\)',
+  # sessidx never spawns a process and opens the lock file close-on-exec, so
+  # closing it releases the lock. The unlock matters only in a test process that
+  # forks while holding it, a window only an unsafe pre_exec hook can hold open;
+  # without it this mutant fails a test only by chance.
+  'replace <impl Drop for WriterLock>::drop with \(\)',
 ]

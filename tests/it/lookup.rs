@@ -1,4 +1,4 @@
-use crate::common::{indexed, search_hits, serial};
+use crate::common::{indexed, search_hits};
 use sessidx::{
     discovery::Root,
     model::Harness,
@@ -183,7 +183,6 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
 
 #[test]
 fn ranked_search_pages_sessions_before_selecting_best_hits() {
-    let _serial = serial();
     let message = |session: &str, id: usize, ts: &str, text: &str| {
         serde_json::json!({"type":"user","uuid":format!("{session}-{id}"),"sessionId":session,"timestamp":ts,"message":{"role":"user","content":text}}).to_string()+"\n"
     };

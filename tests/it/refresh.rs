@@ -9,7 +9,6 @@ use std::{fs, time::Duration};
 
 #[test]
 fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
-    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
@@ -91,7 +90,6 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
 
 #[test]
 fn same_size_rewrite_with_preserved_mtime_equals_clean_rebuild() {
-    let _serial = serial();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("one.jsonl");
     let data = format!(
@@ -183,7 +181,6 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
 
 #[test]
 fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
-    let _serial = serial();
     let (_dir, mut store, roots) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     let lock = store.lock().unwrap().unwrap();
     let busy = store
@@ -234,7 +231,6 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
 
 #[test]
 fn a_missing_root_is_stale_only_when_it_held_indexed_files() {
-    let _serial = serial();
     let (dir, mut store, roots) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
     fs::rename(&roots[0].path, dir.path().join("moved")).unwrap();
     let missing = store.refresh(&roots, false, None).unwrap();
@@ -297,7 +293,6 @@ fn an_archived_codex_thread_stays_findable_under_its_new_path() {
 
 #[test]
 fn a_path_reindexed_under_another_harness_is_parsed_again() {
-    let _serial = serial();
     let (_dir, mut store, roots) = indexed(Harness::Claude, include_str!("../fixtures/pi.jsonl"));
     let pi = [Root {
         harness: Harness::Pi,

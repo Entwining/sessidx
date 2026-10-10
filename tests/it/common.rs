@@ -13,17 +13,17 @@ use std::{
     sync::{Mutex, MutexGuard, PoisonError},
 };
 
-/// Hold for the whole test when it launches the CLI or takes one database's
-/// writer lock more than once. A child inherits every open descriptor until it
-/// execs, so a writer lock released in that window stays held and the next
-/// refresh of that database reports writer_busy.
+/// Hold for the whole test when it launches a process: children spawned
+/// concurrently from this one test process disturbed each other's output, so
+/// only the launchers below spawn, and each takes this guard.
 pub fn serial() -> MutexGuard<'static, ()> {
     static SERIAL: Mutex<()> = Mutex::new(());
     SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Launches the CLI only under [`serial`], since spawning is the hazard. HOME is
-/// the database's scratch directory, so default roots never reach real sessions.
+/// Launches the CLI under [`serial`]. HOME is the database's scratch directory,
+/// so default roots never reach real sessions.
+#[expect(clippy::disallowed_methods, reason = "a launcher that takes serial()")]
 pub fn sessidx(_serial: &MutexGuard<()>, db: &Path, roots: &[Root], args: &[&str]) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_sessidx"));
     cmd.env("HOME", db.parent().unwrap());
@@ -33,6 +33,14 @@ pub fn sessidx(_serial: &MutexGuard<()>, db: &Path, roots: &[Root], args: &[&str
             .arg(format!("{}={}", name(r.harness), r.path.display()));
     }
     cmd.args(args);
+    cmd
+}
+
+/// Runs a shell command line under [`serial`].
+#[expect(clippy::disallowed_methods, reason = "a launcher that takes serial()")]
+pub fn shell(_serial: &MutexGuard<()>, command: &str) -> Command {
+    let mut cmd = Command::new("/bin/sh");
+    cmd.args(["-c", command]);
     cmd
 }
 

@@ -4,6 +4,7 @@ disallowed-methods = [
   { path = "std::env::var_os", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
   { path = "std::env::vars", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
   { path = "std::env::vars_os", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::process::Command::new", reason = "tests spawn only through the launchers in tests/it/common.rs, which hold serial()" },
 ]
 disallowed-macros = [
   { path = "core::option_env", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
