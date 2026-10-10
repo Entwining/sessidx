@@ -29,7 +29,7 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
         assert!(rows[..rows.len() - 1].iter().all(|v| v["type"] == kind));
         assert_eq!(rows.last().unwrap()["complete"], true);
         if kind == "record" {
-            assert!(rows[0]["text"].as_str().unwrap().contains("sharedneedle"));
+            assert_eq!(rows[0]["record"]["message"]["content"], "sharedneedle");
         }
         if kind == "row" {
             assert_eq!(rows[0]["data"]["type"], "row");

@@ -58,31 +58,16 @@ fn previous_schema_requires_explicit_locked_rebuild() {
     let mut clean = Store::open(&dir.path().join("clean.db")).unwrap();
     clean.refresh(&roots, true, None).unwrap();
     assert_eq!(snapshot(&upgrade), snapshot(&clean));
-    assert_eq!(upgrade.db.query_row("SELECT count(*) FROM locations WHERE typeof(raw_hash)!='blob' OR length(raw_hash)!=32 OR (native_id IS NOT NULL AND length(native_id)!=32)", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
-    assert_eq!(upgrade.db.query_row("SELECT count(*) FROM event_details WHERE call_id IS NOT NULL AND (typeof(call_id)!='blob' OR length(call_id)!=32)", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    assert_eq!(upgrade.db.query_row("SELECT count(*) FROM event_rows WHERE typeof(raw_hash)!='blob' OR length(raw_hash)!=32 OR (native_id IS NOT NULL AND length(native_id)!=32) OR (call_id IS NOT NULL AND (typeof(call_id)!='blob' OR length(call_id)!=32))", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     assert_eq!(
         upgrade
             .db
-            .query_row("SELECT count(*) FROM locations", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        upgrade
-            .db
-            .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0))
-            .unwrap()
-    );
-    assert_eq!(
-        upgrade
-            .db
-            .query_row("SELECT count(*) FROM event_details", [], |r| r
+            .query_row("SELECT count(*) FROM event_rows", [], |r| r
                 .get::<_, i64>(0))
             .unwrap(),
         upgrade
             .db
-            .query_row(
-                "SELECT count(*) FROM events WHERE kind!='context'",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
+            .query_row("SELECT count(*) FROM events", [], |r| r.get::<_, i64>(0))
             .unwrap()
     );
 }
@@ -94,6 +79,7 @@ fn previous_compact_schema_rebuilds_without_reading_new_columns() {
         include_str!("../fixtures/schema-v3.sql"),
         include_str!("../fixtures/schema-v4.sql"),
         include_str!("../fixtures/schema-v5.sql"),
+        include_str!("../fixtures/schema-v6.sql"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("old-compact.db");

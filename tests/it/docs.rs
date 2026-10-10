@@ -1,4 +1,4 @@
-use crate::common::{serial, sessidx, shell};
+use crate::common::{serial, sessidx, shell, stream, three_agents};
 use std::path::Path;
 
 #[test]
@@ -63,6 +63,28 @@ fn skill_names_only_commands_and_options_the_cli_accepts() {
     for option in options.find_iter(skill).map(|m| m.as_str()) {
         let listed = regex::Regex::new(&format!("{}(?:[^a-z-]|$)", regex::escape(option))).unwrap();
         assert!(listed.is_match(&help), "{option} is not a sessidx option");
+    }
+}
+
+#[test]
+fn cli_contract_lists_every_count_field() {
+    let serial = serial();
+    let contract = include_str!("../../docs/cli.md");
+    let (_dir, store, roots) = three_agents();
+    for metric in ["commands", "failures", "denials"] {
+        for program in [&[][..], &["--program", "rg"]] {
+            let mut args = vec!["count", metric, "--by"];
+            args.extend(program);
+            let rows = stream(
+                &sessidx(&serial, &store.path, &roots, &args)
+                    .output()
+                    .unwrap(),
+                0,
+            );
+            for field in rows[0].as_object().unwrap().keys() {
+                assert!(contract.contains(&format!("`{field}`")), "{metric} {field}");
+            }
+        }
     }
 }
 

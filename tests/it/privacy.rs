@@ -1,4 +1,4 @@
-use crate::common::{indexed, search_hits, serial, sessidx};
+use crate::common::{body, indexed, indexed_files, search_hits, serial, sessidx};
 use sessidx::{
     counting,
     model::Agent,
@@ -121,7 +121,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         "user",
         serde_json::json!({"role":"user","content":format!("needle {}",fixture["identifiers"].as_array().unwrap().iter().map(|v|v.as_str().unwrap()).collect::<Vec<_>>().join(" "))}),
     );
-    let (dir, store, roots) = indexed(Agent::Claude, &data);
+    let (dir, store, roots) = indexed_files(Agent::Claude, &[("canary-session", &data)]);
     assert_canaries_absent_from_storage(
         dir.path(),
         &values.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -130,7 +130,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         let value = v.as_str().unwrap();
         let hits = search_hits(&store.db, value, &Filters::default(), 20, 0).unwrap();
         assert!(
-            hits.iter().any(|h| h.snippet.contains(value)),
+            hits.iter().any(|h| body(h).contains(value)),
             "public identifier lost"
         );
     }
@@ -194,14 +194,15 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
         values["query_short"].as_str().unwrap()
     );
     let data=serde_json::json!({"type":"user","uuid":"privacy-user","sessionId":"privacy","message":{"role":"user","content":text}}).to_string()+"\n"+&serde_json::json!({"type":"assistant","uuid":"privacy-input","sessionId":"privacy","message":{"role":"assistant","content":[{"type":"tool_use","id":"privacy-call","name":"Bash","input":{"command":"printf needle","part_one":values["part_one"],"part_two":values["part_two"]}}]}}).to_string()+"\n";
-    let (dir, store, _) = indexed(Agent::Claude, &data);
+    let (dir, store, _) = indexed_files(Agent::Claude, &[("privacy", &data)]);
     let output = query::show(&store.db, "privacy", 0, 20, 0)
         .unwrap()
         .0
         .into_iter()
-        .map(|h| h.snippet)
+        .map(|h| body(&h))
         .collect::<Vec<_>>()
         .join("\n");
+    assert!(output.contains("needle"), "{output}");
     for value in values
         .as_object()
         .unwrap()
@@ -218,7 +219,10 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 
 #[test]
 fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
-    let (_, store, _) = indexed(Agent::Claude, include_str!("../fixtures/identifiers.jsonl"));
+    let (_, store, _) = indexed_files(
+        Agent::Claude,
+        &[("identifiers", include_str!("../fixtures/identifiers.jsonl"))],
+    );
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
         "0xabcdef0123456789abcdef0123456789abcdef01",
@@ -265,7 +269,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         )
         .unwrap();
         assert_eq!(hits.len(), 1);
-        assert!(hits[0].snippet.contains(value));
+        assert!(body(&hits[0]).contains(value));
     }
     // `sql` redacts every text value it returns, timestamps included.
     let rows = counting::sql(
@@ -310,14 +314,14 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "2026-10-08T15:23:34.928Zq7Xk9Lm2",
     ] {
         assert!(
-            !context[0].snippet.contains(value),
+            !body(&context[0]).contains(value),
             "synthetic context control survived: {value}"
         );
     }
     let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
     assert_eq!(input.len(), 1);
-    assert!(input[0].snippet.contains("tools.exec_command"));
-    assert!(!input[0].snippet.contains("std::fs::File::try_lock"));
+    assert!(body(&input[0]).contains("tools.exec_command"));
+    assert!(!body(&input[0]).contains("std::fs::File::try_lock"));
     let stored: String = store
         .db
         .query_row("SELECT text FROM events WHERE kind='tool_call'", [], |r| {
@@ -344,21 +348,9 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         .unwrap()
         .is_empty()
     );
-    assert!(
-        input[0]
-            .snippet
-            .contains("0123456789abcdef1032547698badcfe89abcdef")
-    );
-    assert!(
-        !input[0]
-            .snippet
-            .contains("0xabcdef0123456789abcdef0123456789abcdef01")
-    );
-    assert!(
-        !input[0]
-            .snippet
-            .contains("vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ")
-    );
+    assert!(body(&input[0]).contains("0123456789abcdef1032547698badcfe89abcdef"));
+    assert!(!body(&input[0]).contains("0xabcdef0123456789abcdef0123456789abcdef01"));
+    assert!(!body(&input[0]).contains("vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ"));
 }
 
 #[test]
@@ -423,7 +415,7 @@ fn pi_sections_share_the_native_message_and_are_redacted() {
 fn scan_matches_original_ranges_before_redacting_display() {
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";
-    let (_dir, store, _) = indexed(Agent::Claude, &data);
+    let (_dir, store, _) = indexed_files(Agent::Claude, &[("scan-private", &data)]);
     let (hits, c) = query::scan(
         &store.db,
         token,
@@ -437,7 +429,7 @@ fn scan_matches_original_ranges_before_redacting_display() {
     )
     .unwrap();
     assert_eq!(hits.len(), 1);
-    assert!(!hits[0].snippet.contains(token));
+    assert!(!body(&hits[0]).contains(token));
     assert!(!c.incomplete);
 }
 

@@ -1,4 +1,4 @@
-use crate::common::snapshot;
+use crate::common::{body, snapshot};
 use sessidx::{
     discovery::Root,
     model::Agent,
@@ -81,13 +81,13 @@ fn grepped(store: &Store, pattern: &str) -> Vec<String> {
     )
     .unwrap();
     assert_eq!(coverage.unavailable_ranges, 0);
-    hits.into_iter().map(|h| h.snippet).collect()
+    hits.into_iter().map(|h| body(&h)).collect()
 }
 
 fn shown(store: &Store, target: &str) -> Vec<String> {
     let (hits, coverage) = query::show(&store.db, target, 0, 100, 0).unwrap();
     assert_eq!(coverage.unavailable_ranges, 0);
-    hits.into_iter().map(|h| h.snippet).collect()
+    hits.into_iter().map(|h| body(&h)).collect()
 }
 
 #[test]

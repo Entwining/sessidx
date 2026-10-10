@@ -1,23 +1,23 @@
-use crate::common::{indexed, search_hits};
+use crate::common::{body, indexed, indexed_files, search_hits};
 use sessidx::{
     discovery::Root,
     model::Agent,
     query::{self, Filters},
 };
-use std::{fs, time::Duration};
+use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
 
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters {
-        session: Some("claude-fixture".into()),
+        session: Some("session".into()),
         ..Filters::default()
     };
     let (clause, args) = filters.sql(&store.db).unwrap();
     let plan = store
         .db
         .prepare(&format!(
-            "EXPLAIN QUERY PLAN SELECT e.id FROM events e WHERE {clause} ORDER BY e.id"
+            "EXPLAIN QUERY PLAN SELECT e.id FROM events e JOIN sessions s ON s.file_id=e.file_id WHERE {clause} ORDER BY e.id"
         ))
         .unwrap()
         .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(3))
@@ -26,10 +26,10 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
         .unwrap();
     assert!(
         plan.iter()
-            .any(|s| s.starts_with("SEARCH ") && s.contains("events_session")),
+            .any(|s| s.starts_with("SEARCH e ") && s.contains("(file_id=?)")),
         "{plan:?}"
     );
-    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO locations(file_id,session_ref,line_no,byte_off,byte_len,raw_hash,ordinal,model_source_ref) SELECT l.file_id,l.session_ref,n.i+100,l.byte_off,l.byte_len,l.raw_hash,0,l.model_source_ref FROM n JOIN locations l ON l.id=1;").unwrap();
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,role,role_source,kind,kind_source,model_source,ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source FROM n JOIN event_rows r ON r.id=1;").unwrap();
     let (hits, coverage) = query::scan(
         &store.db,
         "absent",
@@ -47,7 +47,10 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
 
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
-    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, _) = indexed_files(
+        Agent::Claude,
+        &[("claude-fixture", include_str!("../fixtures/claude.jsonl"))],
+    );
     let filters = Filters::default();
     assert_eq!(
         search_hits(&store.db, "太长", &filters, 20, 0)
@@ -173,12 +176,21 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
     assert_eq!(coverage.unavailable_ranges, 1);
     assert!(coverage.incomplete);
     let (shown, coverage) = query::show(&store.db, &reference, 0, 20, 0).unwrap();
-    assert_eq!(
-        shown[0].snippet,
-        "[source range unavailable; run sessidx index]"
-    );
+    assert_eq!(body(&shown[0]), "source range changed; run sessidx index");
     assert_eq!(coverage.unavailable_ranges, 1);
     assert!(coverage.incomplete);
+    // Unreadable whether the file can be listed but not opened, or is gone.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let (unreadable, _) = query::show(&store.db, &reference, 0, 20, 0).unwrap();
+    fs::remove_file(&path).unwrap();
+    let (removed, _) = query::show(&store.db, &reference, 0, 20, 0).unwrap();
+    for shown in [unreadable, removed] {
+        let reason = body(&shown[0]);
+        assert!(
+            reason.starts_with("source unreadable; run sessidx index: "),
+            "{reason}"
+        );
+    }
 }
 
 #[test]
@@ -190,7 +202,7 @@ fn grep_and_show_return_each_line_once_per_role() {
             .map(|h| (h.line_no, h.role.clone()))
             .collect::<Vec<_>>()
     };
-    let (shown, _) = query::show(&store.db, "claude-fixture", 0, 100, 0).unwrap();
+    let (shown, _) = query::show(&store.db, "session", 0, 100, 0).unwrap();
     assert_eq!(
         lines(&shown),
         [
@@ -201,7 +213,7 @@ fn grep_and_show_return_each_line_once_per_role() {
         ]
     );
     let filters = Filters {
-        session: Some("claude-fixture".into()),
+        session: Some("session".into()),
         ..Filters::default()
     };
     let (hits, _) =
@@ -217,7 +229,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let data = (0..25)
         .map(|i| message("crowded", i, "2026-10-02T00:00:00Z", "groupneedle"))
         .collect::<String>();
-    let (dir, mut store, mut roots) = indexed(Agent::Claude, &data);
+    let (dir, mut store, mut roots) = indexed_files(Agent::Claude, &[("crowded", &data)]);
     fs::write(
         roots[0].path.join("older.jsonl"),
         message("older", 0, "2026-10-01T00:00:00Z", "groupneedle"),
@@ -260,7 +272,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     assert_eq!(page[0].hits[0].line_no, 25);
     let (shown, coverage) = query::show(&store.db, &page[0].hits[0].reference, 0, 20, 0).unwrap();
     assert!(!coverage.incomplete);
-    assert!(shown[0].snippet.contains("crowded-24"));
+    assert!(body(&shown[0]).contains("crowded-24"));
     let codex = dir.path().join("codex.jsonl");
     fs::write(&codex, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"crowded\"}}\n{\"type\":\"response_item\",\"timestamp\":\"2026-10-02T00:00:00Z\",\"payload\":{\"type\":\"message\",\"id\":\"same-session-other-agent\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"groupneedle\"}]}}\n").unwrap();
     roots.push(Root {
@@ -355,7 +367,7 @@ fn cwd_filter_selects_the_directory_and_children_but_not_a_prefix_sibling() {
 
 #[test]
 fn search_terms_are_literal_phrases_joined_with_and() {
-    let data: String = [
+    let data: Vec<(&str, String)> = [
         ("adjacent", "alpha beta"),
         ("apart", "beta gamma alpha"),
         ("and_word", "alpha and beta"),
@@ -366,10 +378,12 @@ fn search_terms_are_literal_phrases_joined_with_and() {
     ]
     .iter()
     .map(|(session, text)| {
-        serde_json::json!({"type":"user","uuid":session,"sessionId":session,"message":{"role":"user","content":text}}).to_string() + "\n"
+        let record = serde_json::json!({"type":"user","uuid":session,"sessionId":session,"message":{"role":"user","content":text}});
+        (*session, record.to_string() + "\n")
     })
     .collect();
-    let (_dir, store, _) = indexed(Agent::Claude, &data);
+    let files: Vec<(&str, &str)> = data.iter().map(|(s, c)| (*s, c.as_str())).collect();
+    let (_dir, store, _) = indexed_files(Agent::Claude, &files);
     let sessions = |q: &str| {
         let mut found: Vec<_> = query::search(&store.db, q, &Filters::default(), 20, 0)
             .map_err(|e| format!("{e:#}"))?

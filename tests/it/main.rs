@@ -6,6 +6,7 @@ mod compressed;
 mod counts;
 mod cursors;
 mod docs;
+mod identity;
 mod lookup;
 mod messages;
 mod outcomes;

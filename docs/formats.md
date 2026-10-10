@@ -1,6 +1,6 @@
 # Format normalization
 
-All records in `tests/fixtures` are synthetic. The source inventory contains 80 root/content variants from the three declared roots; this document maps every variant to an array entry in `tests/fixtures/inventory.json`. Its census selected files by mtime since 2026-08-01, so it is not a universal schema or a runtime guarantee. Rules below own their reasons once. Extra fields, ancestry, guardian overlays, and retries are exercised in `tests/fixtures/attribution.json`.
+All records in `tests/fixtures` are synthetic. The source inventory contains 78 root/content variants from the three declared roots; this document maps every variant to an array entry in `tests/fixtures/inventory.json`. Its census selected files by mtime since 2026-08-01, so it is not a universal schema or a runtime guarantee. Rules below own their reasons once. Extra fields, ancestry, guardian overlays, and retries are exercised in `tests/fixtures/attribution.json`.
 
 ## Rules and regression tests
 
@@ -14,7 +14,9 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `claude_model` | `tests/fixtures/claude.jsonl` | The explicit synthetic placeholder stays on its own event without replacing the last real model. | `inherited_models_change_retrospective_group_counts` |
 | `claude_fragment_id` | `tests/fixtures/structure.jsonl` | Transcript fragments can share message.id despite different UUIDs; the message identity owns the logical count. | `native_message_fragments_empty_replies_summary_and_history_dedup` |
 | `claude_compaction` | `tests/fixtures/structure.jsonl` | isCompactSummary is context, not a new user interaction. | `native_message_fragments_empty_replies_summary_and_history_dedup` |
-| `claude_sidechain` | `tests/fixtures/attribution.json` | Only explicit isSidechain evidence establishes delegated kind. | `attribution_native_denials_instructions_children_and_retry_negative_control` |
+| `transcript_identity` | Synthetic transcripts in `tests/it/identity.rs::transcript_identity_comes_from_its_own_header_not_copied_history` | A transcript can open with another session's identity: a spawned Codex thread repeats its parent's session_meta after its own, and a resumed Claude session's first record can carry the session it resumed. The first header that states an identity fixes it, and copied records never change it, so events inherit their transcript's session. A Claude transcript's own records are those carrying its agentId (a subagent) or the session ID its file is named after (a main transcript); the first of them fixes the identity, and only they supply its kind and starting directory, so neither a copied first record nor a later record naming an agent can change them. A Claude subagent is keyed by its agentId, and its parent is the first sessionId in the transcript, because its first record can name only the agent. | `transcript_identity_comes_from_its_own_header_not_copied_history` |
+| `session_kind` | Synthetic transcripts in `tests/it/identity.rs::session_kind_comes_only_from_native_evidence` | Only native evidence sets a session kind. Claude: agentId or isSidechain true on the transcript's own records is a subagent, isSidechain false is main. Codex: session_meta.source names a client (cli, exec, vscode) for a main thread and holds a subagent object for a spawned one. Pi: every session is main, because Pi ships without subagents (README of pi-coding-agent 1.1.0); a package that adds subagents could write sessions this cannot tell apart. Anything else stays unknown. | `session_kind_comes_only_from_native_evidence` |
+| `claude_workflow_journal` | Synthetic workflow run in `tests/it/identity.rs::claude_workflow_journal_is_not_a_session` | Claude writes a workflow run's journal.jsonl of agent starts and results beside its agents' transcripts under subagents/workflows/; it is not a session, and indexed as one, every run's journal shared the session ID `journal`. Its `started` and `result` records appear in no other transcript, so they are not known Claude record types. | `claude_workflow_journal_is_not_a_session` |
 | `codex_model` | `tests/fixtures/codex.jsonl` | turn_context defines the active model; startup metadata does not. | `inherited_models_change_retrospective_group_counts` |
 | `json_arguments` | `tests/fixtures/codex.jsonl` | Function arguments can be a JSON string, and decoding is needed to reach cmd. | `codex_context_arguments_and_telemetry` |
 | `codex_base_instructions` | `tests/fixtures/codex.jsonl` | Hash the recorded base text without retaining another instruction body. | `codex_context_arguments_and_telemetry` |
@@ -31,7 +33,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `native_origin_order` | `tests/it/messages.rs::native_copy_ownership_uses_origin_time_before_filename` | Filename sorting can attribute a native copy to a later session; compare start timestamps before deterministic ties. | `native_copy_ownership_uses_origin_time_before_filename` |
 | `canonical_first_copy` | Copied Claude, Codex and Pi histories in `tests/it/counts.rs`, with one native ID shared across agents and kinds | `canonical_events` keeps an event when no copy with its agent, native ID and kind ranks earlier, probing the `events_native` index per event. Ranking every copy with a window function read the whole index, so even a query narrowed to one session exceeded `sql`'s two seconds on a long history; the rows must stay those of the ranked definition. | `canonical_events_are_the_first_ranked_copy_of_each_native_event` |
 | `history_parent` | `tests/it/adapters.rs` | Codex history_base.thread_id is recorded ancestry when other parent fields are absent. | `codex_context_arguments_and_telemetry` |
-| `codex_parent` | `tests/it/adapters.rs::codex_parent_fields_follow_their_precedence` | Codex session_meta can name a parent in several fields at once. Take parent_thread_id, then forked_from_id, then source.subagent.thread_spawn.parent_thread_id, then history_base.thread_id. | `codex_parent_fields_follow_their_precedence` |
+| `codex_parent` | `tests/it/adapters.rs::codex_parent_fields_follow_their_precedence` | Codex session_meta can name a parent in several fields at once. Take parent_thread_id, then forked_from_id, then source.subagent.thread_spawn.parent_thread_id, then history_base.thread_id. A thread resumed from its own history names itself in history_base, which is not a parent. | `codex_parent_fields_follow_their_precedence` |
 
 ### Record coverage
 
@@ -68,6 +70,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `newline_hook` | `tests/fixtures/inventory.json[53]`, `tests/fixtures/truncated.jsonl:1,3` | Codex input_text blocks can start with Script error: followed by a newline and Command blocked by PreToolUse hook:. Preserve the hook denial without treating a successful transport's quoted output as a refusal. | `split_script_error_and_truncated_batch_are_denials_with_transport_quote_control` |
 | `guard_stdout_control` | `tests/it/outcomes.rs::successful_stdout_guard_examples_are_not_denials` | Output with a successful or missing result flag can print a guard example; generic guard prefixes require a Claude/Pi failure flag. | `successful_stdout_guard_examples_are_not_denials` |
 | `agent_outcome_scope` | `tests/it/outcomes.rs::call_outcomes_are_isolated_by_agent` | Equal native call/session IDs in different agents must not share outcomes. | `call_outcomes_are_isolated_by_agent` |
+| `session_outcome_scope` | Synthetic Codex thread continued in a second rollout file in `tests/it/outcomes.rs` | A call pairs with its result within its session, not its transcript file: Codex can continue a thread in a second rollout file, so the result of a call made in one file can appear in the next. | `a_call_pairs_with_its_result_across_transcripts_of_one_session` |
 | `script_header` | `tests/fixtures/envelopes.json` | Only a leading script header marks a transport failure; a later quoted header in a file dump does not. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `labeled_transport` | `tests/fixtures/envelopes.json` | A custom label can wrap a complete shell/MCP transport object; inspect that object without traversing stdout. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
 | `result_lists` | `tests/fixtures/envelopes.json` | Codex results and items values are decoded as containers, like content and result. Labeled-transport traversal skips those keys, since visiting one twice records its batch rejection twice. | `result_envelopes_exclude_quoted_markers_and_preserve_native_denials` |
@@ -88,7 +91,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `shell_ast` | `tests/it/commands.rs::brush_sites_include_nested_syntax_without_counting_quoted_program_names` | An AST distinguishes command positions, substitutions, and function bodies from a quoted rg argument. | `brush_sites_include_nested_syntax_without_counting_quoted_program_names` |
 | `shell_array` | `tests/it/adapters.rs` | Codex shell commands are argv arrays; quote each element before Brush parsing. | `codex_context_arguments_and_telemetry` |
 | `code_mode_literals` | `tests/fixtures/code-mode.json` | Codex exec wrapper calls with literal cmd strings contain recoverable shell sources attached to the native wrapper call. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
-| `code_mode_opaque` | `tests/fixtures/code-mode.json` | Variables, interpolated templates and unsupported references with any receiver or none retain one opaque unparsed site per wrapper; bare exec_command and codex.exec_command must stay in the denominator. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
+| `code_mode_opaque` | `tests/fixtures/code-mode.json` | Variables, interpolated templates and unsupported references with any receiver or none retain one opaque unparsed site per wrapper; a bare exec_command or codex.exec_command call still counts, in `unparsed_calls` outside `sites`, instead of disappearing from `count commands`. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
 | `code_mode_escape` | `tests/fixtures/code-mode.json` | JavaScript quote, hexadecimal, four-digit scalar Unicode and line-continuation escapes decode before Brush sees the shell source. Invalid, braced Unicode and surrogate escapes stay unparsed; the real-corpus literal comparison found no need to combine surrogate units or decode braced values. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
 | `code_mode_template` | `tests/fixtures/code-mode.json` | Template interpolation prevents exact static reconstruction; escaped interpolation markers remain literal text. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
 | `code_mode_duplicate` | `tests/fixtures/code-mode.json` | Duplicate cmd fields cannot be counted as multiple shell sources or guessed from their first value. | `codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed` |
@@ -156,6 +159,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `decoded_ranges` | `tests/it/compressed.rs::decoded_records_resume_at_an_offset_and_ranges_reread_backwards` | A budget-exhausted pass resumes at a decoded offset, and display may request a range behind the decoder, which restarts from the first frame. | `decoded_records_resume_at_an_offset_and_ranges_reread_backwards` |
 | `rollout_form_race` | `tests/it/compressed.rs::a_rollout_restored_between_two_opens_is_not_missing` | Codex can restore the plain file after sessidx found it missing and remove the compressed one before sessidx opens it; both opens then fail although the session exists. Because Codex publishes a new form before removing the old, trying the plain file again resolves a change between two attempts, and only a session missing on all three attempts loses its rows. | `a_rollout_restored_between_two_opens_is_not_missing` |
 | `unreadable_source` | `tests/it/compressed.rs::an_unreadable_plain_file_is_an_error_not_a_missing_one` | Only a missing plain file falls through to its compressed sibling or to deletion; any other open error stops, so an unreadable session is neither indexed from the other form nor dropped. | `an_unreadable_plain_file_is_an_error_not_a_missing_one` |
+| `show_unavailable_reason` | `tests/it/lookup.rs`, a source rewritten, made unreadable, and removed after indexing | `show` returns an unreadable range with the reason it could not be read and the recovery instruction, whichever step failed: a source that can be listed but not opened gave the operating system's error alone. | `scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source` |
 | `missing_root_rebuild` | `tests/it/refresh.rs::a_missing_root_is_stale_only_when_it_held_indexed_files` | A full rebuild drops the rows that prove a root was indexed, after which refreshes would report complete coverage; refuse the rebuild while such a root is missing. | `a_missing_root_is_stale_only_when_it_held_indexed_files` |
 
 ### Lookup and pagination
@@ -166,10 +170,12 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `tool_output_prefix` | `tests/fixtures/output-prefix.json[0,1,2]`, UTF-8 boundary cases in `tests/it/output_prefix.rs` | Tool-result-only lookup evidence needs a bounded indexed prefix. Extract the first 2 KiB on a UTF-8 boundary, redact it and cap expansion; full raw ranges retain the tail. | `tool_output_prefix_is_bounded_and_raw_tail_remains_reachable` |
 | `attachment_output` | `tests/fixtures/output-prefix.json[3,4]` | Claude diagnostics carry message text under attachment.files[].diagnostics[].source plus message. The explicit diagnostic type qualifies a tool output without inventing a native result or failure. | `diagnostic_attachments_are_tool_outputs_without_creating_results` |
 | `diagnostic_source` | `tests/fixtures/output-prefix.json[3]` | The diagnostic source names the checker even when its message does not; put source before the bounded message prefix. | `diagnostic_attachments_are_tool_outputs_without_creating_results` |
-| `session_search` | Synthetic records in `tests/it/lookup.rs::ranked_search_pages_sessions_before_selecting_best_hits` | Repeated hits within one session must not consume the session page. Group by agent and native session ID before applying the limit, retaining best hits and precise source refs. | `ranked_search_pages_sessions_before_selecting_best_hits` |
+| `session_search` | Synthetic records in `tests/it/lookup.rs::ranked_search_pages_sessions_before_selecting_best_hits` | Repeated hits within one session must not consume the session page. Group by transcript before applying the limit, retaining best hits and precise source refs. | `ranked_search_pages_sessions_before_selecting_best_hits` |
+| `session_selector` | Two Claude subagents sharing an agentId in `tests/it/identity.rs::a_session_id_shared_by_transcripts_is_refused_with_their_paths` | Claude agent IDs are unique only within their parent session, and Codex can continue a thread in a second rollout file, so one ID can name several transcripts. A selector that names more than one fails with their paths instead of merging unrelated sessions. | `a_session_id_shared_by_transcripts_is_refused_with_their_paths` |
 | `raw_scan` | `tests/it/privacy.rs::scan_matches_original_ranges_before_redacting_display` | The raw regex can locate a redacted body identifier while the displayed snippet remains redacted. | `scan_matches_original_ranges_before_redacting_display` |
 | `line_role_record` | `tests/fixtures/claude.jsonl` | A grep or show record displays its whole source line, and one line can hold several events of one role (a Claude tool_use block is a message and a tool call). Keep the first such event so the line is not repeated; a line holding two roles keeps a record per role. | `grep_and_show_return_each_line_once_per_role` |
-| `session_access` | `tests/it/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | Resolve native session strings and file paths through indexed identities before scanning, preserving both selection forms without a cross-table OR. EXPLAIN must show SEARCH through events_session; scanning that index is insufficient. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
+| `session_access` | `tests/it/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | Resolve a session ID or transcript path to its transcript before scanning, so that events are reached by file_id without a cross-table OR. EXPLAIN must show SEARCH of events by file_id; a scan is insufficient. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
+| `events_body_on_demand` | `src/schema.sql` in `tests/it/identity.rs::events_read_bodies_only_when_a_query_names_them` | Event bodies take about half the database. Joined into the `events` view, they were read by every whole-history aggregate, which exceeded the two-second `sql` budget even on metadata. As subqueries, they are read only when a query names `text`. | `events_read_bodies_only_when_a_query_names_them` |
 | `grep_sqlite_deadline` | `tests/it/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | The first SQLite step can exhaust grep coverage before returning a row; a progress handler must interrupt it and preserve the continuation. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
 | `cursor_high_water` | `tests/it/cursors.rs::cli_streams_end_coverage_and_query_bound_cursors` | Later pages must exclude records added above the first page event high-water mark. | `cli_streams_end_coverage_and_query_bound_cursors` |
 | `cursor_invalidation` | `tests/it/cursors.rs::cli_streams_end_coverage_and_query_bound_cursors` | File replacement/deletion records the first removed event, invalidating only cursors whose high-water mark includes it. | `cli_streams_end_coverage_and_query_bound_cursors` |
@@ -184,18 +190,19 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 
 | Rule | Fixture | Reason | Regression test |
 | --- | --- | --- | --- |
-| `count_program_binding` | `tests/fixtures/claude.jsonl`, combined filters in `tests/it/counts.rs` | Count's program predicate appears before the anonymous WHERE filter parameters, in SELECT or, for denials, in a CTE. A named :program parameter binds once by SQLite parameter identity; shared filters retain their own parameters for every metric. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
-| `count_view_parity` | Copied Claude, Codex and Pi histories in `tests/it/counts.rs`, with denied Claude calls that hold two `rg` sites or none and a denied server call | `count` evaluates `canonical_events` and `call_outcomes` from the base tables, limited to tool calls and results, because through the views every count joined the strings of all events first and the `--program` denial subqueries rescanned whole sessions per result; its rows must stay equal to the same counts written over the public views, including which inherited copy is canonical and the call matches behind `--program`. | `counts_equal_the_public_views_over_copied_history` |
-| `count_group_model` | `tests/it/counts.rs` | Model attribution must survive grouped counts. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
-| `count_group_week` | `tests/it/counts.rs` | Counts group timestamps by their UTC ISO week. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
+| `count_program_binding` | `tests/fixtures/claude.jsonl`, combined filters in `tests/it/counts.rs` | Count's program predicate appears before the anonymous WHERE filter parameters, in SELECT or, for denials, in a CTE. A named :program parameter binds once by SQLite parameter identity; shared filters retain their own parameters for every metric. | `counts_select_by_program_and_shared_filters_and_sql_is_read_only` |
+| `count_view_parity` | Copied Claude, Codex and Pi histories in `tests/it/counts.rs`, with denied Claude calls that hold two `rg` sites, none, or unparsed syntax, a denied server call, and an `rg` call with no result | `count` reads `canonical_events` and `call_outcomes` themselves. A copy of their rules over the base tables once avoided joining every event's text, and stopped paying once event text moved out of row: through the views, counts filtered by time or program ran up to six times faster, and whole-history counts a tenth to a fifth slower. With `--program`, denials join the calls that hold a site rather than probing each result, which SQLite 3.53 plans as a scan of the result's whole transcript (27 s instead of 0.42 s warm over ten days of results). Its rows must stay equal to the same counts written plainly over the public views, including which inherited copy is canonical and the call matches behind `--program`. | `counts_equal_the_public_views_over_copied_history` |
+| `count_partitions` | Copied Claude, Codex and Pi histories in `tests/it/counts.rs` | A count named numerator, denominator and unclassified mixed parts inside the denominator with parts outside it, in different units per metric. Each metric names its counts instead, and they partition its population: calls are failed, succeeded or of unknown outcome; denied results include those with an unknown reason; anything outside the population, such as unparsed calls or calls whose program is unresolved, has its own name. | `count_rows_partition_their_population` |
+| `count_group_model` | `tests/it/counts.rs` | Model attribution must survive grouped counts. | `counts_select_by_program_and_shared_filters_and_sql_is_read_only` |
+| `count_group_week` | `tests/it/counts.rs` | Counts group timestamps by their UTC ISO week. | `counts_select_by_program_and_shared_filters_and_sql_is_read_only` |
 | `count_duplicate_group` | `tests/it/cli.rs` | Repeated group names are an error rather than duplicate output keys. | `cli_rejects_malformed_values_in_one_end_record_naming_the_flag` |
 | `sql_row_bound` | `tests/it/counts.rs` | A result above 10,000 rows fails instead of claiming partial success. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 | `sql_deadline` | `tests/it/counts.rs` | SQLite work is interrupted within the two-second SQL budget, including before the first row, and the error says how to narrow the query instead of repeating SQLite's interrupt message. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
-| `sql_duplicate_columns` | `tests/it/counts.rs` | SQL object output cannot preserve duplicate or redaction-colliding names; require unique aliases instead of overwriting columns. | `counts_state_units_denominators_unknowns_and_sql_is_read_only` |
+| `sql_duplicate_columns` | `tests/it/counts.rs` | SQL object output cannot preserve duplicate or redaction-colliding names; require unique aliases instead of overwriting columns. | `counts_select_by_program_and_shared_filters_and_sql_is_read_only` |
 | `sql_writer_coverage` | `tests/it/cli.rs` | SQL must mark cached reads incomplete/stale while the writer lock covers a rebuild. | `cli_writer_contention_returns_stale_without_waiting` |
 | `sql_missing_index` | `tests/it/cli.rs::sql_without_an_index_names_the_build_command` | SQL does not refresh, so it cannot create the index; a missing database fails with the build command instead of SQLite's open error and leaves no lock file behind. | `sql_without_an_index_names_the_build_command` |
 | `sql_provenance_labels` | `tests/it/cli.rs::provenance_labels_are_unredacted_and_none_when_absent` | `sql` redacts every text column as body text, because it cannot tell which columns hold bodies, so the `*_source` labels must stay shapes the redactor leaves intact: joining two fields with `+` made Claude's message label a symbol run that read back as `[REDACTED]`. A label is `none` when nothing decided its value, so `model_source` is `none` exactly when `model` is null. | `provenance_labels_are_unredacted_and_none_when_absent` |
-| `doctor_models` | `tests/it/counts.rs` | Doctor reports missing models among stored rows, including context. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
+| `doctor_models` | `tests/it/counts.rs` | Doctor reports stored tool events without a model, whose canonical copies `count --by model` groups as unknown; context records and the user messages before a session's first model have none by nature, and counting them hid the gap. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 | `doctor_denials` | `tests/it/counts.rs` | Doctor reports unknown reasons among stored denial rows. | `doctor_reports_stored_coverage_gaps_and_sql_bounds` |
 
 ## Codex output variants
@@ -240,68 +247,66 @@ Known auxiliary records receive context pointers without body storage. Thinking,
 | claude | `pr-link / none` | 16 | `auxiliary_coverage` |
 | claude | `queue-operation / none` | 17 | `auxiliary_coverage` |
 | claude | `relocated / none` | 18 | `auxiliary_coverage` |
-| claude | `result / none` | 19 | `auxiliary_coverage` |
-| claude | `started / none` | 20 | `auxiliary_coverage` |
-| claude | `system / api_error` | 21 | `auxiliary_coverage` |
-| claude | `system / compact_boundary` | 22 | `auxiliary_coverage` |
-| claude | `system / informational` | 23 | `auxiliary_coverage` |
-| claude | `system / local_command` | 24 | `auxiliary_coverage` |
-| claude | `system / model_refusal_fallback` | 25 | `auxiliary_coverage` |
-| claude | `system / model_refusal_no_fallback` | 26 | `auxiliary_coverage` |
-| claude | `system / scheduled_task_fire` | 27 | `auxiliary_coverage` |
-| claude | `system / stop_hook_summary` | 28 | `auxiliary_coverage` |
-| claude | `system / turn_duration` | 29 | `auxiliary_coverage` |
-| claude | `user / none` | 30 | `claude_message` |
-| claude | `worktree-state / none` | 31 | `auxiliary_coverage` |
-| claude | `assistant / advisor_tool_result` | 32 | `server_result_kind` |
-| claude | `assistant / fallback` | 33 | `claude_message` |
-| claude | `assistant / server_tool_use` | 34 | `server_call_kind` |
-| claude | `assistant / text` | 35 | `claude_message` |
-| claude | `assistant / thinking` | 36 | `claude_message` |
-| claude | `assistant / tool_use` | 37 | `claude_message` |
-| claude | `user / image` | 38 | `claude_message` |
-| claude | `user / text` | 39 | `claude_message` |
-| claude | `user / tool_result` | 40 | `claude_flag` |
-| codex | `compacted / none` | 41 | `context_pointers` |
-| codex | `event_msg / item_completed` | 42 | `codex_telemetry_coverage` |
-| codex | `event_msg / task_complete` | 43 | `codex_telemetry_coverage` |
-| codex | `event_msg / task_started` | 44 | `codex_telemetry_coverage` |
-| codex | `event_msg / thread_goal_updated` | 45 | `codex_telemetry_coverage` |
-| codex | `event_msg / thread_settings_applied` | 46 | `codex_telemetry_coverage` |
-| codex | `event_msg / token_count` | 47 | `codex_telemetry_coverage` |
-| codex | `event_msg / turn_aborted` | 48 | `codex_telemetry_coverage` |
-| codex | `inter_agent_communication_metadata / none` | 49 | `context_pointers` |
-| codex | `response_item / agent_message` | 50 | `context_pointers` |
-| codex | `response_item / compaction` | 51 | `context_pointers` |
-| codex | `response_item / custom_tool_call` | 52 | `json_arguments` |
-| codex | `response_item / custom_tool_call_output` | 53 | `codex_text_outcome` |
-| codex | `response_item / function_call` | 54 | `json_arguments` |
-| codex | `response_item / function_call_output` | 55 | `codex_text_outcome` |
-| codex | `response_item / message` | 56 | `context_pointers` |
-| codex | `response_item / reasoning` | 57 | `context_pointers` |
-| codex | `response_item / tool_search_call` | 58 | `codex_tool_search` |
-| codex | `response_item / tool_search_output` | 59 | `codex_text_outcome` |
-| codex | `session_meta / none` | 60 | `codex_base_instructions` |
-| codex | `token_usage_record / none` | 61 | `context_pointers` |
-| codex | `turn_context / none` | 62 | `codex_model` |
-| codex | `world_state / none` | 63 | `context_pointers` |
-| pi | `compaction / none` | 64 | `context_pointers` |
-| pi | `context_edit / none` | 65 | `context_pointers` |
-| pi | `custom / none` | 66 | `unclassified custom payload` |
-| pi | `message / assistant` | 67 | `pi_message` |
-| pi | `message / bashExecution` | 68 | `pi_message` |
-| pi | `message / system` | 69 | `pi_message` |
-| pi | `message / toolResult` | 70 | `pi_flag` |
-| pi | `message / user` | 71 | `pi_message` |
-| pi | `model_change / none` | 72 | `pi_model` |
-| pi | `session / none` | 73 | `context_pointers` |
-| pi | `session_info / none` | 74 | `context_pointers` |
-| pi | `thinking_level_change / none` | 75 | `context_pointers` |
-| pi | `message / image` | 76 | `pi_message` |
-| pi | `message / text` | 77 | `pi_message` |
-| pi | `message / thinking` | 78 | `pi_message` |
-| pi | `message / toolCall` | 79 | `pi_call` |
+| claude | `system / api_error` | 19 | `auxiliary_coverage` |
+| claude | `system / compact_boundary` | 20 | `auxiliary_coverage` |
+| claude | `system / informational` | 21 | `auxiliary_coverage` |
+| claude | `system / local_command` | 22 | `auxiliary_coverage` |
+| claude | `system / model_refusal_fallback` | 23 | `auxiliary_coverage` |
+| claude | `system / model_refusal_no_fallback` | 24 | `auxiliary_coverage` |
+| claude | `system / scheduled_task_fire` | 25 | `auxiliary_coverage` |
+| claude | `system / stop_hook_summary` | 26 | `auxiliary_coverage` |
+| claude | `system / turn_duration` | 27 | `auxiliary_coverage` |
+| claude | `user / none` | 28 | `claude_message` |
+| claude | `worktree-state / none` | 29 | `auxiliary_coverage` |
+| claude | `assistant / advisor_tool_result` | 30 | `server_result_kind` |
+| claude | `assistant / fallback` | 31 | `claude_message` |
+| claude | `assistant / server_tool_use` | 32 | `server_call_kind` |
+| claude | `assistant / text` | 33 | `claude_message` |
+| claude | `assistant / thinking` | 34 | `claude_message` |
+| claude | `assistant / tool_use` | 35 | `claude_message` |
+| claude | `user / image` | 36 | `claude_message` |
+| claude | `user / text` | 37 | `claude_message` |
+| claude | `user / tool_result` | 38 | `claude_flag` |
+| codex | `compacted / none` | 39 | `context_pointers` |
+| codex | `event_msg / item_completed` | 40 | `codex_telemetry_coverage` |
+| codex | `event_msg / task_complete` | 41 | `codex_telemetry_coverage` |
+| codex | `event_msg / task_started` | 42 | `codex_telemetry_coverage` |
+| codex | `event_msg / thread_goal_updated` | 43 | `codex_telemetry_coverage` |
+| codex | `event_msg / thread_settings_applied` | 44 | `codex_telemetry_coverage` |
+| codex | `event_msg / token_count` | 45 | `codex_telemetry_coverage` |
+| codex | `event_msg / turn_aborted` | 46 | `codex_telemetry_coverage` |
+| codex | `inter_agent_communication_metadata / none` | 47 | `context_pointers` |
+| codex | `response_item / agent_message` | 48 | `context_pointers` |
+| codex | `response_item / compaction` | 49 | `context_pointers` |
+| codex | `response_item / custom_tool_call` | 50 | `json_arguments` |
+| codex | `response_item / custom_tool_call_output` | 51 | `codex_text_outcome` |
+| codex | `response_item / function_call` | 52 | `json_arguments` |
+| codex | `response_item / function_call_output` | 53 | `codex_text_outcome` |
+| codex | `response_item / message` | 54 | `context_pointers` |
+| codex | `response_item / reasoning` | 55 | `context_pointers` |
+| codex | `response_item / tool_search_call` | 56 | `codex_tool_search` |
+| codex | `response_item / tool_search_output` | 57 | `codex_text_outcome` |
+| codex | `session_meta / none` | 58 | `codex_base_instructions` |
+| codex | `token_usage_record / none` | 59 | `context_pointers` |
+| codex | `turn_context / none` | 60 | `codex_model` |
+| codex | `world_state / none` | 61 | `context_pointers` |
+| pi | `compaction / none` | 62 | `context_pointers` |
+| pi | `context_edit / none` | 63 | `context_pointers` |
+| pi | `custom / none` | 64 | `unclassified custom payload` |
+| pi | `message / assistant` | 65 | `pi_message` |
+| pi | `message / bashExecution` | 66 | `pi_message` |
+| pi | `message / system` | 67 | `pi_message` |
+| pi | `message / toolResult` | 68 | `pi_flag` |
+| pi | `message / user` | 69 | `pi_message` |
+| pi | `model_change / none` | 70 | `pi_model` |
+| pi | `session / none` | 71 | `context_pointers` |
+| pi | `session_info / none` | 72 | `context_pointers` |
+| pi | `thinking_level_change / none` | 73 | `context_pointers` |
+| pi | `message / image` | 74 | `pi_message` |
+| pi | `message / text` | 75 | `pi_message` |
+| pi | `message / thinking` | 76 | `pi_message` |
+| pi | `message / toolCall` | 77 | `pi_call` |
 
-Exact pointer and append/truncate/inode-replacement invariants use `incremental_append_truncate_replace_equals_rebuild_and_exact_pointers`; they are storage invariants rather than additional format aliases. `inventory_variants_are_classified_with_future_shape_negative_control` expects 79 classified variants and one opaque Pi custom variant, with unknown-future roots as negative controls. The privacy byte-search fixture covers each storage/output boundary without retaining real corpus content.
+Exact pointer and append/truncate/inode-replacement invariants use `incremental_append_truncate_replace_equals_rebuild_and_exact_pointers`; they are storage invariants rather than additional format aliases. `inventory_variants_are_classified_with_future_shape_negative_control` expects 77 classified variants and one opaque Pi custom variant, with unknown-future roots as negative controls. The privacy byte-search fixture covers each storage/output boundary without retaining real corpus content.
 
 Pi message/bashExecution is a user-run record; it receives only a context pointer and is neither indexed as a logical message nor counted as an agent call.

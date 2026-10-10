@@ -33,21 +33,21 @@ It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`
 Every command writes JSON Lines for `jq`. The examples below run on a small synthetic history, [`tests/fixtures/readme`](tests/fixtures/readme), and a test checks that the output shown here is what sessidx prints for it. To find the discussion behind a commit:
 
 ```console
-$ sessidx search 'Redis SQLite' | jq -c 'select(.type == "session") | .hits[] | {role, snippet}'
-{"role":"tool","snippet":"[main 9f3e2a1] Replace Redis session cache with SQLite"}
-{"role":"assistant","snippet":"{\"command\":\"git commit -m 'Replace Redis session cache with SQLite'\"}"}
-{"role":"assistant","snippet":"Decision: switch the session cache from Redis to SQLite with WAL, because the deployment is single-host and Redis adds an extra failure point."}
+$ sessidx search 'Redis SQLite' | jq -c 'select(.type == "session") | .hits[] | {role, text}'
+{"role":"tool","text":"[main 9f3e2a1] Replace Redis session cache with SQLite"}
+{"role":"assistant","text":"{\"command\":\"git commit -m 'Replace Redis session cache with SQLite'\"}"}
+{"role":"assistant","text":"Decision: switch the session cache from Redis to SQLite with WAL, because the deployment is single-host and Redis adds an extra failure point."}
 ```
 
 `search` returns one record per session with its best hits. Each hit also carries a `ref`, the `path:line` of its record in the session log: `sessidx show REF` prints the records around it, and `sessidx show SESSION_ID` pages through the whole session.
 
-Counts state their unit and denominator, and how many units they could not classify:
+Counts are named for what they count, and they add up: every tool call `failed`, `succeeded`, or has an unknown outcome, which is never taken for success.
 
 ```console
-$ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, numerator, denominator, unclassified, unit}'
-{"agent":"claude","numerator":0,"denominator":2,"unclassified":0,"unit":"tool_call_attempts"}
-{"agent":"codex","numerator":1,"denominator":3,"unclassified":0,"unit":"tool_call_attempts"}
-{"agent":"pi","numerator":0,"denominator":1,"unclassified":0,"unit":"tool_call_attempts"}
+$ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, calls, failed, succeeded, outcome_unknown}'
+{"agent":"claude","calls":2,"failed":0,"succeeded":2,"outcome_unknown":0}
+{"agent":"codex","calls":3,"failed":1,"succeeded":2,"outcome_unknown":0}
+{"agent":"pi","calls":1,"failed":0,"succeeded":1,"outcome_unknown":0}
 ```
 
 The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.

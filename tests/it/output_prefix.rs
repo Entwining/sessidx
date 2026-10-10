@@ -1,4 +1,4 @@
-use crate::common::{indexed, search_hits};
+use crate::common::{body, indexed, search_hits, truncated};
 use clap::ValueEnum;
 use sessidx::{
     model::Agent,
@@ -25,8 +25,8 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         let hits = search_hits(&store.db, "outputneedle", &Filters::default(), 20, 0).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].role, "tool");
-        assert!(hits[0].truncated);
-        assert_eq!(hits[0].snippet, prefix);
+        assert!(truncated(&hits[0]));
+        assert_eq!(body(&hits[0]), prefix);
         assert!(
             search_hits(&store.db, "tailoutside", &Filters::default(), 20, 0)
                 .unwrap()
@@ -45,12 +45,12 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         )
         .unwrap();
         assert_eq!(raw.len(), 1);
-        assert!(!c.incomplete && !raw[0].truncated);
-        assert!(raw[0].snippet.contains("tailoutside"));
+        assert!(!c.incomplete && !truncated(&raw[0]));
+        assert!(body(&raw[0]).contains("tailoutside"));
         let (shown, c) = query::show(&store.db, &format!("{}:1", hits[0].path), 0, 20, 0).unwrap();
         assert_eq!(shown.len(), 1);
-        assert!(!c.incomplete && !shown[0].truncated);
-        assert!(shown[0].snippet.contains("tailoutside"));
+        assert!(!c.incomplete && !truncated(&shown[0]));
+        assert!(body(&shown[0]).contains("tailoutside"));
     }
     let mut s = sessidx::model::State::default();
     let mut record = fixture[0]["record"].clone();
@@ -87,7 +87,7 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
         1
     );
     assert_eq!(hits[0].role, "tool");
-    assert!(!hits[0].truncated);
+    assert!(!truncated(&hits[0]));
     assert_eq!(
         store
             .db

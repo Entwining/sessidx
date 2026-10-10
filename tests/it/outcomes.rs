@@ -4,7 +4,7 @@ use sessidx::{
     adapters,
     counting::{self, Metric},
     discovery::Root,
-    model::{Agent, State},
+    model::{Agent, EventKind, State},
     outcomes,
     query::Filters,
 };
@@ -172,8 +172,65 @@ fn call_outcomes_are_isolated_by_agent() {
         },
     )
     .unwrap();
-    assert_eq!(rows[0]["numerator"], 0);
-    assert_eq!(rows[0]["denominator"], 1);
+    assert_eq!(rows[0]["failed"], 0);
+    assert_eq!(rows[0]["calls"], 1);
+}
+
+#[test]
+fn a_call_pairs_with_its_result_across_transcripts_of_one_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("codex");
+    fs::create_dir(&root).unwrap();
+    // A thread continued in a second rollout file can hold the results of
+    // calls made in the first, one of them with unparsed shell syntax.
+    let meta = r#"{"type":"session_meta","payload":{"id":"thread","source":"cli"}}"#;
+    fs::write(
+        root.join("rollout-1.jsonl"),
+        format!(
+            "{meta}\n{}\n{}\n",
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"split-call","name":"exec_command","arguments":"{\"cmd\":\"rg word\"}"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call","call_id":"split-unparsed","name":"exec_command","arguments":"{\"cmd\":\"echo 'unterminated\"}"}}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("rollout-2.jsonl"),
+        format!(
+            "{meta}\n{}\n{}\n",
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"split-call","output":"Process exited with code 1"}}"#,
+            r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"split-unparsed","output":"Process exited with code 0"}}"#
+        ),
+    )
+    .unwrap();
+    let mut store = sessidx::store::Store::open(&dir.path().join("index.db")).unwrap();
+    store
+        .refresh(
+            &[Root {
+                agent: Agent::Codex,
+                path: root,
+            }],
+            false,
+            None,
+        )
+        .unwrap();
+    let count = |metric| {
+        counting::count(&store.db, metric, &[], Some("rg"), &Filters::default())
+            .unwrap()
+            .remove(0)
+    };
+    let failures = count(Metric::Failures);
+    assert_eq!(
+        (&failures["calls"], &failures["failed"]),
+        (&1.into(), &1.into())
+    );
+    let denials = count(Metric::Denials);
+    assert_eq!(
+        (
+            &denials["results"],
+            &denials["results_with_unresolved_program"]
+        ),
+        (&1.into(), &1.into())
+    );
 }
 
 #[test]
@@ -207,7 +264,7 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         serde_json::from_str(include_str!("../fixtures/envelopes.json")).unwrap();
     for (i, f) in fixtures.as_array().unwrap().iter().enumerate() {
         let agent = Agent::from_str(f["agent"].as_str().unwrap(), false).unwrap();
-        let mut e = sessidx::model::Event::new("tool", "tool_result", "fixture");
+        let mut e = sessidx::model::Event::new("tool", EventKind::ToolResult, "fixture");
         if agent != Agent::Codex {
             e.ok = f["ok"].as_bool();
         }

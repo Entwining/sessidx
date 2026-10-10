@@ -184,24 +184,6 @@
   },
   {
     "agent": "claude",
-    "shape": "result / none",
-    "scope": "root",
-    "record": {
-      "type": "result"
-    },
-    "known": true
-  },
-  {
-    "agent": "claude",
-    "shape": "started / none",
-    "scope": "root",
-    "record": {
-      "type": "started"
-    },
-    "known": true
-  },
-  {
-    "agent": "claude",
     "shape": "system / api_error",
     "scope": "root",
     "record": {

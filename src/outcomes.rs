@@ -40,7 +40,7 @@ pub fn classify(e: &mut Event, output: &Value, agent: Agent) {
     // Mixed shell/MCP outcomes: tests/fixtures/outcomes.jsonl.
     if failed || e.ok_source == "none" && !codes.is_empty() {
         e.ok = Some(!failed);
-        e.ok_source = "text".into();
+        e.ok_source = "text";
     }
     e.exit_code = codes
         .iter()
@@ -65,7 +65,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
         Value::Object(m) => {
             if let Some(error) = m.get("isError").and_then(Value::as_bool) {
                 e.ok = Some(!error && e.ok != Some(false));
-                e.ok_source = "text".into();
+                e.ok_source = "text";
             }
             // Codex Promise outcomes and shell transports: tests/fixtures/outcomes.jsonl.
             if let Some(status) = m.get("status").and_then(Value::as_str) {
@@ -76,7 +76,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                         .map(|r| r.get("message").map(text).unwrap_or_else(|| text(r)))
                         .unwrap_or_default();
                     e.ok = Some(false);
-                    e.ok_source = "text".into();
+                    e.ok_source = "text";
                     if reason
                         .trim_start()
                         .starts_with("Command blocked by PreToolUse hook:")

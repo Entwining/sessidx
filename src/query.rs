@@ -1,5 +1,5 @@
 use crate::{
-    model::{Agent, name},
+    model::{Agent, SessionKind, name},
     redaction::{redact, spaced_cjk},
     store::MAX_RECORD,
 };
@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use clap::{Args, ValueEnum};
 use regex::Regex;
-use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value};
+use rusqlite::{Connection, params_from_iter, types::Value};
 use serde::Serialize;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
@@ -29,13 +29,6 @@ pub enum Role {
     Unknown,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, ValueEnum)]
-#[serde(rename_all = "lowercase")]
-pub enum Kind {
-    Unknown,
-    Delegated,
-}
-
 #[derive(Args, Clone, Debug, Default, Serialize)]
 pub struct Filters {
     /// Only this agent; repeat for a union
@@ -44,9 +37,9 @@ pub struct Filters {
     /// Only events from this speaker
     #[arg(long, value_enum)]
     pub role: Option<Role>,
-    /// Only sessions of this kind; delegated needs explicit subagent evidence
+    /// Only sessions started on their own (main) or spawned by another session (subagent)
     #[arg(long, value_enum)]
-    pub kind: Option<Kind>,
+    pub session_kind: Option<SessionKind>,
     /// Only events at or after this RFC 3339 time or UTC YYYY-MM-DD date
     #[arg(long, value_name = "TIME", value_parser = date)]
     pub since: Option<DateTime<Utc>>,
@@ -56,7 +49,7 @@ pub struct Filters {
     /// Only sessions whose working directory is DIR or below it
     #[arg(long, value_name = "DIR")]
     pub cwd: Option<String>,
-    /// Only this session, by native ID or session file path
+    /// Only this session, by native ID or transcript path
     #[arg(long, value_name = "ID|PATH")]
     pub session: Option<String>,
     #[arg(skip)]
@@ -86,14 +79,14 @@ impl Filters {
         }
         if !self.agent.is_empty() {
             conditions.push(format!(
-                "f.agent IN ({})",
+                "s.agent IN ({})",
                 vec!["?"; self.agent.len()].join(",")
             ));
             args.extend(self.agent.iter().map(|h| Value::Text(name(*h))));
         }
         for (field, value) in [
             ("e.role", self.role.map(name)),
-            ("s.kind", self.kind.map(name)),
+            ("s.session_kind", self.session_kind.map(name)),
         ] {
             if let Some(value) = value {
                 conditions.push(format!("{field}=?"));
@@ -101,26 +94,13 @@ impl Filters {
             }
         }
         if let Some(session) = &self.session {
-            let session_ref: Option<i64> = db
-                .query_row("SELECT id FROM strings WHERE value=?", [session], |r| {
-                    r.get(0)
-                })
-                .optional()?;
-            let file_id: Option<i64> = db
-                .query_row("SELECT id FROM files WHERE path=?", [session], |r| r.get(0))
-                .optional()?;
-            let mut selectors = Vec::new();
-            for (column, id) in [("session_ref", session_ref), ("file_id", file_id)] {
-                if let Some(id) = id {
-                    selectors.push(format!("SELECT id FROM locations WHERE {column}=?"));
-                    args.push(Value::Integer(id));
+            match session_file(db, session)? {
+                Some(file_id) => {
+                    conditions.push("s.file_id=?".into());
+                    args.push(Value::Integer(file_id));
                 }
+                None => conditions.push("0".into()),
             }
-            conditions.push(if selectors.is_empty() {
-                "0".into()
-            } else {
-                format!("e.id IN ({})", selectors.join(" UNION "))
-            });
         }
         for (op, value) in [(">=", &self.since), ("<", &self.until)] {
             if let Some(value) = value {
@@ -137,6 +117,35 @@ impl Filters {
             }
         }
         Ok((conditions.join(" AND "), args))
+    }
+}
+
+/// The transcript a session selector names. Claude subagent IDs are unique
+/// only within their parent session, so an ID shared by several transcripts is
+/// refused with their paths rather than merged.
+pub fn session_file(db: &Connection, selector: &str) -> Result<Option<i64>> {
+    let id = selector
+        .strip_prefix("codex://threads/")
+        .unwrap_or(selector);
+    let matches: Vec<(i64, String)> = db
+        .prepare_cached(
+            "SELECT file_id,path FROM sessions WHERE session_id=? OR path=? ORDER BY path",
+        )?
+        .query_map([id, selector], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    match matches.as_slice() {
+        [] => Ok(None),
+        [(file_id, _)] => Ok(Some(*file_id)),
+        _ => anyhow::bail!(
+            "session ID {} names {} transcripts; pass one of their paths: {}",
+            redact(selector),
+            matches.len(),
+            matches
+                .iter()
+                .map(|(_, path)| redact(path))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
@@ -159,8 +168,8 @@ pub struct Hit {
     pub ts: Option<String>,
     pub role: String,
     pub model: Option<String>,
-    pub snippet: String,
-    pub truncated: bool,
+    #[serde(flatten)]
+    pub body: Body,
     #[serde(rename = "ref")]
     pub reference: String,
     #[serde(skip)]
@@ -169,6 +178,16 @@ pub struct Hit {
     pub byte_len: u64,
     #[serde(skip)]
     pub event_id: i64,
+}
+
+/// What a hit carries of its event: the indexed text for ranked lookup, or the
+/// whole source record, parsed and redacted, for grep and show.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum Body {
+    Text { text: String, truncated: bool },
+    Record { record: Json },
+    Unavailable { unavailable: String },
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -180,12 +199,10 @@ pub struct Coverage {
     pub bytes: u64,
 }
 
-const COLUMNS: &str = "f.agent,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
-const FROM: &str = "FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
-// Rule: docs/formats.md `line_role_record`. The probe reads base tables: through the
-// events view, its string joins dominated stepping on agent-wide grep scans. Role
-// mirrors the view's coalesce.
-const FIRST_OF_LINE_ROLE: &str = "e.ordinal=(SELECT min(l.ordinal) FROM locations l LEFT JOIN event_details d ON d.event_id=l.id LEFT JOIN strings role ON role.id=d.role_ref WHERE l.file_id=e.file_id AND l.line_no=e.line_no AND coalesce(role.value,'unknown')=e.role)";
+const COLUMNS: &str = "e.agent,e.session_id,e.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
+const FROM: &str = "FROM events e JOIN sessions s ON s.file_id=e.file_id";
+// Rule: docs/formats.md `line_role_record`.
+const FIRST_OF_LINE_ROLE: &str = "e.ordinal=(SELECT min(r.ordinal) FROM event_rows r WHERE r.file_id=e.file_id AND r.line_no=e.line_no AND r.role=e.role)";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     let agent: String = row.get(0)?;
@@ -201,8 +218,10 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
         ts: row.get(4)?,
         role: row.get(5)?,
         model: row.get(6)?,
-        snippet: String::new(),
-        truncated: row.get(10)?,
+        body: Body::Text {
+            text: String::new(),
+            truncated: row.get(10)?,
+        },
         reference,
         byte_off: row.get(7)?,
         byte_len: row.get(8)?,
@@ -237,10 +256,15 @@ pub const SEARCH_PAGE_SESSIONS: usize = 100;
 pub struct Session {
     pub agent: String,
     pub session_id: String,
+    pub session_kind: String,
+    pub parent_id: Option<String>,
     pub path: String,
-    pub ts: Option<String>,
+    pub cwd: String,
+    pub started_at: Option<String>,
     pub matched_hits: usize,
     pub hits: Vec<Hit>,
+    #[serde(skip)]
+    file_id: i64,
 }
 
 pub struct SearchPage {
@@ -271,56 +295,58 @@ pub fn search(
     // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
     let sql = format!(
         "WITH matches AS MATERIALIZED (
-          SELECT f.agent,e.session_id,e.id,e.ts,bm25(fts) AS score {FROM}
+          SELECT e.file_id,e.id,e.ts,bm25(fts) AS score {FROM}
           JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ?
         ), ordering AS MATERIALIZED (SELECT ? AS ranks), all_heads AS MATERIALIZED (
-          SELECT agent,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n,min(id) AS anchor
-          FROM matches GROUP BY agent,session_id
+          SELECT file_id,min(score) AS score,max(ts) AS ts,count(*) AS n,min(id) AS anchor
+          FROM matches GROUP BY file_id
         ), ordered_heads AS MATERIALIZED (
           SELECT h.*,j.key AS position FROM ordering CROSS JOIN json_each(ordering.ranks) j
           JOIN all_heads h ON j.value=h.anchor
           UNION ALL SELECT h.*,0 AS position FROM all_heads h CROSS JOIN ordering WHERE ordering.ranks IS NULL
         ), heads AS MATERIALIZED (
-          SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,agent,session_id LIMIT ? OFFSET ?
+          SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,file_id LIMIT ? OFFSET ?
         ), ranked AS (
           SELECT m.id,row_number() OVER (
-            PARTITION BY m.agent,m.session_id ORDER BY m.score,m.ts DESC,m.id DESC
-          ) AS n FROM matches m JOIN heads h USING(agent,session_id)
+            PARTITION BY m.file_id ORDER BY m.score,m.ts DESC,m.id DESC
+          ) AS n FROM matches m JOIN heads h USING(file_id)
         )
-        SELECT {COLUMNS},h.ts,h.n,(SELECT count(*) FROM all_heads),
+        SELECT {COLUMNS},h.n,(SELECT count(*) FROM all_heads),
           CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(anchor)
-            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,agent,session_id LIMIT ?)) END,
-          coalesce(e.text,'')
+            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,file_id LIMIT ?)) END,
+          coalesce(e.text,''),s.file_id,s.session_kind,s.parent_id,s.cwd,s.started_at
         {FROM} CROSS JOIN ordering
-        JOIN ranked r ON r.id=e.id JOIN heads h ON h.agent=f.agent AND h.session_id=e.session_id
-        WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.agent,h.session_id,r.n"
+        JOIN ranked r ON r.id=e.id JOIN heads h ON h.file_id=e.file_id
+        WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.file_id,r.n"
     );
     let mut stmt = db.prepare(&sql)?;
     let mut matched_sessions = 0;
     let mut order = None;
-    let rows = stmt.query_map(params_from_iter(args), |r| {
-        matched_sessions = r.get(13)?;
+    let mut sessions: Vec<Session> = Vec::new();
+    let mut rows = stmt.query(params_from_iter(args))?;
+    while let Some(r) = rows.next()? {
+        matched_sessions = r.get(12)?;
         if order.is_none() {
-            order = r.get::<_, Option<String>>(14)?;
+            order = r.get::<_, Option<String>>(13)?;
         }
         let mut hit = hit(r)?;
-        hit.snippet = redact(&r.get::<_, String>(15)?);
-        Ok((hit, r.get::<_, Option<String>>(11)?, r.get::<_, usize>(12)?))
-    })?;
-    let mut sessions: Vec<Session> = Vec::new();
-    for row in rows {
-        let (hit, ts, matched_hits) = row?;
+        if let Body::Text { text, .. } = &mut hit.body {
+            *text = redact(&r.get::<_, String>(14)?);
+        }
+        let file_id: i64 = r.get(15)?;
         match sessions.last_mut() {
-            Some(s) if s.agent == hit.agent && s.session_id == hit.session_id => {
-                s.hits.push(hit);
-            }
+            Some(s) if s.file_id == file_id => s.hits.push(hit),
             _ => sessions.push(Session {
                 agent: hit.agent.clone(),
                 session_id: hit.session_id.clone(),
+                session_kind: r.get(16)?,
+                parent_id: r.get(17)?,
                 path: hit.path.clone(),
-                ts,
-                matched_hits,
+                cwd: r.get(18)?,
+                started_at: r.get(19)?,
+                matched_hits: r.get(11)?,
                 hits: vec![hit],
+                file_id,
             }),
         }
     }
@@ -345,14 +371,16 @@ fn read_range(
     );
     let expected: (u64, u64, [u8; 32]) = db
         .prepare_cached(
-            "SELECT f.dev,f.inode,l.raw_hash FROM locations l JOIN files f ON f.id=l.file_id WHERE l.id=?",
+            "SELECT f.dev,f.inode,r.raw_hash FROM event_rows r JOIN files f ON f.id=r.file_id WHERE r.id=?",
         )?
         .query_row([item.event_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-    let named = crate::source::metadata(Path::new(&item.path))?;
+    let named = crate::source::metadata(Path::new(&item.path))
+        .context("source unreadable; run sessidx index")?;
     let (identity, ranges) = match source {
         Some((identity, ranges)) if *identity == (named.dev(), named.ino()) => (*identity, ranges),
         _ => {
-            let opened = crate::source::open(Path::new(&item.path))?
+            let opened = crate::source::open(Path::new(&item.path))
+                .context("source unreadable; run sessidx index")?
                 .context("source removed; run sessidx index")?;
             let identity = (opened.meta.dev(), opened.meta.ino());
             (identity, &mut source.insert((identity, opened.ranges())).1)
@@ -373,11 +401,11 @@ fn read_range(
     Ok(bytes)
 }
 
-fn display_range(bytes: &[u8]) -> Result<String> {
+fn display_range(bytes: &[u8]) -> Result<Json> {
     let mut value: Json =
         serde_json::from_slice(bytes).context("source range changed; run sessidx index")?;
     crate::redaction::redact_value(&mut value);
-    Ok(serde_json::to_string(&value)?)
+    Ok(value)
 }
 
 pub fn scan(
@@ -433,8 +461,9 @@ pub fn scan(
                 Ok(bytes) => {
                     coverage.bytes += bytes.len() as u64;
                     if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
-                        item.snippet = display_range(&bytes)?;
-                        item.truncated = false;
+                        item.body = Body::Record {
+                            record: display_range(&bytes)?,
+                        };
                         hits.push(item);
                     }
                 }
@@ -479,15 +508,10 @@ pub fn show_snapshot(
             line.saturating_sub(around as u64).max(1) as i64
         ));
         args.push(Value::Integer(line.saturating_add(around as u64) as i64));
-        "f.path=? AND e.line_no BETWEEN ? AND ?"
+        "e.path=? AND e.line_no BETWEEN ? AND ?"
     } else {
-        args.push(Value::Text(
-            target
-                .strip_prefix("codex://threads/")
-                .unwrap_or(target)
-                .into(),
-        ));
-        "e.session_id=?"
+        args.push(Value::Integer(session_file(db, target)?.unwrap_or(0)));
+        "e.file_id=?"
     };
     args.push(Value::Integer(after));
     args.push(Value::Integer(high_water));
@@ -517,12 +541,11 @@ pub fn show_snapshot(
             coverage.bytes += bytes.len() as u64;
             display_range(&bytes)
         }) {
-            Ok(raw) => {
-                item.snippet = raw;
-                item.truncated = false;
-            }
-            Err(_) => {
-                item.snippet = "[source range unavailable; run sessidx index]".into();
+            Ok(record) => item.body = Body::Record { record },
+            Err(e) => {
+                item.body = Body::Unavailable {
+                    unavailable: redact(&format!("{e:#}")),
+                };
                 coverage.unavailable_ranges += 1;
                 coverage.incomplete = true;
             }

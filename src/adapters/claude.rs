@@ -1,19 +1,51 @@
 use crate::{
-    model::{Agent, Event, Record, State},
+    model::{Agent, Event, EventKind, Record, SessionKind, State},
     normalize::{arguments, message_text, shell, string, timestamp},
 };
 use serde_json::Value;
 
 pub fn parse(v: &Value, s: &mut State) -> Record {
-    if let Some(id) = string(v, "sessionId") {
-        s.session_id = id;
+    // A subagent's records carry its agentId; a main transcript is named after
+    // its session ID, which the indexer already holds. Until the first such
+    // record, a resumed transcript holds history copied from another session.
+    if !s.identified {
+        if let Some(agent_id) = string(v, "agentId") {
+            s.session_id = agent_id;
+            s.session_kind = SessionKind::Subagent;
+            s.session_kind_source = "agentId".into();
+            s.identified = true;
+        } else if string(v, "sessionId").as_deref() == Some(s.session_id.as_str()) {
+            s.identified = true;
+        }
     }
-    if let Some(cwd) = string(v, "cwd") {
-        s.cwd = cwd;
+    // A subagent's records carry its parent's session ID, though its first
+    // record can omit it.
+    if s.session_kind == SessionKind::Subagent && s.parent_id.is_none() {
+        s.parent_id = string(v, "sessionId");
     }
-    if v.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-        s.kind = "delegated".into();
-        s.kind_source = "isSidechain".into();
+    // A main transcript's own records carry its session ID and no agent's ID.
+    let own = match s.session_kind {
+        SessionKind::Subagent => string(v, "agentId"),
+        SessionKind::Main | SessionKind::Unknown => {
+            string(v, "sessionId").filter(|_| v.get("agentId").is_none())
+        }
+    };
+    if own.as_deref() == Some(s.session_id.as_str()) {
+        if s.session_kind == SessionKind::Unknown
+            && let Some(sidechain) = v.get("isSidechain").and_then(Value::as_bool)
+        {
+            s.session_kind = if sidechain {
+                SessionKind::Subagent
+            } else {
+                SessionKind::Main
+            };
+            s.session_kind_source = "isSidechain".into();
+        }
+        if s.cwd.is_empty()
+            && let Some(cwd) = string(v, "cwd")
+        {
+            s.cwd = cwd;
+        }
     }
     let typ = v.get("type").and_then(Value::as_str).unwrap_or("");
     // Claude diagnostic attachments: tests/fixtures/output-prefix.json.
@@ -43,7 +75,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             })
             .collect();
         if !messages.is_empty() {
-            let mut e = Event::new("tool", "tool_output", "attachment.type");
+            let mut e = Event::new("tool", EventKind::ToolOutput, "attachment.type");
             crate::normalize::output_prefix(&mut e, &Value::Array(messages));
             e.native_id = string(v, "uuid");
             e.ts = timestamp(v);
@@ -79,8 +111,6 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     | "permission-mode"
                     | "pr-link"
                     | "relocated"
-                    | "result"
-                    | "started"
                     | "worktree-state"
             ),
         };
@@ -108,14 +138,14 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
     if typ == "assistant" || !only_results {
         let mut e = Event::new(
             role,
-            "message",
+            EventKind::Message,
             if m["role"].is_string() {
                 "message.role"
             } else {
                 "root.type"
             },
         );
-        e.kind_source = "root.type,message.content".into();
+        e.kind_source = "root.type,message.content";
         e.text = Some(message_text(content));
         e.native_id = if typ == "assistant" {
             string(m, "id").map(|id| format!("message:{id}"))
@@ -132,11 +162,11 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             let bt = b["type"].as_str().unwrap_or("");
             let mut e = match bt {
                 "tool_use" | "server_tool_use" => {
-                    let mut e = Event::new("assistant", "tool_call", "content.tool_use");
+                    let mut e = Event::new("assistant", EventKind::ToolCall, "content.tool_use");
                     if bt == "server_tool_use" {
-                        e.kind = "server_tool_call".into();
-                        e.role_source = "content.server_tool_use".into();
-                        e.kind_source = e.role_source.clone();
+                        e.kind = EventKind::ServerToolCall;
+                        e.role_source = "content.server_tool_use";
+                        e.kind_source = e.role_source;
                     }
                     e.tool = string(b, "name");
                     e.call_id = string(b, "id");
@@ -146,16 +176,16 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     e
                 }
                 "tool_result" | "advisor_tool_result" => {
-                    let mut e = Event::new("tool", "tool_result", "content.tool_result");
+                    let mut e = Event::new("tool", EventKind::ToolResult, "content.tool_result");
                     if bt == "advisor_tool_result" {
-                        e.kind = "server_tool_result".into();
-                        e.role_source = "content.advisor_tool_result".into();
-                        e.kind_source = e.role_source.clone();
+                        e.kind = EventKind::ServerToolResult;
+                        e.role_source = "content.advisor_tool_result";
+                        e.kind_source = e.role_source;
                     }
                     e.call_id = string(b, "tool_use_id");
                     e.ok = b.get("is_error").and_then(Value::as_bool).map(|v| !v);
                     if e.ok.is_some() {
-                        e.ok_source = "flag".into();
+                        e.ok_source = "flag";
                     }
                     crate::outcomes::classify(&mut e, &b["content"], Agent::Claude);
                     crate::normalize::output_prefix(&mut e, &b["content"]);
@@ -182,7 +212,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             e.native_id = e
                 .call_id
                 .as_ref()
-                .map(|id| format!("{}:{id}", e.kind))
+                .map(|id| format!("{}:{id}", e.kind.as_str()))
                 .or_else(|| string(v, "uuid").map(|id| format!("{id}:{i}")));
             e.model = string(m, "model");
             e.ts = timestamp(v);

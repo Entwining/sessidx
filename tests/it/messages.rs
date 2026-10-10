@@ -1,7 +1,7 @@
-use crate::common::indexed;
+use crate::common::{indexed, indexed_files};
 use sessidx::{
     adapters,
-    model::{Agent, State, name},
+    model::{Agent, EventKind, SessionKind, State, name},
     store::Store,
 };
 use sha2::Digest;
@@ -88,7 +88,11 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
     let fixtures: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/attribution.json")).unwrap();
     for h in [Agent::Claude, Agent::Codex, Agent::Pi] {
-        let mut s = State::default();
+        // The indexer seeds a Claude transcript's identity from its file name.
+        let mut s = State {
+            session_id: "delegated".into(),
+            ..State::default()
+        };
         let es: Vec<_> = fixtures[name(h)]
             .as_array()
             .unwrap()
@@ -96,10 +100,8 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             .flat_map(|v| adapters::parse(h, v, &mut s).events)
             .collect();
         if h == Agent::Claude {
-            assert_eq!(
-                usize::from(s.kind == "delegated" && s.kind_source == "isSidechain"),
-                1
-            );
+            assert_eq!(s.session_kind, SessionKind::Subagent);
+            assert_eq!(s.session_kind_source, "isSidechain");
             assert_eq!(
                 es.iter()
                     .flat_map(|e| &e.denials)
@@ -147,16 +149,22 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
                     .count(),
                 1
             );
-            assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 0);
+            assert_eq!(
+                es.iter().filter(|e| e.kind == EventKind::ToolCall).count(),
+                0
+            );
         }
     }
 }
 
 #[test]
 fn native_copy_ownership_uses_origin_time_before_filename() {
-    let (_dir, mut store, roots) = indexed(
+    let (_dir, mut store, roots) = indexed_files(
         Agent::Claude,
-        "{\"type\":\"user\",\"uuid\":\"shared-native\",\"sessionId\":\"origin\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"same\"}}\n",
+        &[(
+            "origin",
+            "{\"type\":\"user\",\"uuid\":\"shared-native\",\"sessionId\":\"origin\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"same\"}}\n",
+        )],
     );
     fs::write(roots[0].path.join("aaa-copy.jsonl"), "{\"type\":\"system\",\"timestamp\":\"2026-02-01T00:00:00Z\"}\n{\"type\":\"user\",\"uuid\":\"shared-native\",\"sessionId\":\"copy\",\"timestamp\":\"2026-01-01T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"same\"}}\n{\"type\":\"user\",\"uuid\":\"new-native\",\"sessionId\":\"copy\",\"timestamp\":\"2026-02-01T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"new\"}}\n").unwrap();
     store.refresh(&roots, false, None).unwrap();

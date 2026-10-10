@@ -42,6 +42,7 @@ pub fn files(roots: &[Root]) -> Result<Discovered> {
         for entry in WalkDir::new(&root.path).follow_links(false) {
             let entry = entry.context("session discovery failed")?;
             if entry.file_type().is_file()
+                && !(root.agent == Agent::Claude && workflow_journal(entry.path()))
                 && let Some(plain) = crate::source::plain_path(entry.path())
             {
                 files.push((root.agent, plain));
@@ -55,4 +56,16 @@ pub fn files(roots: &[Root]) -> Result<Discovered> {
         files,
         missing_roots,
     })
+}
+
+/// Claude writes a workflow run's journal of agent starts and results beside
+/// its agents' transcripts; it is not a session. Rule: docs/formats.md
+/// `claude_workflow_journal`.
+fn workflow_journal(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n == "journal.jsonl")
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "workflows")
 }

@@ -1,16 +1,19 @@
-use crate::common::indexed;
+use crate::common::{indexed, indexed_files};
 use sessidx::{
     counting::{self, By, Metric},
     discovery::Root,
-    model::{Agent, name},
-    query::{Filters, Kind, Role},
+    model::{Agent, SessionKind, name},
+    query::{Filters, Role},
     store::Store,
 };
 use std::fs;
 
 #[test]
-fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
-    let (_dir, store, roots) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+fn counts_select_by_program_and_shared_filters_and_sql_is_read_only() {
+    let (_dir, store, roots) = indexed_files(
+        Agent::Claude,
+        &[("claude-fixture", include_str!("../fixtures/claude.jsonl"))],
+    );
     let commands = counting::count(
         &store.db,
         Metric::Commands,
@@ -19,9 +22,8 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         &Filters::default(),
     )
     .unwrap();
-    assert_eq!(commands[0]["unit"], "static_shell_command_sites");
-    assert_eq!(commands[0]["numerator"], 1);
-    assert_eq!(commands[0]["denominator"], 2);
+    assert_eq!(commands[0]["matching_sites"], 1);
+    assert_eq!(commands[0]["sites"], 2);
     let failures = counting::count(
         &store.db,
         Metric::Failures,
@@ -30,12 +32,12 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         &Filters::default(),
     )
     .unwrap();
-    assert_eq!(failures[0]["numerator"], 1);
-    assert_eq!(failures[0]["denominator"], 1);
+    assert_eq!(failures[0]["failed"], 1);
+    assert_eq!(failures[0]["calls"], 1);
     let grouped = counting::count(
         &store.db,
         Metric::Commands,
-        &[By::Agent, By::Model, By::Role, By::Week, By::Kind],
+        &[By::Agent, By::Model, By::Role, By::Week, By::SessionKind],
         Some("rg"),
         &Filters::default(),
     )
@@ -46,16 +48,16 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
         ("model", "claude-sonnet"),
         ("role", "assistant"),
         ("week", "2026-W40"),
-        ("kind", "unknown"),
+        ("session_kind", "unknown"),
     ] {
         assert_eq!(grouped[0][key], expected);
     }
-    assert_eq!(grouped[0]["numerator"], 1);
+    assert_eq!(grouped[0]["matching_sites"], 1);
     let sessions = [
         "claude-fixture".to_owned(),
         roots[0]
             .path
-            .join("session.jsonl")
+            .join("claude-fixture.jsonl")
             .to_string_lossy()
             .into_owned(),
     ];
@@ -79,7 +81,7 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
             let mut filters = Filters {
                 agent: vec![Agent::Claude, Agent::Pi],
                 role: Some(role),
-                kind: Some(Kind::Unknown),
+                session_kind: Some(SessionKind::Unknown),
                 session: Some(session.clone()),
                 since: Some("2026-10-01T00:00:00Z".parse().unwrap()),
                 until: Some("2026-10-02T00:00:00Z".parse().unwrap()),
@@ -93,9 +95,8 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
             );
             filters.since = Some("2026-10-02T00:00:00Z".parse().unwrap());
             let empty = counting::count(&store.db, metric, &[], Some("rg"), &filters).unwrap();
-            assert_eq!(empty[0]["numerator"], 0);
-            assert_eq!(empty[0]["denominator"], 0);
-            assert_eq!(empty[0]["unclassified"], 0);
+            let row = empty[0].as_object().unwrap();
+            assert!(row.values().filter_map(|v| v.as_i64()).all(|n| n == 0));
         }
     }
     assert!(counting::sql(&store.db, "DELETE FROM events").is_err());
@@ -133,22 +134,19 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         ("canonical_events", 4),
         ("parse_errors", 1),
         ("incomplete_files", 1),
-        ("unknown_models", 4),
-        ("unknown_session_kinds", 1),
-        ("unclassified_denials", 1),
+        ("sessions_with_unknown_kind", 1),
+        ("tool_events", 2),
+        ("tool_events_without_model", 2),
+        ("records", 4),
+        ("records_with_unknown_shape", 2),
+        ("shell_calls", 1),
+        ("shell_calls_unparsed", 1),
+        ("denials", 1),
+        ("denials_with_unknown_reason", 1),
     ] {
         assert_eq!(d[key], expected, "{key}");
     }
-    assert_eq!(d["unknown_shapes"]["numerator"], 2);
-    assert_eq!(d["unknown_shapes"]["denominator"], 4);
-    assert_eq!(d["unknown_shapes"]["rate"], 0.5);
-    assert_eq!(
-        d["unknown_shapes"]["signatures"].as_array().unwrap().len(),
-        2
-    );
-    assert_eq!(d["unparsed_shell_calls"]["numerator"], 1);
-    assert_eq!(d["unparsed_shell_calls"]["denominator"], 1);
-    assert_eq!(d["unparsed_shell_calls"]["rate"], 1.0);
+    assert_eq!(d["unknown_shape_signatures"].as_array().unwrap().len(), 2);
     let excess = counting::sql(
         &store.db,
         "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n",
@@ -174,7 +172,7 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
 }
 
 #[test]
-fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
+fn program_selection_names_calls_whose_program_is_unresolved_apart_from_its_population() {
     let fixture=include_str!("../fixtures/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}},{"type":"tool_use","id":"no-command","name":"Bash","input":{}}]}}).to_string()+"\n"+&serde_json::json!({"type":"user","uuid":"bad-result","sessionId":"claude-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"bad-shell","content":"done"}]}}).to_string()+"\n";
     let (_, store, _) = indexed(Agent::Claude, &fixture);
     let result = counting::count(
@@ -185,8 +183,9 @@ fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
         &Filters::default(),
     )
     .unwrap();
-    assert_eq!(result[0]["denominator"], 1);
-    assert_eq!(result[0]["unclassified"], 2);
+    assert_eq!(result[0]["calls"], 1);
+    assert_eq!(result[0]["outcome_unknown"], 0);
+    assert_eq!(result[0]["calls_with_unresolved_program"], 2);
     let result = counting::count(
         &store.db,
         Metric::Denials,
@@ -195,14 +194,16 @@ fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
         &Filters::default(),
     )
     .unwrap();
-    assert_eq!(result[0]["unclassified"], 1);
+    assert_eq!(result[0]["results_with_unresolved_program"], 1);
 }
 
 /// Every fixture indexed from two files into one store.
 fn copied_history() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     // Denied calls whose program selection depends on matching the call: two
-    // `rg` sites in one call, a call without `rg`, and a server call with `rg`.
+    // `rg` sites in one call, a call without `rg`, a server call with `rg`,
+    // and a call whose shell syntax does not parse; then an `rg` call with no
+    // result, whose outcome is unknown.
     let claude = format!(
         "{}{}",
         include_str!("../fixtures/claude.jsonl"),
@@ -216,6 +217,12 @@ fn copied_history() -> (tempfile::TempDir, Store) {
             r#"{"type":"assistant","uuid":"c6","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"server_tool_use","id":"call-server","name":"Bash","input":{"command":"rg three"}}]}}"#,
             "\n",
             r#"{"type":"user","uuid":"c7","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:06Z","toolDenialKind":"hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-server","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"c8","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:07Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-unparsed","name":"Bash","input":{"command":"echo 'unterminated"}}]}}"#,
+            "\n",
+            r#"{"type":"user","uuid":"c9","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:08Z","toolDenialKind":"hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-unparsed","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","uuid":"c10","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:09Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-pending","name":"Bash","input":{"command":"rg pending"}}]}}"#,
             "\n",
             r#"{"type":"user","uuid":"shared","sessionId":"claude-fixture","message":{"role":"user","content":"one"}}"#,
             "\n",
@@ -263,49 +270,101 @@ fn counts_equal_the_public_views_over_copied_history() {
         rows("SELECT count(*) FROM canonical_events WHERE kind IN ('tool_call','tool_result')")
             < rows("SELECT count(*) FROM events WHERE kind IN ('tool_call','tool_result')")
     );
-    let by = [By::Agent, By::Model, By::Role, By::Week, By::Kind];
-    let keys = "f.agent,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.kind";
-    let from =
-        "FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
+    let by = [By::Agent, By::Model, By::Role, By::Week, By::SessionKind];
+    let names = ["agent", "model", "role", "week", "session_kind"];
+    let keys = "s.agent,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.session_kind";
+    let from = "FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id";
+    let unresolved = "(cp.parsed=0 OR cp.program IS NULL)";
     // References over the public views, with and without a program selection.
     for program in [None, Some("rg")] {
-        let (selected_site, selected_call, unknown_call, selected_result, unknown_result) =
-            match program {
-                None => ("1", "1", "0", "1", "0"),
-                Some(_) => (
-                    "c.program='rg'",
-                    "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program='rg')",
-                    "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))",
-                    "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.agent=f.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program='rg')",
-                    "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.agent=f.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))",
-                ),
-            };
-        for (metric, sql) in [
+        let call = "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program='rg')";
+        let result = "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id WHERE ce.agent=e.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program='rg')";
+        let unresolved_call =
+            format!("EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND {unresolved})");
+        let unresolved_result = format!(
+            "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id WHERE ce.agent=e.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND ce.kind!='tool_result' AND {unresolved})"
+        );
+        let (call, result) = match program {
+            None => ("1", "1"),
+            Some(_) => (call, result),
+        };
+        let denied = "EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id)";
+        let unknown_reason =
+            "EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id AND d.reason_id='unknown')";
+        let mut metrics = [
             (
                 Metric::Commands,
-                format!(
-                    "SELECT {keys},sum(c.parsed=1 AND {selected_site}),sum(c.parsed=1),sum(c.parsed=0 OR c.program IS NULL) {from} JOIN commands c ON c.event_id=e.id WHERE e.kind='tool_call' GROUP BY {keys}"
-                ),
+                vec![
+                    ("sites", "c.parsed=1".to_owned()),
+                    (
+                        "sites_without_program",
+                        "c.parsed=1 AND c.program IS NULL".into(),
+                    ),
+                ],
+                "JOIN commands c ON c.event_id=e.id WHERE e.kind='tool_call'",
             ),
             (
                 Metric::Failures,
-                format!(
-                    "SELECT {keys},sum(o.ok=0 AND {selected_call}),sum({selected_call}),sum(({selected_call} AND o.ok IS NULL) OR {unknown_call}) {from} LEFT JOIN call_outcomes o ON o.agent=f.agent AND o.session_id=e.session_id AND o.call_id=e.call_id WHERE e.kind='tool_call' GROUP BY {keys}"
-                ),
+                vec![
+                    ("calls", call.to_owned()),
+                    ("failed", format!("{call} AND o.ok=0")),
+                    ("succeeded", format!("{call} AND o.ok=1")),
+                    ("outcome_unknown", format!("{call} AND o.ok IS NULL")),
+                ],
+                "LEFT JOIN call_outcomes o ON o.agent=e.agent AND o.session_id=e.session_id AND o.call_id=e.call_id WHERE e.kind='tool_call'",
             ),
             (
                 Metric::Denials,
-                format!(
-                    "SELECT {keys},sum(EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id) AND {selected_result}),sum({selected_result}),sum(({selected_result} AND EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id AND d.reason_id='unknown')) OR {unknown_result}) {from} WHERE e.kind='tool_result' GROUP BY {keys}"
-                ),
+                vec![
+                    ("results", result.to_owned()),
+                    ("denied", format!("{result} AND {denied}")),
+                    (
+                        "denied_reason_unknown",
+                        format!("{result} AND {unknown_reason}"),
+                    ),
+                ],
+                "WHERE e.kind='tool_result'",
             ),
-        ] {
+        ];
+        if program.is_some() {
+            metrics[0]
+                .1
+                .push(("matching_sites", "c.parsed=1 AND c.program='rg'".into()));
+            metrics[1].1.push((
+                "calls_with_unresolved_program",
+                format!("NOT {call} AND {unresolved_call}"),
+            ));
+            metrics[2].1.push((
+                "results_with_unresolved_program",
+                format!("NOT {result} AND {unresolved_result}"),
+            ));
+        }
+        for (metric, fields, rest) in metrics {
+            let mut sums: Vec<String> = fields
+                .iter()
+                .map(|(_, condition)| format!("sum(CASE WHEN {condition} THEN 1 ELSE 0 END)"))
+                .collect();
+            if let Metric::Commands = metric {
+                sums.insert(
+                    2,
+                    "count(DISTINCT CASE WHEN c.parsed=0 THEN e.id END)".into(),
+                );
+            }
+            let mut fields: Vec<&str> = fields.iter().map(|(name, _)| *name).collect();
+            if let Metric::Commands = metric {
+                fields.insert(2, "unparsed_calls");
+            }
+            let sql = format!(
+                "SELECT {keys},{} {from} {rest} GROUP BY {keys}",
+                sums.join(",")
+            );
+            let width = names.len() + fields.len();
             let mut expected: Vec<Vec<String>> = store
                 .db
                 .prepare(&sql)
                 .unwrap()
                 .query_map([], |r| {
-                    (0..8)
+                    (0..width)
                         .map(|i| {
                             r.get_ref(i).map(|v| match v {
                                 rusqlite::types::ValueRef::Text(t) => {
@@ -325,20 +384,16 @@ fn counts_equal_the_public_views_over_copied_history() {
                     .unwrap()
                     .iter()
                     .map(|row| {
-                        ["agent", "model", "role", "week", "kind"]
+                        names
                             .iter()
                             .map(|k| row[k].as_str().unwrap().to_owned())
-                            .chain(
-                                ["numerator", "denominator", "unclassified"]
-                                    .iter()
-                                    .map(|k| row[k].to_string()),
-                            )
+                            .chain(fields.iter().map(|k| row[k].to_string()))
                             .collect()
                     })
                     .collect();
             counted.sort();
             assert!(
-                expected.iter().any(|row| row[6] != "0"),
+                expected.iter().any(|row| row[names.len()] != "0"),
                 "{metric:?} {program:?} selects nothing"
             );
             assert_eq!(counted, expected, "{metric:?} {program:?}");
@@ -349,7 +404,7 @@ fn counts_equal_the_public_views_over_copied_history() {
 #[test]
 fn canonical_events_are_the_first_ranked_copy_of_each_native_event() {
     let (_dir, store) = copied_history();
-    let ranked = "SELECT * FROM events WHERE id IN (SELECT id FROM (SELECT e.id, row_number() OVER (PARTITION BY f.agent, CASE WHEN e.native_id IS NULL THEN 'row:'||e.id ELSE 'native:'||e.native_id END, e.kind ORDER BY coalesce(f.first_ts,'9999'),f.path,e.line_no,e.ordinal) AS copy_rank FROM events e JOIN files f ON f.id=e.file_id) WHERE copy_rank=1)";
+    let ranked = "SELECT * FROM events WHERE id IN (SELECT id FROM (SELECT e.id, row_number() OVER (PARTITION BY s.agent, CASE WHEN e.native_id IS NULL THEN 'row:'||e.id ELSE 'native:'||e.native_id END, e.kind ORDER BY coalesce(s.started_at,'9999'),s.path,e.line_no,e.ordinal) AS copy_rank FROM events e JOIN sessions s ON s.file_id=e.file_id) WHERE copy_rank=1)";
     let rows = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
     let canonical = rows("SELECT count(*) FROM canonical_events");
     assert!(canonical < rows("SELECT count(*) FROM events"));
@@ -360,4 +415,43 @@ fn canonical_events_are_the_first_ranked_copy_of_each_native_event() {
         )),
         0
     );
+}
+
+#[test]
+fn count_rows_partition_their_population() {
+    let (_dir, store) = copied_history();
+    for program in [None, Some("rg")] {
+        let rows = |metric| {
+            counting::count(
+                &store.db,
+                metric,
+                &[By::Agent],
+                program,
+                &Filters::default(),
+            )
+            .unwrap()
+        };
+        let n = |row: &serde_json::Value, key: &str| row[key].as_i64().unwrap();
+        for row in rows(Metric::Failures) {
+            assert_eq!(
+                n(&row, "calls"),
+                n(&row, "failed") + n(&row, "succeeded") + n(&row, "outcome_unknown"),
+                "{row}"
+            );
+        }
+        for row in rows(Metric::Denials) {
+            assert!(
+                n(&row, "denied_reason_unknown") <= n(&row, "denied"),
+                "{row}"
+            );
+            assert!(n(&row, "denied") <= n(&row, "results"), "{row}");
+        }
+        for row in rows(Metric::Commands) {
+            let matching = program.map_or(0, |_| n(&row, "matching_sites"));
+            assert!(
+                matching + n(&row, "sites_without_program") <= n(&row, "sites"),
+                "{row}"
+            );
+        }
+    }
 }

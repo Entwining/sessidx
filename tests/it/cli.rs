@@ -80,7 +80,11 @@ fn cli_validates_enum_values_and_unions_agents() {
                 "unknown",
             ],
         ),
-        ("--kind", "main", vec!["unknown", "delegated"]),
+        (
+            "--session-kind",
+            "delegated",
+            vec!["main", "subagent", "unknown"],
+        ),
     ] {
         let rows = stream(
             &sessidx(
@@ -113,8 +117,6 @@ fn cli_validates_enum_values_and_unions_agents() {
                 "pi",
                 "--role",
                 "user",
-                "--kind",
-                "unknown",
             ],
         )
         .output()
@@ -249,7 +251,7 @@ fn cli_rejects_malformed_values_in_one_end_record_naming_the_flag() {
         ),
         (
             vec!["count", "commands", "--by", "agent,week,foo"],
-            vec!["'foo' for '--by", "agent, model, role, week, kind"],
+            vec!["'foo' for '--by", "agent, model, role, week, session_kind"],
         ),
         (
             vec!["--root", "claude_code=/synthetic", "sql", "SELECT 1"],
@@ -308,7 +310,7 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
         rows[..rows.len() - 1].to_vec()
     };
     let keys = |row: &serde_json::Value| {
-        let mut keys: Vec<_> = ["agent", "model", "role", "week", "kind"]
+        let mut keys: Vec<_> = ["agent", "model", "role", "week", "session_kind"]
             .into_iter()
             .filter(|k| row.get(k).is_some())
             .collect();
@@ -322,9 +324,9 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
     let total = count(&["commands", "--by"], 0);
     assert_eq!(total.len(), 1);
     assert!(keys(&total[0]).is_empty());
-    assert_eq!(total[0]["denominator"], 1);
-    let chosen = count(&["commands", "--by", "kind,agent"], 0);
-    assert_eq!(keys(&chosen[0]), ["agent", "kind"]);
+    assert_eq!(total[0]["sites"], 1);
+    let chosen = count(&["commands", "--by", "session_kind,agent"], 0);
+    assert_eq!(keys(&chosen[0]), ["agent", "session_kind"]);
     let search = |bound: &[&str], exit| {
         let mut args = vec!["search", "sharedneedle"];
         args.extend(bound);

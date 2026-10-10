@@ -3,7 +3,7 @@ use clap::ValueEnum;
 use sessidx::{
     adapters,
     discovery::Root,
-    model::{Agent, State},
+    model::{Agent, EventKind, State},
     store::Store,
 };
 use sha2::Digest;
@@ -12,7 +12,10 @@ use std::fs;
 #[test]
 fn claude_blocks_flags_and_synthetic_model() {
     let (s, es) = events(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
-    assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
+    assert_eq!(
+        es.iter().filter(|e| e.kind == EventKind::ToolCall).count(),
+        1
+    );
     assert_eq!(
         es.iter()
             .filter(|e| e.ok == Some(false) && e.ok_source == "flag")
@@ -23,7 +26,7 @@ fn claude_blocks_flags_and_synthetic_model() {
     assert_eq!(es.iter().filter(|e| e.role == "user").count(), 1);
     assert!(
         es.iter()
-            .filter(|e| e.kind == "tool_result")
+            .filter(|e| e.kind == EventKind::ToolResult)
             .all(|e| e.text.as_ref().is_some_and(|s| !s.is_empty()))
     );
 }
@@ -43,7 +46,10 @@ fn codex_context_arguments_and_telemetry() {
             .count(),
         1
     );
-    assert_eq!(es.iter().filter(|e| e.kind == "message").count(), 1);
+    assert_eq!(
+        es.iter().filter(|e| e.kind == EventKind::Message).count(),
+        1
+    );
     assert_eq!(
         s.instruction_hash.as_deref(),
         Some(hex::encode(sha2::Sha256::digest("Synthetic instruction")).as_str())
@@ -73,7 +79,7 @@ fn codex_context_arguments_and_telemetry() {
     );
     assert!(
         es.iter()
-            .filter(|e| e.kind == "tool_result")
+            .filter(|e| e.kind == EventKind::ToolResult)
             .all(|e| e.text.as_ref().is_some_and(|s| !s.is_empty()))
     );
 }
@@ -82,7 +88,10 @@ fn codex_context_arguments_and_telemetry() {
 fn pi_model_tool_call_and_camel_case_flag() {
     let (s, es) = events(Agent::Pi, include_str!("../fixtures/pi.jsonl"));
     assert_eq!(s.model.as_deref(), Some("pi-model"));
-    assert_eq!(es.iter().filter(|e| e.kind == "tool_call").count(), 1);
+    assert_eq!(
+        es.iter().filter(|e| e.kind == EventKind::ToolCall).count(),
+        1
+    );
     assert_eq!(
         es.iter()
             .filter(|e| e.ok == Some(false) && e.ok_source == "flag")
@@ -95,7 +104,7 @@ fn pi_model_tool_call_and_camel_case_flag() {
         &serde_json::json!({"type":"message","id":"numeric-system","message":{"role":"system","timestamp":1234,"content":"synthetic system"}}),
         &mut State::default(),
     );
-    assert_eq!(r.events[0].kind, "message");
+    assert_eq!(r.events[0].kind, EventKind::Message);
     assert_eq!(r.events[0].role, "system");
     assert_eq!(r.events[0].ts.as_deref(), Some("1970-01-01T00:00:01.234Z"));
 }
@@ -119,15 +128,15 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
         if variant["scope"] == "block" {
             let shape = variant["shape"].as_str().unwrap();
             let kind = if shape.ends_with("server_tool_use") {
-                Some("server_tool_call")
+                Some(EventKind::ServerToolCall)
             } else if shape.ends_with("advisor_tool_result") {
-                Some("server_tool_result")
+                Some(EventKind::ServerToolResult)
             } else if shape.ends_with("tool_use") || shape.ends_with("toolCall") {
-                Some("tool_call")
+                Some(EventKind::ToolCall)
             } else if shape.ends_with("tool_result") {
-                Some("tool_result")
+                Some(EventKind::ToolResult)
             } else {
-                Some("message")
+                Some(EventKind::Message)
             };
             if let Some(kind) = kind {
                 assert_eq!(
@@ -138,9 +147,8 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
             }
             if shape.ends_with("/ text") {
                 assert!(
-                    r.events
-                        .iter()
-                        .any(|e| e.kind == "message" && e.text.as_deref() == Some("synthetic-text")),
+                    r.events.iter().any(|e| e.kind == EventKind::Message
+                        && e.text.as_deref() == Some("synthetic-text")),
                     "{shape}"
                 );
             }
@@ -148,7 +156,7 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
         known += usize::from(r.known);
         unknown += usize::from(!r.known);
     }
-    assert_eq!(known, 79, "{mismatches:?}");
+    assert_eq!(known, 77, "{mismatches:?}");
     assert_eq!(unknown, 1);
     assert!(mismatches.is_empty(), "{mismatches:?}");
     let future =
@@ -190,13 +198,13 @@ fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
         .collect();
     assert_eq!(
         es.iter()
-            .filter(|e| e.kind == "tool_call" || e.kind == "tool_result")
+            .filter(|e| e.kind == EventKind::ToolCall || e.kind == EventKind::ToolResult)
             .count(),
         0
     );
     assert_eq!(
         es.iter()
-            .filter(|e| e.kind == "server_tool_call" || e.kind == "server_tool_result")
+            .filter(|e| e.kind == EventKind::ServerToolCall || e.kind == EventKind::ServerToolResult)
             .count(),
         2
     );
@@ -272,19 +280,23 @@ fn codex_parent_fields_follow_their_precedence() {
     for (payload, expected) in [
         (
             serde_json::json!({"parent_thread_id":"top-parent","forked_from_id":"fork-parent","source":spawn.clone(),"history_base":history.clone()}),
-            "top-parent",
+            Some("top-parent"),
         ),
         (
             serde_json::json!({"forked_from_id":"fork-parent","source":spawn.clone(),"history_base":history.clone()}),
-            "fork-parent",
+            Some("fork-parent"),
         ),
         (
             serde_json::json!({"forked_from_id":"fork-parent","history_base":history.clone()}),
-            "fork-parent",
+            Some("fork-parent"),
         ),
         (
             serde_json::json!({"source":spawn,"history_base":history}),
-            "spawn-parent",
+            Some("spawn-parent"),
+        ),
+        (
+            serde_json::json!({"id":"resumed","history_base":{"thread_id":"resumed"}}),
+            None,
         ),
     ] {
         let mut s = State::default();
@@ -293,7 +305,7 @@ fn codex_parent_fields_follow_their_precedence() {
             &serde_json::json!({"type":"session_meta","payload":payload}),
             &mut s,
         );
-        if s.parent_id.as_deref() != Some(expected) {
+        if s.parent_id.as_deref() != expected {
             failures.push(format!("{payload} -> {:?}", s.parent_id));
         }
     }

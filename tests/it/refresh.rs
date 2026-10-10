@@ -174,7 +174,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
     assert_eq!(store.refresh(&roots, false, None).unwrap().files_changed, 0);
     let kind_source: String = store
         .db
-        .query_row("SELECT kind_source FROM sessions", [], |r| r.get(0))
+        .query_row("SELECT session_kind_source FROM sessions", [], |r| r.get(0))
         .unwrap();
     assert_eq!(kind_source, "none");
 }

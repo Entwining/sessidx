@@ -1,5 +1,5 @@
 use crate::{
-    model::{Agent, Event, Record, State},
+    model::{Agent, Event, EventKind, Record, SessionKind, State},
     normalize::{arguments, message_text, shell, string, text, timestamp},
 };
 use serde_json::Value;
@@ -7,13 +7,21 @@ use serde_json::Value;
 pub fn parse(v: &Value, s: &mut State) -> Record {
     match v["type"].as_str().unwrap_or("") {
         "session" => {
-            if let Some(id) = string(v, "id") {
-                s.session_id = id;
+            if !s.identified {
+                if let Some(id) = string(v, "id") {
+                    s.session_id = id;
+                }
+                if let Some(cwd) = string(v, "cwd") {
+                    s.cwd = cwd;
+                }
+                s.parent_id = string(v, "parentSession");
+                // Pi ships without subagents, and a fork is a session a user
+                // started; a package that adds subagents could write ordinary
+                // sessions this rule cannot tell apart.
+                s.session_kind = SessionKind::Main;
+                s.session_kind_source = "session".into();
+                s.identified = true;
             }
-            if let Some(cwd) = string(v, "cwd") {
-                s.cwd = cwd;
-            }
-            s.parent_id = string(v, "parentSession");
             Record {
                 events: vec![],
                 known: true,
@@ -37,12 +45,12 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             }
             let ts = timestamp(v).or_else(|| timestamp(m));
             if role == "toolResult" {
-                let mut e = Event::new("tool", "tool_result", "message.role");
+                let mut e = Event::new("tool", EventKind::ToolResult, "message.role");
                 e.call_id = string(m, "toolCallId");
                 e.tool = string(m, "toolName");
                 e.ok = m.get("isError").and_then(Value::as_bool).map(|v| !v);
                 if e.ok.is_some() {
-                    e.ok_source = "flag".into();
+                    e.ok_source = "flag";
                 }
                 crate::outcomes::classify(&mut e, &m["content"], Agent::Pi);
                 crate::normalize::output_prefix(&mut e, &m["content"]);
@@ -56,7 +64,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             let mut events = Vec::new();
             // Pi empty replies: tests/it/messages.rs::pi_empty_response_and_explicit_message_model_override.
             if role == "assistant" || role == "user" || role == "system" {
-                let mut e = Event::new(role, "message", "message.role");
+                let mut e = Event::new(role, EventKind::Message, "message.role");
                 let mut body = message_text(&m["content"]);
                 // Pi system sections: tests/fixtures/pi-sections.jsonl.
                 if let Some(sections) = m["sections"].as_object() {
@@ -77,7 +85,8 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 for (i, b) in blocks.iter().enumerate() {
                     let mut e = match b["type"].as_str().unwrap_or("") {
                         "toolCall" => {
-                            let mut e = Event::new("assistant", "tool_call", "content.toolCall");
+                            let mut e =
+                                Event::new("assistant", EventKind::ToolCall, "content.toolCall");
                             e.call_id = string(b, "id");
                             e.tool = string(b, "name");
                             let args = arguments(&b["arguments"]);

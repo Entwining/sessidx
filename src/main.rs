@@ -68,7 +68,7 @@ enum Command {
     },
     /// Expand a hit ref or session ID to source records
     Show {
-        /// A hit's ref (path:line), a native session ID, or a codex://threads/ID link
+        /// A hit's ref (path:line), a session ID, a transcript path, or a codex://threads/ID link
         target: String,
         /// Source lines to include on each side of a path:line target
         #[arg(long, default_value_t = 3)]
@@ -150,7 +150,7 @@ fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) ->
             version: 3,
             scope: scope(db, request)?,
             position: 0,
-            high_water: db.query_row("SELECT coalesce(max(id),0) FROM locations", [], |r| {
+            high_water: db.query_row("SELECT coalesce(max(id),0) FROM event_rows", [], |r| {
                 r.get(0)
             })?,
             revision,
@@ -357,11 +357,7 @@ fn show(
     let (hits, coverage) =
         query::show_snapshot(&db, target, around, limit, after, snapshot.high_water)?;
     for hit in &hits {
-        let mut value = serde_json::to_value(hit)?;
-        let obj = value.as_object_mut().expect("Hit serializes to an object");
-        let text = obj.remove("snippet").expect("Hit has a snippet field");
-        obj.insert("text".into(), text);
-        emit("record", value)?;
+        emit("record", serde_json::to_value(hit)?)?;
     }
     end(
         &json!(refresh),

@@ -80,10 +80,20 @@ pub fn stream(out: &Output, exit: i32) -> Vec<Value> {
 }
 
 pub fn indexed(agent: Agent, content: &str) -> (tempfile::TempDir, Store, Vec<Root>) {
+    indexed_files(agent, &[("session", content)])
+}
+
+/// One transcript per session, named `<SESSION>.jsonl` as Claude names its own.
+pub fn indexed_files(
+    agent: Agent,
+    sessions: &[(&str, &str)],
+) -> (tempfile::TempDir, Store, Vec<Root>) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
-    fs::write(root.join("session.jsonl"), content).unwrap();
+    for (session, content) in sessions {
+        fs::write(root.join(format!("{session}.jsonl")), content).unwrap();
+    }
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     let roots = vec![Root { agent, path: root }];
     store.refresh(&roots, false, None).unwrap();
@@ -95,7 +105,12 @@ pub fn three_agents() -> (tempfile::TempDir, Store, Vec<Root>) {
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     let mut roots = Vec::new();
     for agent in [Agent::Claude, Agent::Codex, Agent::Pi] {
-        let path = dir.path().join(format!("{}.jsonl", name(agent)));
+        // Claude names a transcript after its session ID.
+        let file = match agent {
+            Agent::Claude => "claude-session".to_owned(),
+            _ => name(agent),
+        };
+        let path = dir.path().join(format!("{file}.jsonl"));
         let mut records: Vec<Value> = (0..2).map(|i| match agent {
             Agent::Claude => json!({"type":"user","uuid":format!("c-{i}"),"sessionId":"claude-session","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}}),
             Agent::Codex => json!({"type":"response_item","timestamp":"2026-10-01T00:00:00Z","payload":{"type":"message","id":format!("x-{i}"),"role":"user","content":[{"type":"input_text","text":"sharedneedle"}]}}),
@@ -141,4 +156,23 @@ pub fn events(h: Agent, fixture: &str) -> (State, Vec<Event>) {
         .flat_map(|l| adapters::parse(h, &serde_json::from_str(l).unwrap(), &mut s).events)
         .collect();
     (s, es)
+}
+
+/// A hit's body as one string: its indexed text, or its serialized source record.
+pub fn body(hit: &query::Hit) -> String {
+    match &hit.body {
+        query::Body::Text { text, .. } => text.clone(),
+        query::Body::Record { record } => record.to_string(),
+        query::Body::Unavailable { unavailable } => unavailable.clone(),
+    }
+}
+
+pub fn truncated(hit: &query::Hit) -> bool {
+    matches!(
+        hit.body,
+        query::Body::Text {
+            truncated: true,
+            ..
+        }
+    )
 }

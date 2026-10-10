@@ -13,7 +13,7 @@ use rusqlite::{
 };
 use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{self, BufRead, Read},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -22,7 +22,7 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -196,21 +196,26 @@ impl Store {
             self.db.execute_batch(include_str!("schema.sql"))?;
         }
         if full && version != 0 {
+            // With foreign keys on, each DROP TABLE first deletes its rows,
+            // firing triggers on tables that may already be gone.
+            self.db.execute_batch("PRAGMA foreign_keys=OFF;")?;
             let tx = self.db.transaction()?;
+            // The identity and change log outlive a rebuild so that every
+            // earlier cursor is refused instead of resolving to new rows.
             if version >= 4 {
                 tx.execute("INSERT INTO index_changes(first_event_id) VALUES (0)", [])?;
             }
-            tx.execute_batch("DROP VIEW call_outcomes; DROP VIEW canonical_events; DROP TABLE commands; DROP TABLE denials;")?;
-            if version == 1 {
-                tx.execute_batch("DROP TABLE events;")?;
-            } else {
-                tx.execute_batch("DROP VIEW events; DROP TABLE event_details; DROP TABLE locations; DROP TABLE strings;")?;
+            let objects: Vec<(String, String)> = tx
+                .prepare("SELECT type,name FROM pragma_table_list WHERE schema='main' AND type IN ('view','table','virtual') AND name NOT LIKE 'sqlite_%' AND name NOT IN ('index_identity','index_changes') ORDER BY type='view' DESC")?
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            for (kind, name) in objects {
+                let kind = if kind == "view" { "VIEW" } else { "TABLE" };
+                tx.execute_batch(&format!("DROP {kind} IF EXISTS \"{name}\";"))?;
             }
-            tx.execute_batch(
-                "DROP TABLE sessions; DROP TABLE shapes; DROP TABLE files; DROP TABLE fts;",
-            )?;
             tx.execute_batch(include_str!("schema.sql"))?;
             tx.commit()?;
+            self.db.execute_batch("PRAGMA foreign_keys=ON;")?;
             self.db.execute_batch("VACUUM;")?;
         }
         Ok(())
@@ -414,8 +419,7 @@ impl Store {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned(),
-                kind: "unknown".into(),
-                kind_source: "none".into(),
+                session_kind_source: "none".into(),
                 ..State::default()
             };
             (0, 0, state, 0)
@@ -436,7 +440,6 @@ impl Store {
         let mut reader = source.records_from(offset)?;
         let mut buffer = Vec::new();
         let mut records = 0;
-        let mut strings = HashMap::new();
         let mut coverage = FileCoverage::Ready;
         loop {
             if deadline.is_some_and(|d| Instant::now() >= d) {
@@ -476,39 +479,16 @@ impl Store {
                 let raw_hash = hash(&buffer);
                 tx.prepare_cached("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,signature,normalized.known])?;
                 for (ordinal, event) in normalized.events.into_iter().enumerate() {
-                    let session = intern(&tx, &mut strings, &state.session_id)?;
-                    let model = event
-                        .model
-                        .as_deref()
-                        .or(state.model.as_deref())
-                        .map(|v| intern(&tx, &mut strings, v))
-                        .transpose()?;
-                    let model_source = intern(
-                        &tx,
-                        &mut strings,
-                        if event.model.is_some() {
-                            "message.model"
-                        } else if state.model.is_some() {
-                            &state.model_source
-                        } else {
-                            "none"
-                        },
-                    )?;
-                    tx.prepare_cached("INSERT INTO locations(file_id,session_ref,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,model_ref,model_source_ref) VALUES (?,?,unhex(?),?,?,?,unhex(?),?,?,?,?)")?.execute(params![file_id,session,event.native_id,line,offset,length,&raw_hash,ordinal,event.ts,model,model_source])?;
+                    let model = event.model.as_deref().or(state.model.as_deref());
+                    let model_source = if event.model.is_some() {
+                        "message.model"
+                    } else if state.model.is_some() {
+                        &state.model_source
+                    } else {
+                        "none"
+                    };
+                    tx.prepare_cached("INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,native_id,ts,role,role_source,kind,kind_source,model,model_source,tool,call_id,ok,ok_source,exit_code) VALUES (?,?,?,?,?,unhex(?),unhex(?),?,?,?,?,?,?,?,?,unhex(?),?,?,?)")?.execute(params![file_id,line,offset,length,ordinal,&raw_hash,event.native_id,event.ts,event.role,event.role_source,event.kind.as_str(),event.kind_source,model,model_source,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code])?;
                     let event_id = tx.last_insert_rowid();
-                    if event.kind != "context" {
-                        let role = intern(&tx, &mut strings, &event.role)?;
-                        let role_source = intern(&tx, &mut strings, &event.role_source)?;
-                        let kind = intern(&tx, &mut strings, &event.kind)?;
-                        let kind_source = intern(&tx, &mut strings, &event.kind_source)?;
-                        let tool = event
-                            .tool
-                            .as_deref()
-                            .map(|v| intern(&tx, &mut strings, v))
-                            .transpose()?;
-                        let ok_source = intern(&tx, &mut strings, &event.ok_source)?;
-                        tx.prepare_cached("INSERT INTO event_details(event_id,session_ref,role_ref,role_source_ref,kind_ref,kind_source_ref,text,tool_ref,call_id,ok,ok_source_ref,exit_code,text_truncated) VALUES (?,?,?,?,?,?,?,?,unhex(?),?,?,?,?)")?.execute(params![event_id,session,role,role_source,kind,kind_source,event.text,tool,event.call_id,event.ok,ok_source,event.exit_code,event.text_truncated])?;
-                    }
                     for (site, command) in event.sites.into_iter().enumerate() {
                         tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
                     }
@@ -519,6 +499,14 @@ impl Store {
                         .execute(params![event_id, source, reason])?;
                     }
                     if let Some(text) = event.text {
+                        tx.prepare_cached(
+                            "INSERT INTO event_texts(event_id,text,truncated) VALUES (?,?,?)",
+                        )?
+                        .execute(params![
+                            event_id,
+                            text,
+                            event.text_truncated
+                        ])?;
                         tx.prepare_cached("INSERT INTO fts(rowid,text) VALUES (?,?)")?
                             .execute(params![event_id, spaced_cjk(&text)])?;
                     }
@@ -529,8 +517,8 @@ impl Store {
             }
             offset += length;
         }
-        tx.execute("INSERT INTO sessions(file_id,agent,session_id,cwd,parent_id,kind,kind_source,instruction_hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,cwd=excluded.cwd,parent_id=excluded.parent_id,kind=excluded.kind,kind_source=excluded.kind_source,instruction_hash=excluded.instruction_hash", params![file_id,agent_name,state.session_id,state.cwd,state.parent_id,state.kind,state.kind_source,state.instruction_hash])?;
-        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=?,first_ts=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage,state.first_ts,file_id])?;
+        tx.execute("INSERT INTO sessions(file_id,agent,session_id,parent_id,session_kind,session_kind_source,path,cwd,started_at,instruction_hash) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,parent_id=excluded.parent_id,session_kind=excluded.session_kind,session_kind_source=excluded.session_kind_source,cwd=excluded.cwd,started_at=excluded.started_at,instruction_hash=excluded.instruction_hash", params![file_id,agent_name,state.session_id,state.parent_id,name(state.session_kind),state.session_kind_source,path_text,state.cwd,state.first_ts,state.instruction_hash])?;
+        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage,file_id])?;
         tx.commit()?;
         Ok(IndexedFile {
             changed: true,
@@ -553,22 +541,9 @@ fn change_stamp(meta: &fs::Metadata) -> String {
 }
 
 fn delete_file(tx: &Transaction<'_>, id: i64) -> Result<()> {
-    tx.execute("INSERT INTO index_changes(first_event_id) SELECT min(id) FROM locations WHERE file_id=? HAVING count(*)>0", [id])?;
+    tx.execute("INSERT INTO index_changes(first_event_id) SELECT min(id) FROM event_rows WHERE file_id=? HAVING count(*)>0", [id])?;
     tx.execute("DELETE FROM files WHERE id=?", [id])?;
     Ok(())
-}
-
-fn intern(tx: &Transaction<'_>, values: &mut HashMap<String, i64>, value: &str) -> Result<i64> {
-    if let Some(id) = values.get(value) {
-        return Ok(*id);
-    }
-    tx.prepare_cached("INSERT INTO strings(value) VALUES (?) ON CONFLICT(value) DO NOTHING")?
-        .execute([value])?;
-    let id = tx
-        .prepare_cached("SELECT id FROM strings WHERE value=?")?
-        .query_row([value], |r| r.get(0))?;
-    values.insert(value.into(), id);
-    Ok(id)
 }
 
 fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> io::Result<(u64, bool, bool)> {

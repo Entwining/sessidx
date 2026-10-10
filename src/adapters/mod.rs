@@ -3,7 +3,7 @@ mod codex;
 mod pi;
 
 use crate::{
-    model::{Agent, Record, State},
+    model::{Agent, EventKind, Record, State},
     redaction::{redact, redact_metadata},
 };
 use serde_json::Value;
@@ -20,8 +20,8 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
         Agent::Pi => pi::parse(v, state),
     };
     if r.events.is_empty() {
-        let mut e = crate::model::Event::new("unknown", "context", "root.type");
-        e.role_source = "none".into();
+        let mut e = crate::model::Event::new("unknown", EventKind::Context, "root.type");
+        e.role_source = "none";
         e.ts = crate::normalize::timestamp(v);
         e.native_id =
             crate::normalize::string(v, "uuid").or_else(|| crate::normalize::string(v, "id"));
@@ -44,7 +44,7 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
             .map(|id| crate::normalize::hash(id.as_bytes()));
         if let Some(command) = &e.command {
             e.sites = crate::shell::sites(command);
-        } else if e.kind == "tool_call"
+        } else if e.kind == EventKind::ToolCall
             && e.tool
                 .as_deref()
                 .is_some_and(crate::normalize::is_shell_tool)
