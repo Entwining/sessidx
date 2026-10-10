@@ -1,14 +1,14 @@
 use crate::common::{indexed, search_hits};
 use sessidx::{
     discovery::Root,
-    model::Harness,
+    model::Agent,
     query::{self, Filters},
 };
 use std::{fs, time::Duration};
 
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
-    let (_dir, store, _) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters {
         session: Some("claude-fixture".into()),
         ..Filters::default()
@@ -47,7 +47,7 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
 
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
-    let (_dir, store, _) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters::default();
     assert_eq!(
         search_hits(&store.db, "太长", &filters, 20, 0)
@@ -79,7 +79,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
             &store.db,
             "Latin",
             &Filters {
-                harness: vec![Harness::Pi],
+                agent: vec![Agent::Pi],
                 ..filters.clone()
             },
             20,
@@ -109,7 +109,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
     .unwrap();
     assert_eq!(shown.len(), 1);
     assert!(!coverage.incomplete);
-    let (_dir, store, _) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
+    let (_dir, store, _) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
     assert_eq!(
         query::show(&store.db, "codex://threads/codex-fixture", 3, 100, 0)
             .unwrap()
@@ -121,7 +121,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
 
 #[test]
 fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() {
-    let (dir, store, _) = indexed(Harness::Codex, include_str!("../fixtures/codex.jsonl"));
+    let (dir, store, _) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
     assert!(
         query::scan(
             &store.db,
@@ -184,7 +184,7 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
 #[test]
 fn grep_and_show_return_each_line_once_per_role() {
     // Line 1's single tool_use block is indexed as an assistant message and a tool call.
-    let (_dir, store, _) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let lines = |hits: &[query::Hit]| {
         hits.iter()
             .map(|h| (h.line_no, h.role.clone()))
@@ -217,7 +217,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let data = (0..25)
         .map(|i| message("crowded", i, "2026-10-02T00:00:00Z", "groupneedle"))
         .collect::<String>();
-    let (dir, mut store, mut roots) = indexed(Harness::Claude, &data);
+    let (dir, mut store, mut roots) = indexed(Agent::Claude, &data);
     fs::write(
         roots[0].path.join("older.jsonl"),
         message("older", 0, "2026-10-01T00:00:00Z", "groupneedle"),
@@ -262,9 +262,9 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     assert!(!coverage.incomplete);
     assert!(shown[0].snippet.contains("crowded-24"));
     let codex = dir.path().join("codex.jsonl");
-    fs::write(&codex, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"crowded\"}}\n{\"type\":\"response_item\",\"timestamp\":\"2026-10-02T00:00:00Z\",\"payload\":{\"type\":\"message\",\"id\":\"same-session-other-harness\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"groupneedle\"}]}}\n").unwrap();
+    fs::write(&codex, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"crowded\"}}\n{\"type\":\"response_item\",\"timestamp\":\"2026-10-02T00:00:00Z\",\"payload\":{\"type\":\"message\",\"id\":\"same-session-other-agent\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"groupneedle\"}]}}\n").unwrap();
     roots.push(Root {
-        harness: Harness::Codex,
+        agent: Agent::Codex,
         path: codex,
     });
     store.refresh(&roots, false, None).unwrap();
@@ -291,12 +291,12 @@ fn grep_reads_each_range_from_its_own_file() {
     }
     let mut store = sessidx::store::Store::open(&dir.path().join("index.db")).unwrap();
     let roots = [Root {
-        harness: Harness::Pi,
+        agent: Agent::Pi,
         path: root,
     }];
     store.refresh(&roots, false, None).unwrap();
     let filters = Filters {
-        harness: vec![Harness::Pi],
+        agent: vec![Agent::Pi],
         ..Filters::default()
     };
     let (hits, coverage) =
@@ -331,7 +331,7 @@ fn cwd_filter_selects_the_directory_and_children_but_not_a_prefix_sibling() {
     store
         .refresh(
             &[Root {
-                harness: Harness::Claude,
+                agent: Agent::Claude,
                 path: logs,
             }],
             false,
@@ -369,7 +369,7 @@ fn search_terms_are_literal_phrases_joined_with_and() {
         serde_json::json!({"type":"user","uuid":session,"sessionId":session,"message":{"role":"user","content":text}}).to_string() + "\n"
     })
     .collect();
-    let (_dir, store, _) = indexed(Harness::Claude, &data);
+    let (_dir, store, _) = indexed(Agent::Claude, &data);
     let sessions = |q: &str| {
         let mut found: Vec<_> = query::search(&store.db, q, &Filters::default(), 20, 0)
             .map_err(|e| format!("{e:#}"))?

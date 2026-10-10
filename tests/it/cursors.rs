@@ -1,8 +1,8 @@
-use crate::common::{serial, sessidx, stream, three_harnesses};
+use crate::common::{serial, sessidx, stream, three_agents};
 use serde_json::json;
 use sessidx::{
     discovery::Root,
-    model::{Harness, name},
+    model::{Agent, name},
     store::Store,
 };
 use std::fs;
@@ -10,14 +10,10 @@ use std::fs;
 #[test]
 fn cli_streams_end_coverage_and_query_bound_cursors() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     for (args, kind, exit) in [
         (vec!["search", "sharedneedle"], "session", 0),
-        (
-            vec!["grep", "sharedneedle", "--harness", "claude"],
-            "hit",
-            0,
-        ),
+        (vec!["grep", "sharedneedle", "--agent", "claude"], "hit", 0),
         (vec!["show", "claude-session"], "record", 0),
         (vec!["count", "commands"], "count", 0),
         (vec!["sql", "SELECT 'row' AS type, 1 AS n"], "row", 0),
@@ -50,7 +46,7 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
     assert!(rows[0]["next"].is_null());
     for args in [
         vec!["search", "sharedneedle"],
-        vec!["grep", "sharedneedle", "--harness", "claude"],
+        vec!["grep", "sharedneedle", "--agent", "claude"],
         vec!["show", "claude-session"],
     ] {
         let mut first = args.clone();
@@ -108,7 +104,7 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
     for verb in ["search", "grep", "show"] {
         let mut args = match verb {
             "show" => vec!["show", "claude-session"],
-            "grep" => vec!["grep", "sharedneedle", "--harness", "claude"],
+            "grep" => vec!["grep", "sharedneedle", "--agent", "claude"],
             _ => vec!["search", "sharedneedle"],
         };
         args.extend(["--limit", "1"]);
@@ -130,20 +126,20 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
         let root = if verb == "search" {
             roots
                 .iter()
-                .find(|r| name(r.harness) == expected[0]["harness"])
+                .find(|r| name(r.agent) == expected[0]["agent"])
                 .unwrap()
         } else {
             &roots[0]
         };
         let id = format!("added-{verb}");
-        let record = match root.harness {
-            Harness::Claude => {
+        let record = match root.agent {
+            Agent::Claude => {
                 json!({"type":"user","uuid":id,"sessionId":"claude-session","timestamp":"2030-01-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}})
             }
-            Harness::Codex => {
+            Agent::Codex => {
                 json!({"type":"response_item","timestamp":"2030-01-01T00:00:00Z","payload":{"type":"message","id":id,"role":"user","content":[{"type":"input_text","text":"sharedneedle"}]}})
             }
-            Harness::Pi => {
+            Agent::Pi => {
                 json!({"type":"message","id":id,"timestamp":"2030-01-01T00:00:00Z","message":{"role":"user","content":"sharedneedle"}})
             }
         };
@@ -240,7 +236,7 @@ fn search_pagination_is_bounded_by_a_frozen_session_prefix() {
     }
     let store = Store::open(&dir.path().join("index.db")).unwrap();
     let roots = [Root {
-        harness: Harness::Pi,
+        agent: Agent::Pi,
         path: logs,
     }];
     let half = (reachable / 2).to_string();
@@ -291,7 +287,7 @@ fn search_pagination_is_bounded_by_a_frozen_session_prefix() {
 #[test]
 fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
     let serial = serial();
-    let (dir, store, mut roots) = three_harnesses();
+    let (dir, store, mut roots) = three_agents();
     for (name, text, year) in [
         ("rank-a", "alpha alpha alpha alpha beta", 2030),
         ("rank-b", "alpha beta beta beta beta", 2029),
@@ -299,7 +295,7 @@ fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
         let path = dir.path().join(format!("{name}.jsonl"));
         fs::write(&path, format!("{}\n", json!({"type":"message","id":name,"timestamp":format!("{year}-01-01T00:00:00Z"),"message":{"role":"user","content":text}}))).unwrap();
         roots.push(Root {
-            harness: Harness::Pi,
+            agent: Agent::Pi,
             path,
         });
     }
@@ -348,7 +344,7 @@ fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
     let newer = dir.path().join("newer.jsonl");
     fs::write(&newer,"{\"type\":\"message\",\"id\":\"newer\",\"message\":{\"role\":\"user\",\"content\":\"ordinary\"}}\n").unwrap();
     roots.push(Root {
-        harness: Harness::Pi,
+        agent: Agent::Pi,
         path: newer.clone(),
     });
     stream(
@@ -375,7 +371,7 @@ fn search_cursor_freezes_order_when_append_changes_fts_statistics() {
 #[test]
 fn garbage_and_edited_cursor_fields_are_rejected() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     let search = |cursor: &str, exit| {
         let out = sessidx(
             &serial,

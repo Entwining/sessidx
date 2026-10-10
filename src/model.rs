@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub enum Harness {
+pub enum Agent {
     Claude,
     Codex,
     Pi,

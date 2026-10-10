@@ -2,7 +2,7 @@ use crate::common::indexed;
 use sessidx::{
     counting::{self, By, Metric},
     discovery::Root,
-    model::{Harness, name},
+    model::{Agent, name},
     query::{Filters, Kind, Role},
     store::Store,
 };
@@ -10,7 +10,7 @@ use std::fs;
 
 #[test]
 fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
-    let (_dir, store, roots) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, store, roots) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let commands = counting::count(
         &store.db,
         Metric::Commands,
@@ -35,14 +35,14 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
     let grouped = counting::count(
         &store.db,
         Metric::Commands,
-        &[By::Harness, By::Model, By::Role, By::Week, By::Kind],
+        &[By::Agent, By::Model, By::Role, By::Week, By::Kind],
         Some("rg"),
         &Filters::default(),
     )
     .unwrap();
     assert_eq!(grouped.len(), 1);
     for (key, expected) in [
-        ("harness", "claude"),
+        ("agent", "claude"),
         ("model", "claude-sonnet"),
         ("role", "assistant"),
         ("week", "2026-W40"),
@@ -77,7 +77,7 @@ fn counts_state_units_denominators_unknowns_and_sql_is_read_only() {
     ] {
         for session in &sessions {
             let mut filters = Filters {
-                harness: vec![Harness::Claude, Harness::Pi],
+                agent: vec![Agent::Claude, Agent::Pi],
                 role: Some(role),
                 kind: Some(Kind::Unknown),
                 session: Some(session.clone()),
@@ -124,7 +124,7 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         "{\"type\":\"user\",\"sessionId\":\"doctor\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"bad\",\"is_error\":true,\"content\":\"DENIED: synthetic policy\"}]}}\n",
         "{\"type\":\"future-shape\"}\n{invalid\n{\"partial\":"
     );
-    let (_, store, _) = indexed(Harness::Claude, data);
+    let (_, store, _) = indexed(Agent::Claude, data);
     let d = counting::doctor(&store.db).unwrap();
     for (key, expected) in [
         ("files", 1),
@@ -176,7 +176,7 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
 #[test]
 fn program_filtered_failures_report_unparsed_calls_as_unclassified() {
     let fixture=include_str!("../fixtures/claude.jsonl").to_owned()+&serde_json::json!({"type":"assistant","uuid":"bad-call","sessionId":"claude-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"bad-shell","name":"Bash","input":{"command":"echo 'unterminated"}},{"type":"tool_use","id":"no-command","name":"Bash","input":{}}]}}).to_string()+"\n"+&serde_json::json!({"type":"user","uuid":"bad-result","sessionId":"claude-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"bad-shell","content":"done"}]}}).to_string()+"\n";
-    let (_, store, _) = indexed(Harness::Claude, &fixture);
+    let (_, store, _) = indexed(Agent::Claude, &fixture);
     let result = counting::count(
         &store.db,
         Metric::Failures,
@@ -221,7 +221,7 @@ fn copied_history() -> (tempfile::TempDir, Store) {
             "\n",
         )
     );
-    // The same native ID in another harness, and on another kind in one file.
+    // The same native ID in another agent, and on another kind in one file.
     let pi = format!(
         "{}{}",
         include_str!("../fixtures/pi.jsonl"),
@@ -233,12 +233,12 @@ fn copied_history() -> (tempfile::TempDir, Store) {
         )
     );
     let mut roots = Vec::new();
-    for (harness, fixture) in [
-        (Harness::Claude, claude.as_str()),
-        (Harness::Codex, include_str!("../fixtures/codex.jsonl")),
-        (Harness::Pi, pi.as_str()),
+    for (agent, fixture) in [
+        (Agent::Claude, claude.as_str()),
+        (Agent::Codex, include_str!("../fixtures/codex.jsonl")),
+        (Agent::Pi, pi.as_str()),
     ] {
-        let root = dir.path().join(name(harness));
+        let root = dir.path().join(name(agent));
         fs::create_dir(&root).unwrap();
         // A resumed or forked session repeats its parent's records with the same
         // native IDs; the copy's own context can attribute them differently.
@@ -248,10 +248,7 @@ fn copied_history() -> (tempfile::TempDir, Store) {
             fixture.replace("gpt-fixture", "gpt-copy"),
         )
         .unwrap();
-        roots.push(Root {
-            harness,
-            path: root,
-        });
+        roots.push(Root { agent, path: root });
     }
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     store.refresh(&roots, false, None).unwrap();
@@ -266,8 +263,8 @@ fn counts_equal_the_public_views_over_copied_history() {
         rows("SELECT count(*) FROM canonical_events WHERE kind IN ('tool_call','tool_result')")
             < rows("SELECT count(*) FROM events WHERE kind IN ('tool_call','tool_result')")
     );
-    let by = [By::Harness, By::Model, By::Role, By::Week, By::Kind];
-    let keys = "f.harness,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.kind";
+    let by = [By::Agent, By::Model, By::Role, By::Week, By::Kind];
+    let keys = "f.agent,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.kind";
     let from =
         "FROM canonical_events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
     // References over the public views, with and without a program selection.
@@ -279,8 +276,8 @@ fn counts_equal_the_public_views_over_copied_history() {
                     "c.program='rg'",
                     "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program='rg')",
                     "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))",
-                    "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program='rg')",
-                    "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.harness=f.harness AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))",
+                    "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.agent=f.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program='rg')",
+                    "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id WHERE cf.agent=f.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND (cp.parsed=0 OR cp.program IS NULL))",
                 ),
             };
         for (metric, sql) in [
@@ -293,7 +290,7 @@ fn counts_equal_the_public_views_over_copied_history() {
             (
                 Metric::Failures,
                 format!(
-                    "SELECT {keys},sum(o.ok=0 AND {selected_call}),sum({selected_call}),sum(({selected_call} AND o.ok IS NULL) OR {unknown_call}) {from} LEFT JOIN call_outcomes o ON o.harness=f.harness AND o.session_id=e.session_id AND o.call_id=e.call_id WHERE e.kind='tool_call' GROUP BY {keys}"
+                    "SELECT {keys},sum(o.ok=0 AND {selected_call}),sum({selected_call}),sum(({selected_call} AND o.ok IS NULL) OR {unknown_call}) {from} LEFT JOIN call_outcomes o ON o.agent=f.agent AND o.session_id=e.session_id AND o.call_id=e.call_id WHERE e.kind='tool_call' GROUP BY {keys}"
                 ),
             ),
             (
@@ -328,7 +325,7 @@ fn counts_equal_the_public_views_over_copied_history() {
                     .unwrap()
                     .iter()
                     .map(|row| {
-                        ["harness", "model", "role", "week", "kind"]
+                        ["agent", "model", "role", "week", "kind"]
                             .iter()
                             .map(|k| row[k].as_str().unwrap().to_owned())
                             .chain(
@@ -352,7 +349,7 @@ fn counts_equal_the_public_views_over_copied_history() {
 #[test]
 fn canonical_events_are_the_first_ranked_copy_of_each_native_event() {
     let (_dir, store) = copied_history();
-    let ranked = "SELECT * FROM (SELECT e.*, row_number() OVER (PARTITION BY f.harness, CASE WHEN e.native_id IS NULL THEN 'row:'||e.id ELSE 'native:'||e.native_id END, e.kind ORDER BY coalesce(f.first_ts,'9999'),f.path,e.line_no,e.ordinal) AS copy_rank FROM events e JOIN files f ON f.id=e.file_id) WHERE copy_rank=1";
+    let ranked = "SELECT * FROM events WHERE id IN (SELECT id FROM (SELECT e.id, row_number() OVER (PARTITION BY f.agent, CASE WHEN e.native_id IS NULL THEN 'row:'||e.id ELSE 'native:'||e.native_id END, e.kind ORDER BY coalesce(f.first_ts,'9999'),f.path,e.line_no,e.ordinal) AS copy_rank FROM events e JOIN files f ON f.id=e.file_id) WHERE copy_rank=1)";
     let rows = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
     let canonical = rows("SELECT count(*) FROM canonical_events");
     assert!(canonical < rows("SELECT count(*) FROM events"));

@@ -1,5 +1,5 @@
 use crate::{
-    model::{Harness, name},
+    model::{Agent, name},
     redaction::{redact, spaced_cjk},
     store::MAX_RECORD,
 };
@@ -38,9 +38,9 @@ pub enum Kind {
 
 #[derive(Args, Clone, Debug, Default, Serialize)]
 pub struct Filters {
-    /// Only this harness; repeat for a union
+    /// Only this agent; repeat for a union
     #[arg(long, value_enum)]
-    pub harness: Vec<Harness>,
+    pub agent: Vec<Agent>,
     /// Only events from this speaker
     #[arg(long, value_enum)]
     pub role: Option<Role>,
@@ -70,7 +70,7 @@ pub struct Filters {
 
 impl Filters {
     pub fn narrowed(&self) -> bool {
-        !self.harness.is_empty()
+        !self.agent.is_empty()
             || self.since.is_some()
             || self.until.is_some()
             || self.cwd.is_some()
@@ -84,12 +84,12 @@ impl Filters {
             conditions.push("e.id<=?".into());
             args.push(Value::Integer(high_water));
         }
-        if !self.harness.is_empty() {
+        if !self.agent.is_empty() {
             conditions.push(format!(
-                "f.harness IN ({})",
-                vec!["?"; self.harness.len()].join(",")
+                "f.agent IN ({})",
+                vec!["?"; self.agent.len()].join(",")
             ));
-            args.extend(self.harness.iter().map(|h| Value::Text(name(*h))));
+            args.extend(self.agent.iter().map(|h| Value::Text(name(*h))));
         }
         for (field, value) in [
             ("e.role", self.role.map(name)),
@@ -152,7 +152,7 @@ fn date(s: &str) -> Result<DateTime<Utc>> {
 
 #[derive(Debug, Serialize)]
 pub struct Hit {
-    pub harness: String,
+    pub agent: String,
     pub session_id: String,
     pub path: String,
     pub line_no: u64,
@@ -180,21 +180,21 @@ pub struct Coverage {
     pub bytes: u64,
 }
 
-const COLUMNS: &str = "f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
+const COLUMNS: &str = "f.agent,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
 const FROM: &str = "FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
 // Rule: docs/formats.md `line_role_record`. The probe reads base tables: through the
-// events view, its string joins dominated stepping on harness-wide grep scans. Role
+// events view, its string joins dominated stepping on agent-wide grep scans. Role
 // mirrors the view's coalesce.
 const FIRST_OF_LINE_ROLE: &str = "e.ordinal=(SELECT min(l.ordinal) FROM locations l LEFT JOIN event_details d ON d.event_id=l.id LEFT JOIN strings role ON role.id=d.role_ref WHERE l.file_id=e.file_id AND l.line_no=e.line_no AND coalesce(role.value,'unknown')=e.role)";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
-    let harness: String = row.get(0)?;
+    let agent: String = row.get(0)?;
     let session_id: String = row.get(1)?;
     let path: String = row.get(2)?;
     let line_no: u64 = row.get(3)?;
     let reference = format!("{path}:{line_no}");
     Ok(Hit {
-        harness,
+        agent,
         session_id,
         path,
         line_no,
@@ -235,7 +235,7 @@ pub const SEARCH_PAGE_SESSIONS: usize = 100;
 
 #[derive(Debug, Serialize)]
 pub struct Session {
-    pub harness: String,
+    pub agent: String,
     pub session_id: String,
     pub path: String,
     pub ts: Option<String>,
@@ -271,29 +271,29 @@ pub fn search(
     // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
     let sql = format!(
         "WITH matches AS MATERIALIZED (
-          SELECT f.harness,e.session_id,e.id,e.ts,bm25(fts) AS score {FROM}
+          SELECT f.agent,e.session_id,e.id,e.ts,bm25(fts) AS score {FROM}
           JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ?
         ), ordering AS MATERIALIZED (SELECT ? AS ranks), all_heads AS MATERIALIZED (
-          SELECT harness,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n,min(id) AS anchor
-          FROM matches GROUP BY harness,session_id
+          SELECT agent,session_id,min(score) AS score,max(ts) AS ts,count(*) AS n,min(id) AS anchor
+          FROM matches GROUP BY agent,session_id
         ), ordered_heads AS MATERIALIZED (
           SELECT h.*,j.key AS position FROM ordering CROSS JOIN json_each(ordering.ranks) j
           JOIN all_heads h ON j.value=h.anchor
           UNION ALL SELECT h.*,0 AS position FROM all_heads h CROSS JOIN ordering WHERE ordering.ranks IS NULL
         ), heads AS MATERIALIZED (
-          SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,harness,session_id LIMIT ? OFFSET ?
+          SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,agent,session_id LIMIT ? OFFSET ?
         ), ranked AS (
           SELECT m.id,row_number() OVER (
-            PARTITION BY m.harness,m.session_id ORDER BY m.score,m.ts DESC,m.id DESC
-          ) AS n FROM matches m JOIN heads h USING(harness,session_id)
+            PARTITION BY m.agent,m.session_id ORDER BY m.score,m.ts DESC,m.id DESC
+          ) AS n FROM matches m JOIN heads h USING(agent,session_id)
         )
         SELECT {COLUMNS},h.ts,h.n,(SELECT count(*) FROM all_heads),
           CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(anchor)
-            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,harness,session_id LIMIT ?)) END,
+            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,agent,session_id LIMIT ?)) END,
           coalesce(e.text,'')
         {FROM} CROSS JOIN ordering
-        JOIN ranked r ON r.id=e.id JOIN heads h ON h.harness=f.harness AND h.session_id=e.session_id
-        WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.harness,h.session_id,r.n"
+        JOIN ranked r ON r.id=e.id JOIN heads h ON h.agent=f.agent AND h.session_id=e.session_id
+        WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.agent,h.session_id,r.n"
     );
     let mut stmt = db.prepare(&sql)?;
     let mut matched_sessions = 0;
@@ -311,11 +311,11 @@ pub fn search(
     for row in rows {
         let (hit, ts, matched_hits) = row?;
         match sessions.last_mut() {
-            Some(s) if s.harness == hit.harness && s.session_id == hit.session_id => {
+            Some(s) if s.agent == hit.agent && s.session_id == hit.session_id => {
                 s.hits.push(hit);
             }
             _ => sessions.push(Session {
-                harness: hit.harness.clone(),
+                agent: hit.agent.clone(),
                 session_id: hit.session_id.clone(),
                 path: hit.path.clone(),
                 ts,
@@ -390,7 +390,7 @@ pub fn scan(
 ) -> Result<(Vec<Hit>, Coverage)> {
     anyhow::ensure!(
         filters.narrowed(),
-        "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --harness"
+        "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --agent"
     );
     let deadline = Instant::now() + budget;
     db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;

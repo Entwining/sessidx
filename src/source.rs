@@ -34,13 +34,13 @@ fn compressed_path(plain: &Path) -> PathBuf {
 }
 
 /// The plain file, else its compressed sibling, or `None` when neither exists, as
-/// when a harness deletes or archives the log after discovery listed it.
+/// when an agent deletes or archives the log after discovery listed it.
 pub fn open(plain: &Path) -> io::Result<Option<Source>> {
     open_with(plain, |path| File::open(path))
 }
 
 /// [`open`] with the call that opens each candidate supplied, so a test can
-/// change the files between attempts as a harness can.
+/// change the files between attempts as an agent can.
 pub fn open_with(
     plain: &Path,
     mut open_file: impl FnMut(&Path) -> io::Result<File>,

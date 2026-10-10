@@ -21,22 +21,22 @@ const TOOL_EVENTS: &str = "WITH canonical_events AS MATERIALIZED (
  SELECT c.id,c.file_id,c.session_ref,session.value AS session_id,c.ts,model.value AS model,coalesce(role.value,'unknown') AS role,kind.value AS kind,
  CASE WHEN c.call_id IS NULL THEN NULL ELSE lower(hex(c.call_id)) END AS call_id,c.call_id AS call_ref,c.ok
  FROM (SELECT l.id,l.file_id,l.session_ref,l.ts,l.model_ref,d.role_ref,d.kind_ref,d.call_id,d.ok,row_number() OVER (
- PARTITION BY f.harness,coalesce(l.native_id,l.id),d.kind_ref ORDER BY coalesce(f.first_ts,'9999'),f.path,l.line_no,l.ordinal) AS copy_rank
+ PARTITION BY f.agent,coalesce(l.native_id,l.id),d.kind_ref ORDER BY coalesce(f.first_ts,'9999'),f.path,l.line_no,l.ordinal) AS copy_rank
  FROM event_details d CROSS JOIN locations l ON l.id=d.event_id JOIN files f ON f.id=l.file_id
  WHERE d.kind_ref IN (SELECT id FROM strings WHERE value IN ('tool_call','server_tool_call','tool_result'))) c
  JOIN strings session ON session.id=c.session_ref LEFT JOIN strings model ON model.id=c.model_ref
  LEFT JOIN strings role ON role.id=c.role_ref JOIN strings kind ON kind.id=c.kind_ref
  WHERE c.copy_rank=1),
 call_outcomes AS MATERIALIZED (
- SELECT f.harness,e.session_id,e.call_id,CASE WHEN sum(ok=0)>0 THEN 0 WHEN sum(ok=1)>0 THEN 1 END AS ok
- FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id)";
+ SELECT f.agent,e.session_id,e.call_id,CASE WHEN sum(ok=0)>0 THEN 0 WHEN sum(ok=1)>0 THEN 1 END AS ok
+ FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.agent,e.session_id,e.call_id)";
 
 /// Calls whose canonical event holds a site of `:program`, joined to results
 /// instead of probed per result: with a GROUP BY, SQLite 3.46 and 3.53 plan
 /// that probe as a scan of `canonical_events` for every result.
 const PROGRAM_CALLS: &str = ",
 program_calls AS MATERIALIZED (
- SELECT DISTINCT cf.harness,ce.session_ref,ce.call_ref FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id
+ SELECT DISTINCT cf.agent,ce.session_ref,ce.call_ref FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id JOIN files cf ON cf.id=ce.file_id
  WHERE cp.program=:program AND ce.call_ref IS NOT NULL)";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -48,7 +48,7 @@ pub enum Metric {
 
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
 pub enum By {
-    Harness,
+    Agent,
     Model,
     Role,
     Week,
@@ -67,7 +67,7 @@ pub fn count(
     for &key in by {
         keys.push(name(key));
         expressions.push(match key {
-            By::Harness => "f.harness",
+            By::Agent => "f.agent",
             By::Model => "coalesce(e.model,'unknown')",
             By::Role => "e.role",
             By::Week => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
@@ -90,7 +90,7 @@ pub fn count(
     let unknown_program = if program.is_none() {
         "0"
     } else if denials_by_program {
-        "EXISTS(SELECT 1 FROM event_details cd JOIN commands cp ON cp.event_id=cd.event_id JOIN locations cl ON cl.id=cd.event_id JOIN files cf ON cf.id=cl.file_id WHERE cd.session_ref=e.session_ref AND cd.call_id=e.call_ref AND cf.harness=f.harness AND (cp.parsed=0 OR cp.program IS NULL))"
+        "EXISTS(SELECT 1 FROM event_details cd JOIN commands cp ON cp.event_id=cd.event_id JOIN locations cl ON cl.id=cd.event_id JOIN files cf ON cf.id=cl.file_id WHERE cd.session_ref=e.session_ref AND cd.call_id=e.call_ref AND cf.agent=f.agent AND (cp.parsed=0 OR cp.program IS NULL))"
     } else {
         "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND (cp.parsed=0 OR cp.program IS NULL))"
     };
@@ -117,7 +117,7 @@ pub fn count(
             selected_denominator.as_str(),
             unknown_outcomes.as_str(),
             "tool_call_attempts_without_outcome_or_program",
-            "LEFT JOIN call_outcomes o ON o.harness=f.harness AND o.session_id=e.session_id AND o.call_id=e.call_id",
+            "LEFT JOIN call_outcomes o ON o.agent=f.agent AND o.session_id=e.session_id AND o.call_id=e.call_id",
             "tool_call",
         ),
         Metric::Denials => (
@@ -129,7 +129,7 @@ pub fn count(
             unknown_denials.as_str(),
             "tool_result_events_with_unknown_denial_reason_or_program",
             if denials_by_program {
-                "LEFT JOIN program_calls pc ON pc.harness=f.harness AND pc.session_ref=e.session_ref AND pc.call_ref=e.call_ref"
+                "LEFT JOIN program_calls pc ON pc.agent=f.agent AND pc.session_ref=e.session_ref AND pc.call_ref=e.call_ref"
             } else {
                 ""
             },
@@ -201,7 +201,7 @@ pub fn doctor(db: &Connection) -> Result<Json> {
     let unparsed = scalar("SELECT count(DISTINCT event_id) FROM commands WHERE parsed=0")?;
     let signatures:Vec<Json>=db.prepare("SELECT signature,sum(n) FROM shapes WHERE known=0 GROUP BY signature ORDER BY sum(n) DESC LIMIT 100")?.query_map([],|r|Ok(json!({"signature":redact(&r.get::<_,String>(0)?),"records":r.get::<_,i64>(1)?})))?.collect::<rusqlite::Result<_>>()?;
     Ok(
-        json!({"files":scalar("SELECT count(*) FROM files")?,"sessions":scalar("SELECT count(DISTINCT harness||':'||session_id) FROM sessions")?,"events":scalar("SELECT count(*) FROM events")?,"canonical_events":scalar("SELECT count(*) FROM canonical_events")?,"unknown_shapes":{"numerator":unknown,"denominator":shapes,"rate":if shapes==0 {0.0}else {unknown as f64/shapes as f64},"signatures":signatures},"unparsed_shell_calls":{"numerator":unparsed,"denominator":shell,"rate":if shell==0 {0.0}else {unparsed as f64/shell as f64}},"parse_errors":scalar("SELECT coalesce(sum(parse_errors),0) FROM files")?,"incomplete_files":scalar("SELECT count(*) FROM files WHERE index_status!='ready'")?,"unknown_models":scalar("SELECT count(*) FROM events WHERE model IS NULL")?,"unknown_session_kinds":scalar("SELECT count(*) FROM sessions WHERE kind='unknown'")?,"unclassified_denials":scalar("SELECT count(*) FROM denials WHERE reason_id='unknown'")?}),
+        json!({"files":scalar("SELECT count(*) FROM files")?,"sessions":scalar("SELECT count(DISTINCT agent||':'||session_id) FROM sessions")?,"events":scalar("SELECT count(*) FROM events")?,"canonical_events":scalar("SELECT count(*) FROM canonical_events")?,"unknown_shapes":{"numerator":unknown,"denominator":shapes,"rate":if shapes==0 {0.0}else {unknown as f64/shapes as f64},"signatures":signatures},"unparsed_shell_calls":{"numerator":unparsed,"denominator":shell,"rate":if shell==0 {0.0}else {unparsed as f64/shell as f64}},"parse_errors":scalar("SELECT coalesce(sum(parse_errors),0) FROM files")?,"incomplete_files":scalar("SELECT count(*) FROM files WHERE index_status!='ready'")?,"unknown_models":scalar("SELECT count(*) FROM events WHERE model IS NULL")?,"unknown_session_kinds":scalar("SELECT count(*) FROM sessions WHERE kind='unknown'")?,"unclassified_denials":scalar("SELECT count(*) FROM denials WHERE reason_id='unknown'")?}),
     )
 }
 

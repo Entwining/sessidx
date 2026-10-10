@@ -1,7 +1,7 @@
 use crate::common::snapshot;
 use sessidx::{
     discovery::Root,
-    model::Harness,
+    model::Agent,
     query::{self, Filters},
     source,
     store::Store,
@@ -26,7 +26,7 @@ fn codex(dir: &Path) -> (Store, Vec<Root>, PathBuf) {
     (
         store,
         vec![Root {
-            harness: Harness::Codex,
+            agent: Agent::Codex,
             path: root,
         }],
         plain,
@@ -56,7 +56,7 @@ fn reference(dir: &Path) -> Store {
     store
         .refresh(
             &[Root {
-                harness: Harness::Codex,
+                agent: Agent::Codex,
                 path,
             }],
             false,
@@ -68,7 +68,7 @@ fn reference(dir: &Path) -> Store {
 
 fn grepped(store: &Store, pattern: &str) -> Vec<String> {
     let filters = Filters {
-        harness: vec![Harness::Codex],
+        agent: vec![Agent::Codex],
         ..Filters::default()
     };
     let (hits, coverage) = query::scan(
@@ -274,7 +274,7 @@ fn an_unreadable_plain_file_is_an_error_not_a_missing_one() {
     fs::write(zst(&plain), compress(FIXTURE.as_bytes())).unwrap();
     fs::set_permissions(&plain, fs::Permissions::from_mode(0o000)).unwrap();
     // Falling back to the sibling or to "missing" would index or delete the
-    // session on the strength of a file the harness has not removed.
+    // session on the strength of a file the agent has not removed.
     assert_eq!(
         source::open(&plain).err().map(|e| e.kind()),
         Some(std::io::ErrorKind::PermissionDenied)

@@ -1,7 +1,7 @@
 [
-  {"harness":"claude","record":{"type":"user","uuid":"prefix-claude","message":{"content":[{"type":"tool_result","is_error":false,"content":"outputneedle Claude synthetic output"}]}}},
-  {"harness":"codex","record":{"type":"response_item","payload":{"type":"function_call_output","call_id":"prefix-codex","output":[{"type":"input_text","text":"outputneedle Codex synthetic output"}]}}},
-  {"harness":"pi","record":{"type":"message","id":"prefix-pi","message":{"role":"toolResult","isError":false,"content":[{"type":"text","text":"outputneedle Pi synthetic output"}]}}},
-  {"harness":"claude","record":{"type":"attachment","uuid":"prefix-diagnostic","attachment":{"type":"diagnostics","files":[{"uri":"file:///synthetic/source.ts","diagnostics":[{"message":"diagnosticneedle synthetic diagnostic","severity":"Warning","source":"cSpell"}]}]}}},
-  {"harness":"claude","record":{"type":"attachment","uuid":"prefix-context","attachment":{"type":"context","files":[{"diagnostics":[{"message":"diagnosticneedle unqualified context"}]}]}}}
+  {"agent":"claude","record":{"type":"user","uuid":"prefix-claude","message":{"content":[{"type":"tool_result","is_error":false,"content":"outputneedle Claude synthetic output"}]}}},
+  {"agent":"codex","record":{"type":"response_item","payload":{"type":"function_call_output","call_id":"prefix-codex","output":[{"type":"input_text","text":"outputneedle Codex synthetic output"}]}}},
+  {"agent":"pi","record":{"type":"message","id":"prefix-pi","message":{"role":"toolResult","isError":false,"content":[{"type":"text","text":"outputneedle Pi synthetic output"}]}}},
+  {"agent":"claude","record":{"type":"attachment","uuid":"prefix-diagnostic","attachment":{"type":"diagnostics","files":[{"uri":"file:///synthetic/source.ts","diagnostics":[{"message":"diagnosticneedle synthetic diagnostic","severity":"Warning","source":"cSpell"}]}]}}},
+  {"agent":"claude","record":{"type":"attachment","uuid":"prefix-context","attachment":{"type":"context","files":[{"diagnostics":[{"message":"diagnosticneedle unqualified context"}]}]}}}
 ]

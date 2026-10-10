@@ -1,5 +1,5 @@
 use crate::{
-    model::{Event, Harness},
+    model::{Agent, Event},
     normalize::text,
 };
 use regex::Regex;
@@ -14,9 +14,9 @@ static PARTIAL_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#""status"\s*:\s*"rejected"\s*,\s*"reason"\s*:\s*("(?:\\.|[^"\\])*")"#)
         .expect("static regex is valid")
 });
-pub fn classify(e: &mut Event, output: &Value, harness: Harness) {
-    if harness != Harness::Codex {
-        flag_denials(output, harness, e, &mut true);
+pub fn classify(e: &mut Event, output: &Value, agent: Agent) {
+    if agent != Agent::Codex {
+        flag_denials(output, agent, e, &mut true);
         return;
     }
     let mut texts = Vec::new();
@@ -34,7 +34,7 @@ pub fn classify(e: &mut Event, output: &Value, harness: Harness) {
         {
             failed = true;
         }
-        denials(s, harness, e, true);
+        denials(s, agent, e, true);
     }
     failed |= !e.denials.is_empty() || codes.iter().any(|n| *n != 0);
     // Mixed shell/MCP outcomes: tests/fixtures/outcomes.jsonl.
@@ -231,34 +231,34 @@ pub fn reason_id(s: &str) -> &'static str {
     "unknown"
 }
 
-fn flag_denials(v: &Value, harness: Harness, e: &mut Event, leading: &mut bool) {
+fn flag_denials(v: &Value, agent: Agent, e: &mut Event, leading: &mut bool) {
     match v {
         Value::String(s) => {
-            denials(s, harness, e, *leading);
+            denials(s, agent, e, *leading);
             if !s.trim().is_empty() {
                 *leading = false;
             }
         }
         Value::Array(a) => {
             for v in a {
-                flag_denials(v, harness, e, leading);
+                flag_denials(v, agent, e, leading);
             }
         }
         Value::Object(m) => {
             if let Some(v) = m.get("text").or_else(|| m.get("content")) {
-                flag_denials(v, harness, e, leading);
+                flag_denials(v, agent, e, leading);
             }
         }
         _ => {}
     }
 }
 
-fn denials(s: &str, harness: Harness, e: &mut Event, leading: bool) {
+fn denials(s: &str, agent: Agent, e: &mut Event, leading: bool) {
     // Native success and hook-check errors: tests/fixtures/hook-check.jsonl.
-    if harness != Harness::Codex && e.ok == Some(true) {
+    if agent != Agent::Codex && e.ok == Some(true) {
         return;
     }
-    if harness == Harness::Codex {
+    if agent == Agent::Codex {
         let Some(payload) = s.trim_start().strip_prefix("Script error:") else {
             return;
         };
@@ -284,7 +284,7 @@ fn denials(s: &str, harness: Harness, e: &mut Event, leading: bool) {
             && (line.starts_with("DENIED:") || line.starts_with("Blocked by agent-guard:"))
         {
             Some("guard")
-        } else if harness == Harness::Claude
+        } else if agent == Agent::Claude
             && e.ok == Some(false)
             && s.trim_start().starts_with(line)
             && line
@@ -294,7 +294,7 @@ fn denials(s: &str, harness: Harness, e: &mut Event, leading: bool) {
             && line.contains("denied")
         {
             Some("native_denial")
-        } else if harness == Harness::Pi
+        } else if agent == Agent::Pi
             && leading
             && e.ok == Some(false)
             && s.trim_start().starts_with(line)

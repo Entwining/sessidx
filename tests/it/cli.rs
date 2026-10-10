@@ -1,4 +1,4 @@
-use crate::common::{serial, sessidx, stream, three_harnesses};
+use crate::common::{serial, sessidx, stream, three_agents};
 use serde_json::json;
 use std::{
     fs,
@@ -25,7 +25,7 @@ fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
         concat!("sessidx ", env!("CARGO_PKG_VERSION"), "\n")
     );
     let value = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
-    let error = invoke(&["search", "needle", "--harness", value]);
+    let error = invoke(&["search", "needle", "--agent", value]);
     let rows = stream(&error, 2);
     assert!(rows[0]["error"].as_str().unwrap().contains("[REDACTED]"));
     assert!(!String::from_utf8_lossy(&error.stdout).contains(value));
@@ -63,11 +63,11 @@ fn sql_without_an_index_names_the_build_command() {
 }
 
 #[test]
-fn cli_validates_enum_values_and_unions_harnesses() {
+fn cli_validates_enum_values_and_unions_agents() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     for (flag, bad, values) in [
-        ("--harness", "claude_code", vec!["claude", "codex", "pi"]),
+        ("--agent", "claude_code", vec!["claude", "codex", "pi"]),
         (
             "--role",
             "toolResult",
@@ -107,9 +107,9 @@ fn cli_validates_enum_values_and_unions_harnesses() {
             &[
                 "search",
                 "sharedneedle",
-                "--harness",
+                "--agent",
                 "claude",
-                "--harness",
+                "--agent",
                 "pi",
                 "--role",
                 "user",
@@ -125,7 +125,7 @@ fn cli_validates_enum_values_and_unions_harnesses() {
     assert_eq!(data.len(), 2);
     assert!(
         data.iter()
-            .all(|v| v["harness"] == "claude" || v["harness"] == "pi")
+            .all(|v| v["agent"] == "claude" || v["agent"] == "pi")
     );
     for flag in ["--json", "--scan", "--file", "--offset"] {
         stream(
@@ -167,7 +167,7 @@ fn cli_validates_enum_values_and_unions_harnesses() {
 #[test]
 fn a_closed_stdout_ends_quietly() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     // Output larger than the pipe buffer forces a write after the reader is gone.
     let query = "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<5000) SELECT i, printf('%040d', i) AS pad FROM n";
     let mut child = sessidx(&serial, &store.path, &roots, &["sql", query])
@@ -188,7 +188,7 @@ fn a_closed_stdout_ends_quietly() {
 #[test]
 fn cli_writer_contention_returns_stale_without_waiting() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     let _lock = store.lock().unwrap().unwrap();
     store.db.execute_batch("BEGIN IMMEDIATE;").unwrap();
     let start = Instant::now();
@@ -248,20 +248,20 @@ fn cli_rejects_malformed_values_in_one_end_record_naming_the_flag() {
             vec!["'--limit <LIMIT>'", "1..=1000"],
         ),
         (
-            vec!["count", "commands", "--by", "harness,week,foo"],
-            vec!["'foo' for '--by", "harness, model, role, week, kind"],
+            vec!["count", "commands", "--by", "agent,week,foo"],
+            vec!["'foo' for '--by", "agent, model, role, week, kind"],
         ),
         (
             vec!["--root", "claude_code=/synthetic", "sql", "SELECT 1"],
             vec![
-                "'--root <HARNESS=PATH>'",
+                "'--root <AGENT=PATH>'",
                 "'claude_code'",
                 "claude, codex, pi",
             ],
         ),
         (
             vec!["--root", "/synthetic", "index"],
-            vec!["'--root <HARNESS=PATH>'", "HARNESS=PATH"],
+            vec!["'--root <AGENT=PATH>'", "AGENT=PATH"],
         ),
         (
             vec!["grep", "x", "--since", "2026-13-01"],
@@ -272,7 +272,7 @@ fn cli_rejects_malformed_values_in_one_end_record_naming_the_flag() {
             vec!["'--until <TIME>'", "RFC 3339 or YYYY-MM-DD"],
         ),
         (
-            vec!["count", "commands", "--by", "harness", "--by", "model"],
+            vec!["count", "commands", "--by", "agent", "--by", "model"],
             vec!["'--by [<BY>]' cannot be used multiple times"],
         ),
         (
@@ -295,7 +295,7 @@ fn cli_rejects_malformed_values_in_one_end_record_naming_the_flag() {
 #[test]
 fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     let count = |args: &[&str], exit| {
         let mut args = args.to_vec();
         args.insert(0, "count");
@@ -308,7 +308,7 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
         rows[..rows.len() - 1].to_vec()
     };
     let keys = |row: &serde_json::Value| {
-        let mut keys: Vec<_> = ["harness", "model", "role", "week", "kind"]
+        let mut keys: Vec<_> = ["agent", "model", "role", "week", "kind"]
             .into_iter()
             .filter(|k| row.get(k).is_some())
             .collect();
@@ -317,14 +317,14 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
     };
     let grouped = count(&["commands"], 0);
     assert_eq!(grouped.len(), 1);
-    assert_eq!(keys(&grouped[0]), ["harness", "model", "role", "week"]);
-    assert_eq!(grouped[0]["harness"], "claude");
+    assert_eq!(keys(&grouped[0]), ["agent", "model", "role", "week"]);
+    assert_eq!(grouped[0]["agent"], "claude");
     let total = count(&["commands", "--by"], 0);
     assert_eq!(total.len(), 1);
     assert!(keys(&total[0]).is_empty());
     assert_eq!(total[0]["denominator"], 1);
-    let chosen = count(&["commands", "--by", "kind,harness"], 0);
-    assert_eq!(keys(&chosen[0]), ["harness", "kind"]);
+    let chosen = count(&["commands", "--by", "kind,agent"], 0);
+    assert_eq!(keys(&chosen[0]), ["agent", "kind"]);
     let search = |bound: &[&str], exit| {
         let mut args = vec!["search", "sharedneedle"];
         args.extend(bound);
@@ -343,11 +343,11 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
 #[test]
 fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
     let serial = serial();
-    let (_dir, store, roots) = three_harnesses();
+    let (_dir, store, roots) = three_agents();
     for args in [
-        vec!["grep", "absentneedle", "--harness", "claude"],
+        vec!["grep", "absentneedle", "--agent", "claude"],
         vec!["show", "absent-session"],
-        vec!["count", "commands", "--harness", "pi"],
+        vec!["count", "commands", "--agent", "pi"],
         vec!["sql", "SELECT 1 AS n WHERE 0"],
     ] {
         let rows = stream(

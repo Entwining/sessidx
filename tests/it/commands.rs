@@ -1,6 +1,6 @@
 use sessidx::{
     adapters,
-    model::{Harness, State},
+    model::{Agent, State},
     shell,
 };
 
@@ -37,7 +37,7 @@ fn codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed() {
     let long = serde_json::json!({"name":"long","source":format!("tools.exec_command({{cmd: \"rg {}\"}});", "a".repeat(2000)),"programs":["rg"],"unparsed":0});
     for f in fixtures.as_array().unwrap().iter().chain([&long]) {
         let r = adapters::parse(
-            Harness::Codex,
+            Agent::Codex,
             &serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"wrapper","input":f["source"]}}),
             &mut State::default(),
         );

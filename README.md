@@ -1,6 +1,6 @@
 # sessidx
 
-sessidx indexes local Claude Code, Codex, and Pi session logs (JSONL) into SQLite for two uses: finding the past session where something happened, by a person or by an agent with a shell, and counting behavior by harness, model, role, and week with stated denominators. Raw logs remain read-only and authoritative; the index is derived and can always be rebuilt.
+sessidx indexes local Claude Code, Codex, and Pi session logs (JSONL) into SQLite for two uses: finding the past session where something happened, by a person or by an agent with a shell, and counting behavior by agent, model, role, and week with stated denominators. Raw logs remain read-only and authoritative; the index is derived and can always be rebuilt.
 
 The database, `~/.cache/sessidx/index.db`, holds redacted copies of messages, tool inputs, shell argv, and the first 2 KiB of each tool output, plus exact source paths and session IDs. Redaction is heuristic ([accepted gaps](docs/design.md#privacy-and-limits)), so keep the database as private as the logs themselves. sessidx creates it readable only by you and makes no network connections; deleting `~/.cache/sessidx` removes everything it stored.
 
@@ -44,10 +44,10 @@ $ sessidx search 'Redis SQLite' | jq -c 'select(.type == "session") | .hits[] | 
 Counts state their unit and denominator, and how many units they could not classify:
 
 ```console
-$ sessidx count failures --by harness | jq -c 'select(.type == "count") | {harness, numerator, denominator, unclassified, unit}'
-{"harness":"claude","numerator":0,"denominator":2,"unclassified":0,"unit":"tool_call_attempts"}
-{"harness":"codex","numerator":1,"denominator":3,"unclassified":0,"unit":"tool_call_attempts"}
-{"harness":"pi","numerator":0,"denominator":1,"unclassified":0,"unit":"tool_call_attempts"}
+$ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, numerator, denominator, unclassified, unit}'
+{"agent":"claude","numerator":0,"denominator":2,"unclassified":0,"unit":"tool_call_attempts"}
+{"agent":"codex","numerator":1,"denominator":3,"unclassified":0,"unit":"tool_call_attempts"}
+{"agent":"pi","numerator":0,"denominator":1,"unclassified":0,"unit":"tool_call_attempts"}
 ```
 
 The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
@@ -55,9 +55,9 @@ The last line of every command is an `end` record. Check its `complete` field be
 | Command | Use it to |
 | --- | --- |
 | `search 'TERMS'` | Rank sessions by relevance, with up to three best hits each |
-| `grep 'REGEX' --harness codex` | Return every match within a scope narrowed by session, directory, time, or harness |
+| `grep 'REGEX' --agent codex` | Return every match within a scope narrowed by session, directory, time, or agent |
 | `show REF` | Open a hit's `path:line`, a session ID, or a `codex://threads/ID` link |
-| `count commands --program rg` | Count shell commands, tool failures, or denials by harness, model, role, week, or session kind |
+| `count commands --program rg` | Count shell commands, tool failures, or denials by agent, model, role, week, or session kind |
 | `sql 'SELECT ...'` | Run one read-only query over the [schema](src/schema.sql), without refreshing |
 | `doctor` | Report parser and log-shape coverage |
 | `index --full` | Rebuild the index, as a schema change requires |
@@ -66,7 +66,7 @@ The last line of every command is an `end` record. Check its `complete` field be
 
 ### Keep history searchable
 
-When a harness deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/data-usage#data-retention) (30 days by default; sessions started or last continued in Claude Desktop or Cowork are exempt by default), so raise that setting to keep a longer searchable history.
+When an agent deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/data-usage#data-retention) (30 days by default; sessions started or last continued in Claude Desktop or Cowork are exempt by default), so raise that setting to keep a longer searchable history.
 
 ## Use it from an agent
 

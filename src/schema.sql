@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS index_changes (
  id INTEGER PRIMARY KEY AUTOINCREMENT, first_event_id INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS files (
- id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, harness TEXT NOT NULL,
+ id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, agent TEXT NOT NULL,
  dev INTEGER NOT NULL, inode INTEGER NOT NULL, size INTEGER NOT NULL, mtime TEXT NOT NULL,
  prefix_hash TEXT NOT NULL, prefix_len INTEGER NOT NULL,
  bytes_indexed INTEGER NOT NULL DEFAULT 0, lines_indexed INTEGER NOT NULL DEFAULT 0,
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS files (
 -- Metadata is per source file, so replacements and model history cannot leave orphan sessions.
 CREATE TABLE IF NOT EXISTS sessions (
  file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
- harness TEXT NOT NULL, session_id TEXT NOT NULL, cwd TEXT NOT NULL,
+ agent TEXT NOT NULL, session_id TEXT NOT NULL, cwd TEXT NOT NULL,
  parent_id TEXT, kind TEXT NOT NULL, kind_source TEXT NOT NULL, instruction_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS sessions_id ON sessions(session_id);
@@ -71,8 +71,7 @@ CREATE VIEW IF NOT EXISTS events AS
 -- Static sites are not execution counts. All results are attributed at call level.
 CREATE TABLE IF NOT EXISTS commands (
  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES locations(id) ON DELETE CASCADE,
- site INTEGER NOT NULL, program TEXT, argv_json TEXT, parsed INTEGER NOT NULL,
- outcome_scope TEXT NOT NULL DEFAULT 'call'
+ site INTEGER NOT NULL, program TEXT, argv_json TEXT, parsed INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS commands_event ON commands(event_id);
 CREATE TABLE IF NOT EXISTS denials (
@@ -93,18 +92,18 @@ CREATE TRIGGER IF NOT EXISTS events_delete AFTER DELETE ON locations BEGIN DELET
 -- Native identity, never matching text, deduplicates inherited events for counts.
 -- Rule: docs/formats.md `canonical_first_copy`.
 CREATE VIEW IF NOT EXISTS canonical_events AS
- SELECT e.*, 1 AS copy_rank FROM events e JOIN locations l ON l.id=e.id JOIN files f ON f.id=l.file_id
+ SELECT e.* FROM events e JOIN locations l ON l.id=e.id JOIN files f ON f.id=l.file_id
  LEFT JOIN event_details d ON d.event_id=l.id
  WHERE l.native_id IS NULL OR NOT EXISTS (
   SELECT 1 FROM locations l2 JOIN files f2 ON f2.id=l2.file_id LEFT JOIN event_details d2 ON d2.event_id=l2.id
-  WHERE l2.native_id=l.native_id AND f2.harness=f.harness AND d2.kind_ref IS d.kind_ref
+  WHERE l2.native_id=l.native_id AND f2.agent=f.agent AND d2.kind_ref IS d.kind_ref
   AND (coalesce(f2.first_ts,'9999'),f2.path,l2.line_no,l2.ordinal) < (coalesce(f.first_ts,'9999'),f.path,l.line_no,l.ordinal));
 CREATE VIEW IF NOT EXISTS call_outcomes AS
- SELECT f.harness,e.session_id,e.call_id,
+ SELECT f.agent,e.session_id,e.call_id,
  CASE WHEN sum(ok=0)>0 THEN 0 WHEN sum(ok=1)>0 THEN 1 END AS ok,
  CASE WHEN sum(ok=0 AND ok_source='flag')>0 THEN 'flag'
       WHEN sum(ok=0 AND ok_source='text')>0 THEN 'text'
       WHEN sum(ok_source='flag')>0 THEN 'flag'
       WHEN sum(ok_source='text')>0 THEN 'text' ELSE 'none' END AS ok_source
- FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.harness,e.session_id,e.call_id;
-PRAGMA user_version=5;
+ FROM canonical_events e JOIN files f ON f.id=e.file_id WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY f.agent,e.session_id,e.call_id;
+PRAGMA user_version=6;

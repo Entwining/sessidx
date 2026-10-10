@@ -1,7 +1,7 @@
 use crate::{
     adapters,
     discovery::{self, Root},
-    model::{Harness, State, name},
+    model::{Agent, State, name},
     normalize::hash,
     redaction::{redact, redact_metadata, spaced_cjk},
     source,
@@ -22,7 +22,7 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -96,7 +96,7 @@ struct FileRow {
     state_json: String,
     parse_errors: u64,
     index_status: FileCoverage,
-    harness: String,
+    agent: String,
 }
 struct IndexedFile {
     changed: bool,
@@ -260,7 +260,7 @@ impl Store {
         if let (true, Some(root)) = (full, unverified) {
             anyhow::bail!(
                 "{} root {} is missing but holds indexed sessions; restore it, or rebuild with --root for each root that remains",
-                name(root.harness),
+                name(root.agent),
                 root.path.display()
             );
         }
@@ -288,13 +288,13 @@ impl Store {
                 tx.commit()?;
             }
         }
-        for (harness, path) in files {
+        for (agent, path) in files {
             if deadline.is_some_and(|d| Instant::now() >= d) {
                 report.stale = true;
                 report.continuation = Some(path.to_string_lossy().into_owned());
                 break;
             }
-            let result = self.index_file(harness, &path, deadline)?;
+            let result = self.index_file(agent, &path, deadline)?;
             report.files_changed += usize::from(result.changed);
             report.records += result.records;
             if result.coverage == FileCoverage::DeferredTail {
@@ -321,12 +321,12 @@ impl Store {
 
     fn index_file(
         &mut self,
-        harness: Harness,
+        agent: Agent,
         path: &Path,
         deadline: Option<Instant>,
     ) -> Result<IndexedFile> {
         let path_text = path.to_string_lossy();
-        let harness_name = name(harness);
+        let agent_name = name(agent);
         let old = self
             .db
             .prepare_cached("SELECT * FROM files WHERE path=?")?
@@ -344,16 +344,16 @@ impl Store {
                     state_json: r.get("state_json")?,
                     parse_errors: r.get("parse_errors")?,
                     index_status: r.get("index_status")?,
-                    harness: r.get("harness")?,
+                    agent: r.get("agent")?,
                 })
             })
             .optional()?;
-        // Another harness parses the same bytes differently, so neither the
+        // Another agent parses the same bytes differently, so neither the
         // cached rows nor an append to them can be reused. Only a refresh that
         // ran out of budget leaves an unchanged file's records unread. Most
         // files a refresh visits are unchanged, so a stat decides before opening.
         if let Some(ref o) = old
-            && o.harness == harness_name
+            && o.agent == agent_name
             && o.index_status != FileCoverage::BudgetExhausted
             && let Ok(meta) = source::metadata(path)
             && o.dev == meta.dev()
@@ -371,7 +371,7 @@ impl Store {
                 },
             });
         }
-        // The harness deleted or archived the log after discovery listed it.
+        // The agent deleted or archived the log after discovery listed it.
         let Some(mut source) = source::open(path).context("cannot open session file")? else {
             if let Some(ref o) = old {
                 let tx = self.db.transaction()?;
@@ -392,7 +392,7 @@ impl Store {
         source.file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
         let appended = old.as_ref().filter(|o| {
-            o.harness == harness_name
+            o.agent == agent_name
                 && o.dev == meta.dev()
                 && o.inode == meta.ino()
                 && source_size >= o.size
@@ -426,7 +426,7 @@ impl Store {
         {
             delete_file(&tx, o.id)?;
         }
-        tx.execute("INSERT INTO files(path,harness,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, harness_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
+        tx.execute("INSERT INTO files(path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, agent_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
         let file_id: i64 = tx.query_row(
             "SELECT id FROM files WHERE path=?",
             [path_text.as_ref()],
@@ -468,10 +468,10 @@ impl Store {
             let parsed = if oversized {
                 None
             } else {
-                crate::normalize::record_for_index(&buffer, harness).ok()
+                crate::normalize::record_for_index(&buffer, agent).ok()
             };
             if let Some(v) = parsed {
-                let normalized = adapters::parse(harness, &v, &mut state);
+                let normalized = adapters::parse(agent, &v, &mut state);
                 let signature = shape(&v);
                 let raw_hash = hash(&buffer);
                 tx.prepare_cached("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,signature,normalized.known])?;
@@ -527,7 +527,7 @@ impl Store {
             }
             offset += length;
         }
-        tx.execute("INSERT INTO sessions(file_id,harness,session_id,cwd,parent_id,kind,kind_source,instruction_hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,cwd=excluded.cwd,parent_id=excluded.parent_id,kind=excluded.kind,kind_source=excluded.kind_source,instruction_hash=excluded.instruction_hash", params![file_id,harness_name,state.session_id,state.cwd,state.parent_id,state.kind,state.kind_source,state.instruction_hash])?;
+        tx.execute("INSERT INTO sessions(file_id,agent,session_id,cwd,parent_id,kind,kind_source,instruction_hash) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,cwd=excluded.cwd,parent_id=excluded.parent_id,kind=excluded.kind,kind_source=excluded.kind_source,instruction_hash=excluded.instruction_hash", params![file_id,agent_name,state.session_id,state.cwd,state.parent_id,state.kind,state.kind_source,state.instruction_hash])?;
         tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=?,first_ts=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage,state.first_ts,file_id])?;
         tx.commit()?;
         Ok(IndexedFile {

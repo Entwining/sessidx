@@ -1,5 +1,5 @@
 use crate::common::{serial, sessidx, snapshot, stream};
-use sessidx::{discovery::Root, model::Harness, store::Store};
+use sessidx::{discovery::Root, model::Agent, store::Store};
 use std::{fs, os::unix::fs::PermissionsExt};
 
 #[test]
@@ -34,7 +34,7 @@ fn previous_schema_requires_explicit_locked_rebuild() {
     )
     .unwrap();
     let roots = [Root {
-        harness: Harness::Codex,
+        agent: Agent::Codex,
         path: root,
     }];
     let mut upgrade = Store::open_for_rebuild(&path).unwrap();
@@ -93,6 +93,7 @@ fn previous_compact_schema_rebuilds_without_reading_new_columns() {
         include_str!("../fixtures/schema-v2.sql"),
         include_str!("../fixtures/schema-v3.sql"),
         include_str!("../fixtures/schema-v4.sql"),
+        include_str!("../fixtures/schema-v5.sql"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("old-compact.db");
@@ -131,7 +132,7 @@ fn initial_schema_creation_respects_the_writer_lock() {
     let r = second.refresh(&[], false, None).unwrap();
     assert!(r.writer_busy && r.stale);
     let roots = [Root {
-        harness: Harness::Codex,
+        agent: Agent::Codex,
         path: dir.path().into(),
     }];
     let rows = stream(

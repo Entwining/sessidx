@@ -1,4 +1,4 @@
-use crate::model::Harness;
+use crate::model::Agent;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -143,10 +143,10 @@ pub fn is_shell_tool(tool: &str) -> bool {
 }
 
 // Pi thinkingSignature and opaque image/thinking blocks: tests/fixtures/opaque.jsonl.
-pub fn record_for_index(bytes: &[u8], harness: Harness) -> serde_json::Result<Value> {
+pub fn record_for_index(bytes: &[u8], agent: Agent) -> serde_json::Result<Value> {
     use serde_json::value::RawValue;
     use std::collections::BTreeMap;
-    if !matches!(harness, Harness::Claude | Harness::Pi)
+    if !matches!(agent, Agent::Claude | Agent::Pi)
         || bytes.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{')
     {
         return serde_json::from_slice(bytes);

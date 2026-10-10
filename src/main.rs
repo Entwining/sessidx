@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use sessidx::{
     counting::{self, By, Metric},
     discovery::{self, Root},
-    model::{Harness, name},
+    model::{Agent, name},
     query::{self, Coverage, Filters},
     redaction::redact,
     store::{Refresh, Store},
@@ -23,14 +23,14 @@ use std::{
 #[command(
     version,
     about = "Local Claude Code, Codex, and Pi session index",
-    after_help = "Examples:\n  sessidx search 'instruction hash'\n  sessidx grep 'Script error:' --harness codex\n  sessidx show /path/to/session.jsonl:42\n  sessidx count commands --program rg\n  sessidx sql 'SELECT role,count(*) FROM events GROUP BY role'\n  sessidx index --full\n  sessidx doctor"
+    after_help = "Examples:\n  sessidx search 'instruction hash'\n  sessidx grep 'Script error:' --agent codex\n  sessidx show /path/to/session.jsonl:42\n  sessidx count commands --program rg\n  sessidx sql 'SELECT role,count(*) FROM events GROUP BY role'\n  sessidx index --full\n  sessidx doctor"
 )]
 struct Cli {
     /// Index database to use instead of ~/.cache/sessidx/index.db
     #[arg(long, global = true, value_name = "PATH")]
     db: Option<PathBuf>,
     /// Session root to scan instead of the defaults; repeat for each root
-    #[arg(long = "root", global = true, value_name = "HARNESS=PATH", value_parser = root)]
+    #[arg(long = "root", global = true, value_name = "AGENT=PATH", value_parser = root)]
     roots: Vec<Root>,
     #[command(subcommand)]
     command: Command,
@@ -85,7 +85,7 @@ enum Command {
         #[arg(value_enum)]
         metric: Metric,
         /// Comma-separated grouping; with no value, one total row
-        #[arg(long, value_enum, value_delimiter = ',', num_args = 0..=1, action = clap::ArgAction::Set, default_value = "harness,model,role,week")]
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 0..=1, action = clap::ArgAction::Set, default_value = "agent,model,role,week")]
         by: Vec<By>,
         /// Count only shell calls that run this program
         #[arg(long, value_name = "NAME")]
@@ -109,13 +109,13 @@ enum Command {
 }
 
 fn root(s: &str) -> Result<Root, String> {
-    let (harness, path) = s.split_once('=').ok_or("expected HARNESS=PATH")?;
-    let harness = Harness::from_str(harness, false).map_err(|_| {
-        let names: Vec<_> = Harness::value_variants().iter().map(|h| name(*h)).collect();
-        format!("HARNESS '{harness}' must be one of {}", names.join(", "))
+    let (agent, path) = s.split_once('=').ok_or("expected AGENT=PATH")?;
+    let agent = Agent::from_str(agent, false).map_err(|_| {
+        let names: Vec<_> = Agent::value_variants().iter().map(|h| name(*h)).collect();
+        format!("AGENT '{agent}' must be one of {}", names.join(", "))
     })?;
     Ok(Root {
-        harness,
+        agent,
         path: path.into(),
     })
 }
@@ -312,7 +312,7 @@ fn grep(
 ) -> Result<i32> {
     anyhow::ensure!(
         filters.narrowed(),
-        "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --harness"
+        "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --agent"
     );
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;

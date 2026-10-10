@@ -1,5 +1,5 @@
 use crate::{
-    model::{Event, Harness, Record, State},
+    model::{Agent, Event, Record, State},
     normalize::{arguments, hash, shell, string, text, timestamp},
 };
 use serde_json::Value;
@@ -103,7 +103,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     let mut e = Event::new("tool", "tool_result", "payload.type");
                     e.call_id = string(p, "call_id");
                     // Codex text and structured outcomes: tests/fixtures/outcomes.jsonl.
-                    crate::outcomes::classify(&mut e, &p["output"], Harness::Codex);
+                    crate::outcomes::classify(&mut e, &p["output"], Agent::Codex);
                     crate::normalize::output_prefix(&mut e, &p["output"]);
                     e
                 }
