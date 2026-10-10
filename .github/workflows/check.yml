@@ -39,18 +39,14 @@ jobs:
         run: cargo clippy --all-targets --locked
         env:
           CARGO_BUILD_WARNINGS: deny
-      # The Homebrew formula renders this file into each bottle; a license the
-      # configuration cannot place would otherwise fail only at release.
-      # cargo metadata needs every target's crates, which no build fetches.
-      # cargo-about only logs a dropped notice, such as a clarification whose
-      # checksum no longer matches, so any warning or error fails the step.
-      - name: Render third-party licenses
+      # Homebrew bottles ship this package's license notices, so a license
+      # the configuration cannot place would otherwise fail only at release.
+      - name: Build the package
         run: |
-          cargo fetch --locked
-          log="$RUNNER_TEMP/cargo-about.log"
-          cargo about generate --frozen --fail -o "$RUNNER_TEMP/LICENSE-THIRD-PARTY.md" about.hbs 2> "$log" || { cat "$log" >&2; exit 1; }
-          cat "$log" >&2
-          if grep -Eq 'WARN|ERROR' "$log"; then exit 1; fi
+          make build OUT="$RUNNER_TEMP/package"
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          test "$("$RUNNER_TEMP/package/bin/sessidx" --version)" = "sessidx $version"
+          test -s "$RUNNER_TEMP/package/LICENSE-THIRD-PARTY.md"
       - name: Test
         run: |
           test "$(uname -m)" = arm64
