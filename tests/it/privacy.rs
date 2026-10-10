@@ -498,6 +498,39 @@ fn private_key_blocks_are_redacted_through_their_end_line_or_the_text_end() {
 }
 
 #[test]
+fn fixed_length_tokens_redact_only_their_exact_shape() {
+    // Built at run time so the source holds no token-shaped literal for secret scanners.
+    // Alphabetic bodies escape entropy redaction, so only the token rules can mask them.
+    let letters = "abcdefghijklmnopqrstuvwxyz".repeat(3);
+    let body = |n: usize| &letters[..n];
+    let mut failures = Vec::new();
+    for (token, redacted) in [
+        (format!("hf_{}", body(34)), true),
+        (format!("hf_{}", body(33)), false),
+        (format!("hf_{}", body(35)), false),
+        (format!("hf_{}1", body(33)), false),
+        ("hf_hub_download".to_owned(), false),
+        (format!("SG.{}.{}", body(22), body(43)), true),
+        (format!("SG.{}.{}", body(21), body(43)), false),
+        (format!("SG.{}.{}", body(22), body(42)), false),
+        (format!("SG.{}.{}", body(22), body(44)), false),
+        (format!("SG.{}.{}9", body(22), body(43)), false),
+        (format!("SG.{}.{}_", body(22), body(43)), false),
+    ] {
+        let input = format!("needle {token} tail");
+        let expected = if redacted {
+            "needle [REDACTED] tail".to_owned()
+        } else {
+            input.clone()
+        };
+        if redaction::redact(&input) != expected {
+            failures.push(token);
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
 fn known_token_prefixes_redact_alphabetic_bodies_of_eight_or_more() {
     // Bodies are alphabetic and runs stay short or identifier-shaped, so only
     // the prefix pattern can redact them.
