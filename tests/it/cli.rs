@@ -1,5 +1,5 @@
 use crate::common::{serial, sessidx, stream, three_agents};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     fs,
     process::Stdio,
@@ -366,4 +366,49 @@ fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
             );
         }
     }
+}
+
+#[test]
+fn provenance_labels_are_unredacted_and_none_when_absent() {
+    let serial = serial();
+    let (_dir, store, roots) = three_agents();
+    let query = "SELECT DISTINCT role_source,kind_source,model_source,ok_source FROM events ORDER BY 1,2,3,4";
+    let rows = stream(
+        &sessidx(&serial, &store.path, &roots, &["sql", query])
+            .output()
+            .unwrap(),
+        0,
+    );
+    let shown: Vec<Value> = rows
+        .iter()
+        .filter(|r| r["type"] == "row")
+        .map(|r| r["data"].clone())
+        .collect();
+    let stored: Vec<Value> = store
+        .db
+        .prepare(query)
+        .unwrap()
+        .query_map([], |r| {
+            Ok(json!({
+                "role_source": r.get::<_, String>(0)?,
+                "kind_source": r.get::<_, String>(1)?,
+                "model_source": r.get::<_, String>(2)?,
+                "ok_source": r.get::<_, String>(3)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(shown, stored);
+    assert!(
+        stored
+            .iter()
+            .any(|r| r["kind_source"] == "root.type,message.content")
+    );
+    let count = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert!(count("SELECT count(*) FROM events WHERE model IS NULL") > 0);
+    assert_eq!(
+        count("SELECT count(*) FROM events WHERE (model IS NULL)!=(model_source='none')"),
+        0
+    );
 }

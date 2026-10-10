@@ -115,7 +115,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 "root.type"
             },
         );
-        e.kind_source = "root.type+message.content".into();
+        e.kind_source = "root.type,message.content".into();
         e.text = Some(message_text(content));
         e.native_id = if typ == "assistant" {
             string(m, "id").map(|id| format!("message:{id}"))

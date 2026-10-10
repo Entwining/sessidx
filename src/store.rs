@@ -488,8 +488,10 @@ impl Store {
                         &mut strings,
                         if event.model.is_some() {
                             "message.model"
-                        } else {
+                        } else if state.model.is_some() {
                             &state.model_source
+                        } else {
+                            "none"
                         },
                     )?;
                     tx.prepare_cached("INSERT INTO locations(file_id,session_ref,native_id,line_no,byte_off,byte_len,raw_hash,ordinal,ts,model_ref,model_source_ref) VALUES (?,?,unhex(?),?,?,?,unhex(?),?,?,?,?)")?.execute(params![file_id,session,event.native_id,line,offset,length,&raw_hash,ordinal,event.ts,model,model_source])?;
