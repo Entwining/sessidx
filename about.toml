@@ -1,4 +1,26 @@
-accepted = ["MIT", "Apache-2.0", "BSD-3-Clause", "Zlib", "Unicode-3.0"]
+# Apache-2.0 comes first for dual-licensed crates: a binary distributed under it needs the license text and any NOTICE file,
+# while MIT also needs each copyright notice, and cargo-about keeps license files but not the copyright headers in source files.
+accepted = ["Apache-2.0", "MIT", "BSD-3-Clause", "Zlib", "Unicode-3.0", "Unicode-DFS-2016"]
 targets = ["aarch64-apple-darwin"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+private = { ignore = true }
+
+# The crate's expression omits the Unicode data its tables are generated from.
+[regex-syntax.clarify]
+license = "(MIT OR Apache-2.0) AND Unicode-DFS-2016"
+
+[[regex-syntax.clarify.files]]
+path = "LICENSE-MIT"
+license = "MIT"
+checksum = "6485b8ed310d3f0340bf1ad1f47645069ce4069dcc6bb46c7d5c6faf41de1fdb"
+
+[[regex-syntax.clarify.files]]
+path = "LICENSE-APACHE"
+license = "Apache-2.0"
+checksum = "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2"
+
+[[regex-syntax.clarify.files]]
+path = "src/unicode_tables/LICENSE-UNICODE"
+license = "Unicode-DFS-2016"
+checksum = "74db5baf44a41b1000312c673544b3374e4198af5605c7f9080a402cec42cfa3"
