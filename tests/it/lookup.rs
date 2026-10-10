@@ -182,6 +182,34 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
 }
 
 #[test]
+fn grep_and_show_return_each_line_once_per_role() {
+    // Line 1's single tool_use block is indexed as an assistant message and a tool call.
+    let (_dir, store, _) = indexed(Harness::Claude, include_str!("../fixtures/claude.jsonl"));
+    let lines = |hits: &[query::Hit]| {
+        hits.iter()
+            .map(|h| (h.line_no, h.role.clone()))
+            .collect::<Vec<_>>()
+    };
+    let (shown, _) = query::show(&store.db, "claude-fixture", 0, 100, 0).unwrap();
+    assert_eq!(
+        lines(&shown),
+        [
+            (1, "assistant".into()),
+            (2, "tool".into()),
+            (3, "assistant".into()),
+            (4, "user".into())
+        ]
+    );
+    let filters = Filters {
+        session: Some("claude-fixture".into()),
+        ..Filters::default()
+    };
+    let (hits, _) =
+        query::scan(&store.db, "call-c", &filters, 20, 0, Duration::from_secs(2)).unwrap();
+    assert_eq!(lines(&hits), [(1, "assistant".into()), (2, "tool".into())]);
+}
+
+#[test]
 fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let message = |session: &str, id: usize, ts: &str, text: &str| {
         serde_json::json!({"type":"user","uuid":format!("{session}-{id}"),"sessionId":session,"timestamp":ts,"message":{"role":"user","content":text}}).to_string()+"\n"

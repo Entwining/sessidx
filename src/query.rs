@@ -182,6 +182,10 @@ pub struct Coverage {
 
 const COLUMNS: &str = "f.harness,e.session_id,f.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
 const FROM: &str = "FROM events e JOIN files f ON f.id=e.file_id JOIN sessions s ON s.file_id=f.id";
+// Rule: docs/formats.md `line_role_record`. The probe reads base tables: through the
+// events view, its string joins dominated stepping on harness-wide grep scans. Role
+// mirrors the view's coalesce.
+const FIRST_OF_LINE_ROLE: &str = "e.ordinal=(SELECT min(l.ordinal) FROM locations l LEFT JOIN event_details d ON d.event_id=l.id LEFT JOIN strings role ON role.id=d.role_ref WHERE l.file_id=e.file_id AND l.line_no=e.line_no AND coalesce(role.value,'unknown')=e.role)";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     let harness: String = row.get(0)?;
@@ -394,10 +398,8 @@ pub fn scan(
         let pattern = Regex::new(pattern).context("invalid grep regex")?;
         let (clause, mut args) = filters.sql(db)?;
         args.push(Value::Integer(after));
-        // The probe reads base tables: through the events view, its string joins
-        // dominated stepping on harness-wide scans. Role mirrors the view's coalesce.
         let sql = format!(
-            "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.ordinal=(SELECT min(l.ordinal) FROM locations l LEFT JOIN event_details d ON d.event_id=l.id LEFT JOIN strings role ON role.id=d.role_ref WHERE l.file_id=e.file_id AND l.line_no=e.line_no AND coalesce(role.value,'unknown')=e.role) ORDER BY e.id"
+            "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND {FIRST_OF_LINE_ROLE} ORDER BY e.id"
         );
         let mut stmt = db.prepare(&sql)?;
         let mut rows = stmt.query(params_from_iter(args))?;
@@ -491,7 +493,7 @@ pub fn show_snapshot(
     args.push(Value::Integer(high_water));
     args.push(Value::Integer((limit + 1) as i64));
     let sql = format!(
-        "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.id<=? ORDER BY e.id LIMIT ?"
+        "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.id<=? AND {FIRST_OF_LINE_ROLE} ORDER BY e.id LIMIT ?"
     );
     let mut hits = db
         .prepare(&sql)?

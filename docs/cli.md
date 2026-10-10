@@ -22,7 +22,7 @@ The default database is `~/.cache/sessidx/index.db`. Discovery reads `~/.claude/
 
 ### grep and show
 
-`grep` matches regexes over original bytes before redacting its display. It requires a narrowing filter other than role or kind, reads only indexed byte ranges, and stops after two seconds or the hit limit. `show` expands a hit's `ref`, a native session ID, a `codex://threads/ID` address, or `path:line`. Each hit's `ref` is a precise `path:line` address. A range whose source changed since indexing is unavailable until reindexed: its record's `text` is the placeholder `[source range unavailable; run sessidx index]` instead of JSON, and `end.unavailable_ranges` counts it.
+`grep` matches regexes over original bytes before redacting its display. It requires a narrowing filter other than role or kind, reads only indexed byte ranges, and stops after two seconds or the hit limit. `show` expands a hit's `ref`, a native session ID, a `codex://threads/ID` address, or `path:line`. Each hit's `ref` is a precise `path:line` address. Both display the whole source line (grep in `snippet`, show in `text`) and return it once per role, however many events the index derived from it. A range whose source changed since indexing is unavailable until reindexed: its record's `text` is the placeholder `[source range unavailable; run sessidx index]` instead of JSON, and `end.unavailable_ranges` counts it.
 
 ### Filters and pagination
 
