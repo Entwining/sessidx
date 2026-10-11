@@ -231,6 +231,61 @@ fn a_call_pairs_with_its_result_across_transcripts_of_one_session() {
         ),
         (&1.into(), &1.into())
     );
+    let outcomes: Vec<(Option<i64>, String)> = store
+        .db
+        .prepare("SELECT ok,ok_source FROM call_outcomes ORDER BY line_no")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        outcomes,
+        [(Some(0), "text".into()), (Some(1), "text".into())]
+    );
+}
+
+#[test]
+fn a_call_reads_its_result_first_recorded_in_another_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("codex");
+    fs::create_dir(&root).unwrap();
+    let result = r#"{"type":"response_item","timestamp":"2026-10-02T00:00:01Z","payload":{"type":"function_call_output","id":"copied-result","call_id":"copied-call","output":"Process exited with code 1"}}"#;
+    fs::write(
+        root.join("rollout-earlier.jsonl"),
+        format!(
+            "{}\n{result}\n",
+            r#"{"type":"session_meta","timestamp":"2026-10-01T00:00:00Z","payload":{"id":"earlier","source":"cli"}}"#
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("rollout-later.jsonl"),
+        format!(
+            "{}\n{}\n{result}\n",
+            r#"{"type":"session_meta","timestamp":"2026-10-02T00:00:00Z","payload":{"id":"later","source":"cli"}}"#,
+            r#"{"type":"response_item","timestamp":"2026-10-02T00:00:00Z","payload":{"type":"function_call","id":"later-call","call_id":"copied-call","name":"exec_command","arguments":"{\"cmd\":\"rg needle\"}"}}"#
+        ),
+    )
+    .unwrap();
+    let mut store = sessidx::store::Store::open(&dir.path().join("index.db")).unwrap();
+    store
+        .refresh(
+            &[Root {
+                agent: Agent::Codex,
+                path: root,
+            }],
+            false,
+            None,
+        )
+        .unwrap();
+    let failures = counting::count(&store.db, Metric::Failures, &[], None, &Filters::default())
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        (&failures["calls"], &failures["failed"]),
+        (&1.into(), &1.into())
+    );
 }
 
 #[test]

@@ -52,16 +52,19 @@ pub fn count(
     filters: &Filters,
 ) -> Result<Vec<Json>> {
     let mut keys = Vec::new();
-    let mut expressions = Vec::new();
+    let mut expressions: Vec<String> = Vec::new();
     for &key in by {
         keys.push(name(key));
-        expressions.push(match key {
-            By::Agent => "s.agent",
-            By::Model => "coalesce(e.model,'unknown')",
-            By::Role => "e.role",
-            By::Week => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
-            By::SessionKind => "s.session_kind",
-        });
+        expressions.push(
+            match key {
+                By::Agent => "s.agent",
+                By::Model => "coalesce(e.model,'unknown')",
+                By::Role => "e.role",
+                By::Week => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
+                By::SessionKind => "s.session_kind",
+            }
+            .into(),
+        );
     }
     let (clause, args) = filters.sql(db)?;
     let selected = match (program, metric) {
@@ -93,14 +96,12 @@ pub fn count(
                 "count(DISTINCT CASE WHEN c.parsed=0 THEN e.id END)".into(),
             ),
         ],
+        // Columns of the `calls` CTE below.
         Metric::Failures => vec![
-            ("calls", sum(selected)),
-            ("failed", sum(&format!("{selected} AND o.ok=0"))),
-            ("succeeded", sum(&format!("{selected} AND o.ok=1"))),
-            (
-                "outcome_unknown",
-                sum(&format!("{selected} AND o.ok IS NULL")),
-            ),
+            ("calls", sum("selected")),
+            ("failed", sum("selected AND ok=0")),
+            ("succeeded", sum("selected AND ok=1")),
+            ("outcome_unknown", sum("selected AND ok IS NULL")),
         ],
         Metric::Denials => vec![
             ("results", sum(selected)),
@@ -123,7 +124,7 @@ pub fn count(
             Metric::Commands => ("matching_sites", sum("c.parsed=1 AND c.program=:program")),
             Metric::Failures => (
                 "calls_with_unresolved_program",
-                sum(&format!("NOT {selected} AND {unresolved}")),
+                sum("NOT selected AND unresolved"),
             ),
             Metric::Denials => (
                 "results_with_unresolved_program",
@@ -131,41 +132,67 @@ pub fn count(
             ),
         });
     }
-    let (join, kind) = match metric {
-        Metric::Commands => ("JOIN commands c ON c.event_id=e.id", "tool_call"),
-        Metric::Failures => (
-            "LEFT JOIN call_outcomes o ON o.agent=e.agent AND o.session_id=e.session_id AND o.call_id=e.call_id",
-            "tool_call",
+    let events = "FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id";
+    let (with, source, group_keys) = match metric {
+        Metric::Commands => (
+            String::new(),
+            format!(
+                "{events} JOIN commands c ON c.event_id=e.id WHERE {clause} AND e.kind='tool_call'"
+            ),
+            expressions,
         ),
+        // Each selected call's outcome is evaluated once, in this CTE.
+        // Rule: docs/formats.md `call_outcome_probe`.
+        Metric::Failures => {
+            let aliases: Vec<String> = (0..expressions.len()).map(|i| format!("k{i}")).collect();
+            let mut evaluated: Vec<String> = expressions
+                .iter()
+                .zip(&aliases)
+                .map(|(e, k)| format!("{e} AS {k}"))
+                .collect();
+            evaluated.push(format!("{selected} AS selected"));
+            if program.is_some() {
+                evaluated.push(format!("{unresolved} AS unresolved"));
+            }
+            evaluated.push(format!("CASE WHEN {selected} THEN e.ok END AS ok"));
+            (
+                format!(
+                    "WITH calls AS MATERIALIZED (SELECT {} FROM call_outcomes e JOIN sessions s ON s.file_id=e.file_id WHERE {clause}) ",
+                    evaluated.join(",")
+                ),
+                "FROM calls".to_owned(),
+                aliases,
+            )
+        }
         Metric::Denials if program.is_some() => (
-            "LEFT JOIN program_calls pc ON pc.agent=e.agent AND pc.session_id=e.session_id AND pc.call_id=e.call_id",
-            "tool_result",
+            PROGRAM_CALLS.to_owned(),
+            format!(
+                "{events} LEFT JOIN program_calls pc ON pc.agent=e.agent AND pc.session_id=e.session_id AND pc.call_id=e.call_id WHERE {clause} AND e.kind='tool_result'"
+            ),
+            expressions,
         ),
-        Metric::Denials => ("", "tool_result"),
+        Metric::Denials => (
+            String::new(),
+            format!("{events} WHERE {clause} AND e.kind='tool_result'"),
+            expressions,
+        ),
     };
-    let program_calls = if program.is_some() && matches!(metric, Metric::Denials) {
-        PROGRAM_CALLS
-    } else {
-        ""
-    };
-    let group = if expressions.is_empty() {
+    let group = if group_keys.is_empty() {
         String::new()
     } else {
         format!(
             " GROUP BY {} ORDER BY {}",
-            expressions.join(","),
-            expressions.join(",")
+            group_keys.join(","),
+            group_keys.join(",")
         )
     };
-    let columns = expressions
+    let columns = group_keys
         .iter()
-        .map(|e| e.to_string())
+        .cloned()
         .chain(fields.iter().map(|(_, sql)| format!("coalesce({sql},0)")))
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!(
-        "{program_calls}SELECT {columns} FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id {join} WHERE {clause} AND e.kind='{kind}'{group}"
-    );
+    let sql = format!("{with}SELECT {columns} {source}{group}");
     let mut stmt = db.prepare(&sql)?;
     let mut args = args.into_iter();
     for i in 1..=stmt.parameter_count() {

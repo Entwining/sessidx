@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS event_rows (
 );
 CREATE INDEX IF NOT EXISTS events_time ON event_rows(ts);
 CREATE INDEX IF NOT EXISTS events_native ON event_rows(native_id,kind) WHERE native_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS events_call ON event_rows(file_id,call_id) WHERE call_id IS NOT NULL;
+-- Calls and results pair by call ID within a session. Rule: docs/formats.md `call_outcome_probe`.
+CREATE INDEX IF NOT EXISTS events_call ON event_rows(call_id) WHERE call_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS event_texts (
  event_id INTEGER PRIMARY KEY REFERENCES event_rows(id) ON DELETE CASCADE,
  text TEXT NOT NULL, truncated INTEGER NOT NULL
@@ -75,20 +76,27 @@ CREATE TABLE IF NOT EXISTS shapes (
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, content='', contentless_delete=1, tokenize='unicode61');
 CREATE TRIGGER IF NOT EXISTS events_delete AFTER DELETE ON event_rows BEGIN DELETE FROM fts WHERE rowid=old.id; END;
 -- Native identity, never matching text, deduplicates inherited events for counts.
--- Rule: docs/formats.md `canonical_first_copy`.
+-- Rule: docs/formats.md `canonical_first_copy`. The probe skips the event itself by the
+-- rowid in its index entry: most events have no other copy, and comparing one with
+-- itself loaded its row and session for nothing.
 CREATE VIEW IF NOT EXISTS canonical_events AS
  SELECT e.* FROM events e JOIN event_rows r ON r.id=e.id JOIN sessions s ON s.file_id=r.file_id
  WHERE r.native_id IS NULL OR NOT EXISTS (
   SELECT 1 FROM event_rows r2 JOIN sessions s2 ON s2.file_id=r2.file_id
-  WHERE r2.native_id=r.native_id AND r2.kind=r.kind AND s2.agent=s.agent
+  WHERE r2.native_id=r.native_id AND r2.kind=r.kind AND r2.id<>r.id AND s2.agent=s.agent
   AND (coalesce(s2.started_at,'9999'),s2.path,r2.line_no,r2.ordinal) < (coalesce(s.started_at,'9999'),s.path,r.line_no,r.ordinal));
--- Calls pair with results inside one session, which can span transcripts.
+-- One row per canonical tool call, with the outcome of its results in its session, which
+-- can span transcripts. Rules: docs/formats.md `call_outcome_probe` and `call_outcome_evidence`.
 CREATE VIEW IF NOT EXISTS call_outcomes AS
- SELECT e.agent,e.session_id,e.call_id,
- CASE WHEN sum(ok=0)>0 THEN 0 WHEN sum(ok=1)>0 THEN 1 END AS ok,
- CASE WHEN sum(ok=0 AND ok_source='flag')>0 THEN 'flag'
-      WHEN sum(ok=0 AND ok_source='text')>0 THEN 'text'
-      WHEN sum(ok_source='flag')>0 THEN 'flag'
-      WHEN sum(ok_source='text')>0 THEN 'text' ELSE 'none' END AS ok_source
- FROM canonical_events e WHERE e.kind='tool_result' AND e.call_id IS NOT NULL GROUP BY e.agent,e.session_id,e.call_id;
-PRAGMA user_version=7;
+ SELECT c.id,c.agent,c.session_id,c.path,c.line_no,c.ts,c.role,c.model,c.tool,c.call_id,c.file_id,
+ (SELECT CASE WHEN sum(r.ok=0)>0 THEN 0 WHEN sum(r.ok=1)>0 THEN 1 END
+  FROM sessions rs JOIN event_rows r ON r.file_id=rs.file_id
+  WHERE rs.agent=c.agent AND rs.session_id=c.session_id AND r.call_id=unhex(c.call_id) AND r.kind='tool_result') AS ok,
+ (SELECT CASE WHEN sum(r.ok=0 AND r.ok_source='flag')>0 THEN 'flag'
+              WHEN sum(r.ok=0 AND r.ok_source='text')>0 THEN 'text'
+              WHEN sum(r.ok_source='flag')>0 THEN 'flag'
+              WHEN sum(r.ok_source='text')>0 THEN 'text' ELSE 'none' END
+  FROM sessions rs JOIN event_rows r ON r.file_id=rs.file_id
+  WHERE rs.agent=c.agent AND rs.session_id=c.session_id AND r.call_id=unhex(c.call_id) AND r.kind='tool_result') AS ok_source
+ FROM canonical_events c WHERE c.kind='tool_call';
+PRAGMA user_version=8;

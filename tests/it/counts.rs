@@ -6,7 +6,13 @@ use sessidx::{
     query::{Filters, Role},
     store::Store,
 };
-use std::fs;
+use std::{
+    fs,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 #[test]
 fn counts_select_by_program_and_shared_filters_and_sql_is_read_only() {
@@ -273,7 +279,8 @@ fn counts_equal_the_public_views_over_copied_history() {
     let by = [By::Agent, By::Model, By::Role, By::Week, By::SessionKind];
     let names = ["agent", "model", "role", "week", "session_kind"];
     let keys = "s.agent,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.session_kind";
-    let from = "FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id";
+    let events = "FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id";
+    let calls = "FROM call_outcomes e JOIN sessions s ON s.file_id=e.file_id";
     let unresolved = "(cp.parsed=0 OR cp.program IS NULL)";
     // References over the public views, with and without a program selection.
     for program in [None, Some("rg")] {
@@ -301,17 +308,17 @@ fn counts_equal_the_public_views_over_copied_history() {
                         "c.parsed=1 AND c.program IS NULL".into(),
                     ),
                 ],
-                "JOIN commands c ON c.event_id=e.id WHERE e.kind='tool_call'",
+                format!("{events} JOIN commands c ON c.event_id=e.id WHERE e.kind='tool_call'"),
             ),
             (
                 Metric::Failures,
                 vec![
                     ("calls", call.to_owned()),
-                    ("failed", format!("{call} AND o.ok=0")),
-                    ("succeeded", format!("{call} AND o.ok=1")),
-                    ("outcome_unknown", format!("{call} AND o.ok IS NULL")),
+                    ("failed", format!("{call} AND e.ok=0")),
+                    ("succeeded", format!("{call} AND e.ok=1")),
+                    ("outcome_unknown", format!("{call} AND e.ok IS NULL")),
                 ],
-                "LEFT JOIN call_outcomes o ON o.agent=e.agent AND o.session_id=e.session_id AND o.call_id=e.call_id WHERE e.kind='tool_call'",
+                calls.to_owned(),
             ),
             (
                 Metric::Denials,
@@ -323,7 +330,7 @@ fn counts_equal_the_public_views_over_copied_history() {
                         format!("{result} AND {unknown_reason}"),
                     ),
                 ],
-                "WHERE e.kind='tool_result'",
+                format!("{events} WHERE e.kind='tool_result'"),
             ),
         ];
         if program.is_some() {
@@ -339,7 +346,7 @@ fn counts_equal_the_public_views_over_copied_history() {
                 format!("NOT {result} AND {unresolved_result}"),
             ));
         }
-        for (metric, fields, rest) in metrics {
+        for (metric, fields, source) in metrics {
             let mut sums: Vec<String> = fields
                 .iter()
                 .map(|(_, condition)| format!("sum(CASE WHEN {condition} THEN 1 ELSE 0 END)"))
@@ -354,10 +361,7 @@ fn counts_equal_the_public_views_over_copied_history() {
             if let Metric::Commands = metric {
                 fields.insert(2, "unparsed_calls");
             }
-            let sql = format!(
-                "SELECT {keys},{} {from} {rest} GROUP BY {keys}",
-                sums.join(",")
-            );
+            let sql = format!("SELECT {keys},{} {source} GROUP BY {keys}", sums.join(","));
             let width = names.len() + fields.len();
             let mut expected: Vec<Vec<String>> = store
                 .db
@@ -399,6 +403,94 @@ fn counts_equal_the_public_views_over_copied_history() {
             assert_eq!(counted, expected, "{metric:?} {program:?}");
         }
     }
+}
+
+#[test]
+fn failure_count_work_follows_the_selected_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("codex");
+    fs::create_dir(&root).unwrap();
+    // One session continued across many transcripts, each with one call.
+    let calls = 300;
+    for i in 0..calls {
+        fs::write(
+            root.join(format!("rollout-{i}.jsonl")),
+            format!(
+                "{}\n{}\n{}\n",
+                r#"{"type":"session_meta","timestamp":"2026-10-02T00:00:00Z","payload":{"id":"thread","source":"cli"}}"#,
+                format_args!(r#"{{"type":"response_item","timestamp":"2026-10-02T00:00:00Z","payload":{{"type":"function_call","call_id":"call-{i}","name":"exec_command","arguments":"{{\"cmd\":\"rg word\"}}"}}}}"#),
+                format_args!(r#"{{"type":"response_item","timestamp":"2026-10-02T00:00:01Z","payload":{{"type":"function_call_output","call_id":"call-{i}","output":"Process exited with code 0"}}}}"#),
+            ),
+        )
+        .unwrap();
+    }
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    store
+        .refresh(
+            &[Root {
+                agent: Agent::Codex,
+                path: root,
+            }],
+            false,
+            None,
+        )
+        .unwrap();
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model_source,ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,'2020-01-01T00:00:00.000Z',r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source FROM n JOIN event_rows r ON r.id=1;").unwrap();
+    let steps = Arc::new(AtomicUsize::new(0));
+    let counter = steps.clone();
+    store
+        .db
+        .progress_handler(
+            100,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
+    let work = |run: &dyn Fn()| {
+        steps.store(0, Ordering::Relaxed);
+        run();
+        steps.load(Ordering::Relaxed)
+    };
+    let since = "2026-10-01T00:00:00.000Z";
+    let counted = work(&|| {
+        let rows = counting::count(
+            &store.db,
+            Metric::Failures,
+            &[],
+            None,
+            &Filters {
+                since: Some(since.parse().unwrap()),
+                ..Filters::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (&rows[0]["calls"], &rows[0]["succeeded"]),
+            (&calls.into(), &calls.into())
+        );
+    });
+    let probed = work(&|| {
+        let n: i64 = store
+            .db
+            .query_row(
+                "SELECT count(ok) FROM call_outcomes WHERE ts>=?",
+                [since],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, calls);
+    });
+    // One callback per 100 virtual machine instructions. A pass over the
+    // 200,000 earlier events, or a probe of every transcript for each call,
+    // costs thousands; probing each call once per reference to its outcome
+    // costs about two and a half times the single probe.
+    assert!(counted < 1000, "{counted} hundred instructions");
+    assert!(
+        counted < 2 * probed,
+        "{counted} against {probed} for one probe"
+    );
 }
 
 #[test]
