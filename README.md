@@ -1,6 +1,6 @@
 # sessidx
 
-sessidx indexes local Claude Code, Codex, and Pi session logs (JSONL) into SQLite for two uses: finding the past session where something happened, by a person or by an agent with a shell, and counting behavior by agent, model, role, and week with stated denominators. Raw logs remain read-only and authoritative; the index is derived and can always be rebuilt.
+sessidx indexes your local Claude Code, Codex, and Pi session logs into SQLite. You, or your agent, can then find the past session where something happened, such as the discussion behind a commit or an earlier failure, with one command instead of grepping raw JSONL, and count behavior, such as failed tool calls out of all tool calls, by agent, model, role, and week. The raw logs stay read-only and authoritative; the index can always be rebuilt from them.
 
 The database, `~/.cache/sessidx/index.db`, holds redacted copies of messages, tool inputs, shell argv, and the first 2 KiB of each tool output, plus exact source paths and session IDs. Redaction is heuristic ([accepted gaps](docs/design.md#privacy-and-limits)), so keep the database as private as the logs themselves. sessidx creates it readable only by you and makes no network connections; deleting `~/.cache/sessidx` removes everything it stored.
 
@@ -20,15 +20,49 @@ cargo install --locked --git https://github.com/Entwining/sessidx --root ~/.loca
 
 This installs `~/.local/bin/sessidx`; put that directory on `PATH`. From a checkout, use `--path .` instead of `--git`.
 
-## Use
-
-Build the index once before querying:
+Then build the index once:
 
 ```sh
 sessidx index
 ```
 
-It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes; an interrupted build resumes from the files it finished. After that, each query refreshes the index incrementally within a two-second budget, so nothing runs in the background. Queries also index, but only for those two seconds each, so on a long history they report incomplete results until the first build is done.
+It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes, and an interrupted build resumes from the files it finished. From then on, each query first indexes new and changed logs within a two-second budget, so nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete.
+
+### Keep history searchable
+
+When an agent deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/data-usage#data-retention) (30 days by default; sessions started or last continued in Claude Desktop or Cowork are exempt by default), so raise that setting to keep a longer searchable history.
+
+## Use it from an agent
+
+The [`sessidx` skill](skills/sessidx/SKILL.md) tells an agent when to reach for sessidx and how to read its results. Each agent installs it as a plugin or package with the commands below; start a new session afterwards to load it. If you installed the skill another way before, remove that copy first, or the agent finds two and may keep the old one. The skill does not include the `sessidx` binary: the agent runs the one you installed above, so it must be on `PATH`.
+
+### Claude Code
+
+```sh
+claude plugin marketplace add Entwining/sessidx
+claude plugin install sessidx@entwining
+```
+
+By default, Claude Code does not update plugins from third-party marketplaces automatically; run `claude plugin update sessidx@entwining`.
+
+### Codex
+
+```sh
+codex plugin marketplace add Entwining/sessidx
+codex plugin add sessidx@entwining
+```
+
+Codex updates the plugin when it starts.
+
+### Pi
+
+```sh
+pi install git:github.com/Entwining/sessidx
+```
+
+Update it with `pi update git:github.com/Entwining/sessidx`.
+
+## Use it directly
 
 Every command writes JSON Lines for `jq`. The examples below run on a small synthetic history, [`tests/fixtures/readme`](tests/fixtures/readme), and a test checks that the output shown here is what sessidx prints for it. To find the discussion behind a commit:
 
@@ -63,33 +97,6 @@ The last line of every command is an `end` record. Check its `complete` field be
 | `index --full` | Rebuild the index, as a schema change requires |
 
 [docs/cli.md](docs/cli.md) is the full contract, and `sessidx COMMAND --help` lists each command's options.
-
-### Keep history searchable
-
-When an agent deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/data-usage#data-retention) (30 days by default; sessions started or last continued in Claude Desktop or Cowork are exempt by default), so raise that setting to keep a longer searchable history.
-
-## Use it from an agent
-
-The [`sessidx` skill](skills/sessidx/SKILL.md) teaches an agent with a shell when to reach for sessidx and how to read its results. With `sessidx` on `PATH`, install it for your user through one of these installers; using two for the same agent loads the skill twice.
-
-As a Claude Code plugin, updated with `claude plugin update sessidx@entwining`:
-
-```sh
-claude plugin marketplace add Entwining/sessidx
-claude plugin install sessidx@entwining
-```
-
-With [`skills`](https://github.com/vercel-labs/skills) for Claude Code, Codex, Pi, and other agents (pass `-a` once per agent), updated with `npx skills update -g`:
-
-```sh
-npx skills add Entwining/sessidx -g -a claude-code -a codex -a pi
-```
-
-With the GitHub CLI, updated with `gh skill update sessidx`:
-
-```sh
-gh skill install Entwining/sessidx sessidx --scope user
-```
 
 ## Documentation
 
