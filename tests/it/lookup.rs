@@ -4,7 +4,15 @@ use sessidx::{
     model::Agent,
     query::{self, Filters},
 };
-use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
@@ -43,6 +51,30 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     assert!(coverage.incomplete);
     assert_eq!(coverage.records, 0);
     assert_eq!(coverage.continuation, Some(0));
+}
+
+#[test]
+fn search_work_follows_its_matches_not_the_history() {
+    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,role,role_source,kind,kind_source,model_source,ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source FROM n JOIN event_rows r ON r.id=1;").unwrap();
+    let steps = Arc::new(AtomicUsize::new(0));
+    let counter = steps.clone();
+    store
+        .db
+        .progress_handler(
+            1000,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
+    let hits = search_hits(&store.db, "太长", &Filters::default(), 20, 0).unwrap();
+    assert_eq!(hits.len(), 1);
+    // A scan of the 200,000 rows that cannot match costs thousands of
+    // callbacks, one per 1,000 virtual machine instructions.
+    let steps = steps.load(Ordering::Relaxed);
+    assert!(steps < 100, "{steps} thousand instructions");
 }
 
 #[test]

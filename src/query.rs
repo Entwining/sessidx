@@ -293,6 +293,7 @@ pub fn search(
     args.push(Value::Integer(offset as i64));
     args.push(Value::Integer(SEARCH_PAGE_SESSIONS as i64));
     // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
+    // The final join starts from the ranked hits. Rule: docs/formats.md `search_hit_lookup`.
     let sql = format!(
         "WITH matches AS MATERIALIZED (
           SELECT e.file_id,e.id,e.ts,bm25(fts) AS score {FROM}
@@ -315,8 +316,8 @@ pub fn search(
           CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(anchor)
             FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,file_id LIMIT ?)) END,
           coalesce(e.text,''),s.file_id,s.session_kind,s.parent_id,s.cwd,s.started_at
-        {FROM} CROSS JOIN ordering
-        JOIN ranked r ON r.id=e.id JOIN heads h ON h.file_id=e.file_id
+        FROM ranked r CROSS JOIN events e ON e.id=r.id JOIN sessions s ON s.file_id=e.file_id
+        CROSS JOIN ordering JOIN heads h ON h.file_id=e.file_id
         WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.file_id,r.n"
     );
     let mut stmt = db.prepare(&sql)?;
