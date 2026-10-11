@@ -39,11 +39,10 @@ The [`sessidx` skill](skills/sessidx/SKILL.md) tells an agent when to reach for 
 ### Claude Code
 
 ```sh
-claude plugin marketplace add Entwining/sessidx
-claude plugin install sessidx@entwining
+claude plugin install sessidx --marketplace Entwining/sessidx
 ```
 
-By default, Claude Code does not update plugins from third-party marketplaces automatically; run `claude plugin update sessidx@entwining`.
+Claude Code does not update plugins from third-party marketplaces by default. To have it update this one, run `/plugin` in a session, select `entwining` on the Marketplaces tab, and choose Enable auto-update; otherwise run `claude plugin update sessidx@entwining`.
 
 ### Codex
 
