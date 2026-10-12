@@ -1,0 +1,392 @@
+[
+  {
+    "sentence": "A recursive search that includes hidden files can read credentials.",
+    "text": "A recursive search that includes hidden files can read credentials. Use default rg on a project path, or search an exact non-sensitive file without recursive or hidden-file flags.",
+    "reason_id": "HiddenSearch"
+  },
+  {
+    "sentence": "A scan rooted at the home directory or ~/Library reaches every app-data entry.",
+    "text": "A scan rooted at the home directory or ~/Library reaches every app-data entry. Scope the scan to a project path.",
+    "reason_id": "Broad"
+  },
+  {
+    "sentence": "An explicit path or wrapper bypasses the provider-aware Claude launcher.",
+    "text": "An explicit path or wrapper bypasses the provider-aware Claude launcher. Run Claude as `claude ...` to use the persisted mode.",
+    "reason_id": "Launcher"
+  },
+  {
+    "sentence": "curl verbose or trace output can print HTTP headers including Authorization.",
+    "text": "curl verbose or trace output can print HTTP headers including Authorization. Drop -v and --trace; use a normal curl request for the needed result.",
+    "reason_id": "Trace"
+  },
+  {
+    "sentence": "find is harder to scope for this repository's searches.",
+    "text": "find is harder to scope for this repository's searches. Use fd with a project-root path instead.",
+    "reason_id": "Find"
+  },
+  {
+    "sentence": "Grep would search private ~/.ssh material.",
+    "text": "Grep would search private ~/.ssh material. Narrow the search to a project directory or an exact public key, client config, allowed_signers, or known_hosts file.",
+    "reason_id": "GrepSsh"
+  },
+  {
+    "sentence": "Grep would search private material in the named .ssh directory or its filesystem alias.",
+    "text": "Grep would search private material in the named .ssh directory or its filesystem alias. Narrow the search to a project directory or an exact public key, client config, allowed_signers, or known_hosts file.",
+    "reason_id": "GrepSsh"
+  },
+  {
+    "sentence": "rg -r means --replace.",
+    "text": "rg -r means --replace. Drop -r; use -n for line numbers, or spell --replace VALUE for an intentional replacement.",
+    "reason_id": "RgReplace"
+  },
+  {
+    "sentence": "rg has no --include flag.",
+    "text": "rg has no --include flag. Filter files with -g GLOB (for example -g '*.ts') or a type filter such as -t ts.",
+    "reason_id": "RgInclude"
+  },
+  {
+    "sentence": "rg regex is not grep BRE: a\\|b matches a literal pipe.",
+    "text": "rg regex is not grep BRE: a\\|b matches a literal pipe. Write alternation as a|b; for a literal pipe, use [|] or -F.",
+    "reason_id": "RgBre"
+  },
+  {
+    "sentence": "Shell nesting exceeds the supported depth of 64.",
+    "text": "Shell nesting exceeds the supported depth of 64. Shorten the nesting or split the command, then recheck each command.",
+    "reason_id": "NestingLimit"
+  },
+  {
+    "sentence": "The agent guard cannot inspect this shell syntax.",
+    "text": "The agent guard cannot inspect this shell syntax. Rewrite it as a Bash-compatible command with explicit paths, or run a narrower command that the guard can inspect.",
+    "reason_id": "UnsupportedShellSyntax"
+  },
+  {
+    "sentence": "The agent guard cannot inspect this unsupported or unresolved operation.",
+    "text": "The agent guard cannot inspect this unsupported or unresolved operation. Replace the unsupported construct with a Bash-compatible command naming an explicit public path, then recheck it.",
+    "reason_id": "CoverageGap"
+  },
+  {
+    "sentence": "The agent guard cannot verify the execution owner for this operation.",
+    "text": "The agent guard cannot verify the execution owner for this operation. Have the owner establish and verify the execution boundary, then recheck the call.",
+    "reason_id": "ExecutionOwnerUnavailable"
+  },
+  {
+    "sentence": "The agent guard could not complete its symlink check.",
+    "text": "The agent guard could not complete its symlink check. Name the direct non-sensitive file outside protected trees, or ask the user to inspect the target locally.",
+    "reason_id": "Symlink"
+  },
+  {
+    "sentence": "The agent guard could not complete this check before its deadline, so the call is blocked.",
+    "text": "The agent guard could not complete this check before its deadline, so the call is blocked. Split the work into smaller calls naming explicit public targets, then recheck each call.",
+    "reason_id": "Deadline"
+  },
+  {
+    "sentence": "The agent guard could not complete this check within its resource limit, so the call is blocked.",
+    "text": "The agent guard could not complete this check within its resource limit, so the call is blocked. Split the work into smaller calls naming explicit public targets, then recheck each call.",
+    "reason_id": "ResourceLimit"
+  },
+  {
+    "sentence": "The agent guard could not complete this check, so the call is blocked.",
+    "text": "The agent guard could not complete this check, so the call is blocked. Ask the checker owner to run `agent-guard --version` and check a single public file, repair the reported fault, then recheck the call before running it.",
+    "reason_id": "CheckError"
+  },
+  {
+    "sentence": "The agent guard could not complete this check, so the call is blocked.",
+    "text": "The agent guard could not complete this check, so the call is blocked. Have the checker owner repair the failed check, then recheck the call before running it.",
+    "reason_id": "CheckError"
+  },
+  {
+    "sentence": "The agent guard could not complete this check, so the call is blocked.",
+    "text": "The agent guard could not complete this check, so the call is blocked. Send a complete UTF-8 JSON event with the documented tool fields and an absolute cwd, then recheck the call.",
+    "reason_id": "CheckError"
+  },
+  {
+    "sentence": "The agent guard could not complete this check, so the call is blocked.",
+    "text": "The agent guard could not complete this check, so the call is blocked. Supply an absolute cwd in the event, then recheck the call.",
+    "reason_id": "CheckError"
+  },
+  {
+    "sentence": "The event is not valid UTF-8.",
+    "text": "The event is not valid UTF-8. Encode the request as UTF-8, then recheck the call.",
+    "reason_id": "InvalidEncoding"
+  },
+  {
+    "sentence": "The event requires an absolute cwd.",
+    "text": "The event requires an absolute cwd. Use an absolute cwd, then recheck the call.",
+    "reason_id": "AbsoluteCwdRequired"
+  },
+  {
+    "sentence": "The guard cannot inspect an inode-addressed /.vol path.",
+    "text": "The guard cannot inspect an inode-addressed /.vol path. Name the file by its ordinary file path, then recheck the call.",
+    "reason_id": "InodeAlias"
+  },
+  {
+    "sentence": "The guard cannot resolve this path through bounded or cyclic aliases.",
+    "text": "The guard cannot resolve this path through bounded or cyclic aliases. Name the file by an ordinary absolute path without the cyclic or deep alias chain, then recheck the call.",
+    "reason_id": "IdentityBound"
+  },
+  {
+    "sentence": "This changes a protected credential, environment or SSH resource.",
+    "text": "This changes a protected credential, environment or SSH resource. Use a non-sensitive source and destination, or ask the user to perform the change in their own terminal and share only the non-sensitive result.",
+    "reason_id": "ResourceChange"
+  },
+  {
+    "sentence": "This command exceeds the guard's inspection budget.",
+    "text": "This command exceeds the guard's inspection budget. Split loops or function calls into smaller commands with explicit public paths, then recheck each command.",
+    "reason_id": "InspectionBudget"
+  },
+  {
+    "sentence": "This command exceeds the guard's inspection budget.",
+    "text": "This command exceeds the guard's inspection budget. Split loops, function calls or brace alternatives into smaller commands with explicit public paths, then recheck each command.",
+    "reason_id": "InspectionBudget"
+  },
+  {
+    "sentence": "This dumps environment or shell variables, including secrets.",
+    "text": "This dumps environment or shell variables, including secrets. Name the non-sensitive variable needed and read only that variable.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "This event exceeds the input byte limit.",
+    "text": "This event exceeds the input byte limit. Split the call into smaller requests, then recheck each request.",
+    "reason_id": "InputByteLimit"
+  },
+  {
+    "sentence": "This extracts a password from the macOS Keychain.",
+    "text": "This extracts a password from the macOS Keychain. State the intended use and run the authorized client that consumes it without printing it.",
+    "reason_id": "Keychain"
+  },
+  {
+    "sentence": "This inline code names a credential or environment file.",
+    "text": "This inline code names a credential or environment file. To write text that mentions the file, use the Write or Edit tool; to run code that needs its values, pass the file through a modelled runtime's option, such as `node --env-file=.env`, though the guard does not control what the runtime does with the contents; otherwise ask the user to inspect the file and share only the fact needed.",
+    "reason_id": "CodeFile"
+  },
+  {
+    "sentence": "This inline code names a credential or environment file.",
+    "text": "This inline code names a credential or environment file. To write text that mentions the file, use the Write or Edit tool; to run code that needs its values, pass the file through the runtime's option, such as `node --env-file=.env`; otherwise ask the user to inspect the file and share only the fact needed.",
+    "reason_id": "CodeFile"
+  },
+  {
+    "sentence": "This prints a Git hosting token.",
+    "text": "This prints a Git hosting token. Use auth status without token-display flags; if authentication needs repair, ask the user to update the credential in their terminal.",
+    "reason_id": "Token"
+  },
+  {
+    "sentence": "This prints a stored secret or access token.",
+    "text": "This prints a stored secret or access token. Run the command that uses the credential without printing it, or ask the user to run it in their own terminal and share only the non-secret fact needed.",
+    "reason_id": "StoredSecret"
+  },
+  {
+    "sentence": "This prints the value of a credential variable.",
+    "text": "This prints the value of a credential variable. Ask the user for the specific non-sensitive fact needed, or let the authorized client consume the credential without printing it.",
+    "reason_id": "Variable"
+  },
+  {
+    "sentence": "This reads a credential or environment file.",
+    "text": "This reads a credential or environment file. If a client the guard models only needs to use the file, pass it through that program's own option, such as `--env-file`, `--kubeconfig`, or `ssh -i`; the guard does not control what the client does with the contents. Otherwise read a non-sensitive config file, or ask the user to inspect the file and share only the fact needed.",
+    "reason_id": "File"
+  },
+  {
+    "sentence": "This reads a credential or environment file.",
+    "text": "This reads a credential or environment file. If a program only needs to use the file, pass it through the program's own option, such as `--env-file`, `--kubeconfig`, or `ssh -i`; otherwise read a non-sensitive config file, or ask the user to inspect the file and share only the fact needed.",
+    "reason_id": "File"
+  },
+  {
+    "sentence": "This reads a credential or environment file.",
+    "text": "This reads a credential or environment file. Read a non-sensitive config file instead; if a fact from this file is needed, ask the user to inspect it and share only that fact.",
+    "reason_id": "File"
+  },
+  {
+    "sentence": "This reads a protected macOS app-data directory.",
+    "text": "This reads a protected macOS app-data directory. Name a specific non-sensitive file under ~/Library/Application Support instead, or ask the user to inspect the protected file and share the needed fact.",
+    "reason_id": "AppData"
+  },
+  {
+    "sentence": "This reads private material in the named .ssh directory or its filesystem alias.",
+    "text": "This reads private material in the named .ssh directory or its filesystem alias. Search public material in the project or request the exact public key or client-config path; ask the user to inspect private material locally if a specific non-sensitive fact is needed.",
+    "reason_id": "Ssh"
+  },
+  {
+    "sentence": "This reads private material under ~/.ssh.",
+    "text": "This reads private material under ~/.ssh. Search public material in the project or request the exact public key or client-config path; ask the user to inspect private material locally if a specific non-sensitive fact is needed.",
+    "reason_id": "Ssh"
+  },
+  {
+    "sentence": "This relocates protected credential, environment or SSH content to an unprotected name.",
+    "text": "This relocates protected credential, environment or SSH content to an unprotected name. Keep both names protected, use a non-sensitive source, or ask the user to perform the change in their own terminal and share only the non-sensitive result.",
+    "reason_id": "ResourceChange"
+  },
+  {
+    "sentence": "This sends the contents of a credential file.",
+    "text": "This sends the contents of a credential file. Send only the required non-sensitive fields explicitly, and let the client obtain authentication from its normal credential source.",
+    "reason_id": "Upload"
+  },
+  {
+    "sentence": "dumps environment variables including secrets.",
+    "text": "dumps environment variables including secrets.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "dumps shell variables including secrets.",
+    "text": "dumps shell variables including secrets.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "reading .env file contents would expose secrets.",
+    "text": "reading .env file contents would expose secrets.",
+    "reason_id": "File"
+  },
+  {
+    "sentence": "reading sensitive file contents.",
+    "text": "reading sensitive file contents.",
+    "reason_id": "File"
+  },
+  {
+    "sentence": "reading SSH private key.",
+    "text": "reading SSH private key.",
+    "reason_id": "Ssh"
+  },
+  {
+    "sentence": "curl verbose prints HTTP headers including Authorization.",
+    "text": "curl verbose prints HTTP headers including Authorization.",
+    "reason_id": "Trace"
+  },
+  {
+    "sentence": "gh auth token prints GitHub credentials.",
+    "text": "gh auth token prints GitHub credentials.",
+    "reason_id": "Token"
+  },
+  {
+    "sentence": "printing secret variable values.",
+    "text": "printing secret variable values.",
+    "reason_id": "Variable"
+  },
+  {
+    "sentence": "Use fd instead of find.",
+    "text": "Use fd instead of find. fd has simpler syntax and respects .gitignore by default.",
+    "reason_id": "Find"
+  },
+  {
+    "sentence": "Do not run dev/build/start/serve commands.",
+    "text": "Do not run dev/build/start/serve commands. Verify through code review, type checking, and linting instead.",
+    "reason_id": "Server"
+  },
+  {
+    "sentence": "Do not run dev/start/serve commands.",
+    "text": "Do not run dev/start/serve commands. Verify through code review, type checking, and linting instead.",
+    "reason_id": "Server"
+  },
+  {
+    "sentence": "Do not run dev/start/serve commands, even when explicitly asked; do not retry.",
+    "text": "Do not run dev/start/serve commands, even when explicitly asked; do not retry. If a running app is needed, ask the user to run it in their own terminal (e.g. ! npm run dev). Otherwise verify through code review, type checking, and linting.",
+    "reason_id": "Server"
+  },
+  {
+    "sentence": "rg is not grep: a clustered -r flag invokes --replace, which silently rewrites every match in the output while exiting 0.",
+    "text": "rg is not grep: a clustered -r flag invokes --replace, which silently rewrites every match in the output while exiting 0. rg recurses with line numbers by default, so drop the flag entirely; for intentional replacement write --replace VALUE.",
+    "reason_id": "RgReplace"
+  },
+  {
+    "sentence": "rg has no --include flag.",
+    "text": "rg has no --include flag. Filter files with -g GLOB (e.g. -g '*.ts') or a type filter like -t ts.",
+    "reason_id": "RgInclude"
+  },
+  {
+    "sentence": "rg regex is not grep BRE: \\| is an escaped literal pipe, so a\\|b matches the literal text a|b and silently finds nothing.",
+    "text": "rg regex is not grep BRE: \\| is an escaped literal pipe, so a\\|b matches the literal text a|b and silently finds nothing. Write alternation as a|b; to match a literal pipe intentionally, use [|] or -F.",
+    "reason_id": "RgBre"
+  },
+  {
+    "sentence": "Do not dump the process environment.",
+    "text": "Do not dump the process environment.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "Do not dump an envchain namespace.",
+    "text": "Do not dump an envchain namespace.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "Run Claude as `envchain claude-gateway claude ...`.",
+    "text": "Run Claude as `envchain claude-gateway claude ...`.",
+    "reason_id": "Launcher"
+  },
+  {
+    "sentence": "Credential and environment files are opaque client inputs; do not display their contents.",
+    "text": "Credential and environment files are opaque client inputs; do not display their contents.",
+    "reason_id": "File"
+  },
+  {
+    "sentence": "Do not print credential environment variables.",
+    "text": "Do not print credential environment variables.",
+    "reason_id": "Variable"
+  },
+  {
+    "sentence": "Do not dump exported variables.",
+    "text": "Do not dump exported variables.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "Do not dump shell variables.",
+    "text": "Do not dump shell variables.",
+    "reason_id": "Dump"
+  },
+  {
+    "sentence": "Do not print credential shell variables.",
+    "text": "Do not print credential shell variables.",
+    "reason_id": "Variable"
+  },
+  {
+    "sentence": "Do not print Git hosting credentials.",
+    "text": "Do not print Git hosting credentials.",
+    "reason_id": "Token"
+  },
+  {
+    "sentence": "Do not extract credentials from the macOS Keychain.",
+    "text": "Do not extract credentials from the macOS Keychain.",
+    "reason_id": "Keychain"
+  },
+  {
+    "sentence": "Authenticated curl tracing can print credential headers.",
+    "text": "Authenticated curl tracing can print credential headers.",
+    "reason_id": "Trace"
+  },
+  {
+    "sentence": "Run Claude as `claude ...`; the provider-aware launcher selects the persisted mode.",
+    "text": "Run Claude as `claude ...`; the provider-aware launcher selects the persisted mode.",
+    "reason_id": "Launcher"
+  },
+  {
+    "sentence": "reading private material under ~/.ssh.",
+    "text": "reading private material under ~/.ssh.",
+    "reason_id": "Ssh"
+  },
+  {
+    "sentence": "curl verbose or trace output can print HTTP headers including Authorization.",
+    "text": "curl verbose or trace output can print HTTP headers including Authorization.",
+    "reason_id": "Trace"
+  },
+  {
+    "sentence": "Token-display flags are not allowed in gh auth status.",
+    "text": "Token-display flags are not allowed in gh auth status. Omit --show-token and -t for ordinary status inspection.",
+    "reason_id": "Token"
+  },
+  {
+    "sentence": "rg -r means --replace.",
+    "text": "rg -r means --replace. Drop -r; use -n when you need line numbers. For intentional replacement, spell --replace VALUE.",
+    "reason_id": "RgReplace"
+  },
+  {
+    "sentence": "rg regex is not grep BRE: a\\|b matches literal a|b.",
+    "text": "rg regex is not grep BRE: a\\|b matches literal a|b. Write alternation as a|b; to match a literal pipe intentionally, use [|] or -F.",
+    "reason_id": "RgBre"
+  },
+  {
+    "sentence": "Do not run dev/start/serve commands, even when explicitly asked; do not retry.",
+    "text": "Do not run dev/start/serve commands, even when explicitly asked; do not retry. If a running app is needed, ask the user to run it in their own terminal (e.g. ! npm run dev). Otherwise use relevant finite checks such as tests, type checking, or linting.",
+    "reason_id": "Server"
+  },
+  {
+    "sentence": "Grep requires a verifiable search scope outside private ~/.ssh material.",
+    "text": "Grep requires a verifiable search scope outside private ~/.ssh material. Narrow the search to a directory that neither contains nor lies within ~/.ssh, or an exact public key, client config, allowed_signers, or known_hosts file.",
+    "reason_id": "GrepSsh"
+  }
+]

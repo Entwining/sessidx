@@ -50,7 +50,7 @@ fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_contr
     let mut stmt = store
         .db
         .prepare(
-            "SELECT source,count(*) FROM denials WHERE reason_id='Include' GROUP BY source ORDER BY source",
+            "SELECT source,count(*) FROM denials WHERE reason_id='RgInclude' GROUP BY source ORDER BY source",
         )
         .unwrap();
     let denials = stmt
@@ -348,70 +348,65 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
 }
 
 #[test]
-fn guard_reason_prefixes_map_to_stable_ids_in_list_order() {
-    let mut failures = Vec::new();
-    for (prefix, id) in [
-        (
-            "The agent guard cannot inspect this shell syntax.",
-            "Syntax",
-        ),
-        (
-            "This reads a protected macOS app-data directory.",
-            "Appdata",
-        ),
-        ("A scan rooted at the home directory or ~/Library", "Broad"),
-        ("This reads a credential or environment file.", "File"),
-        (
-            "This inline code names a credential or environment file.",
-            "CodeFile",
-        ),
-        (
-            "A recursive search that includes hidden files",
-            "HiddenSearch",
-        ),
-        ("This dumps environment or shell variables", "Dump"),
-        (
-            "This prints the value of a credential variable.",
-            "Variable",
-        ),
-        ("This prints a Git hosting token.", "Token"),
-        (
-            "This extracts a password from the macOS Keychain.",
-            "Keychain",
-        ),
-        (
-            "This prints a stored secret or access token.",
-            "SecretPrint",
-        ),
-        ("curl verbose or trace output", "Trace"),
-        ("This sends the contents of a credential file.", "Upload"),
-        ("This reads private material under ~/.ssh.", "Ssh"),
-        ("Grep would search private ~/.ssh material.", "GrepSsh"),
-        (
-            "The agent guard could not complete its symlink check.",
-            "Symlink",
-        ),
-        ("rg -r means --replace.", "Replace"),
-        ("rg has no --include flag.", "Include"),
-        ("rg regex is not grep BRE:", "Bre"),
-    ] {
-        let actual = outcomes::reason_id(&format!("DENIED: {prefix} Further guidance."));
-        if actual != id {
-            failures.push(format!("{prefix} -> {actual}"));
+fn published_guard_sentences_classify_and_recognize_only_leading_pi_reasons() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/guard-reasons.json")).unwrap();
+    let covered: std::collections::BTreeSet<&str> = fixtures
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["sentence"].as_str().unwrap())
+        .collect();
+    let published: std::collections::BTreeSet<&str> =
+        outcomes::GUARD_REASONS.iter().map(|(s, _, _)| *s).collect();
+    assert_eq!(
+        published, covered,
+        "every published sentence needs a fixture"
+    );
+    for f in fixtures.as_array().unwrap() {
+        let text = f["text"].as_str().unwrap();
+        let sentence = f["sentence"].as_str().unwrap();
+        let id = f["reason_id"].as_str().unwrap();
+        assert_eq!(
+            outcomes::reason_id(&format!("DENIED: {text}")),
+            id,
+            "{text}"
+        );
+        for output in [text.to_owned(), format!("Blocked: {text}")] {
+            let mut e = sessidx::model::Event::new("tool", EventKind::ToolResult, "fixture");
+            e.ok = Some(false);
+            outcomes::classify(&mut e, &serde_json::json!(output), Agent::Pi);
+            assert_eq!(e.denials, [("guard".into(), id.into())], "{text}");
         }
-        // Either shortened end is not the guard's reason.
-        for part in [&prefix[1..], &prefix[..prefix.len() - 1]] {
-            if outcomes::reason_id(part) != "unknown" {
-                failures.push(format!("partial {part}"));
+        // Partial sentences, diagnostic mentions and quotes are not bare refusals.
+        for output in [
+            sentence[1..].to_owned(),
+            sentence[..sentence.len() - 1].to_owned(),
+            format!("diagnostic: {text}"),
+            format!("\"{text}\""),
+        ] {
+            if !output.contains(sentence) {
+                assert_eq!(outcomes::reason_id(&output), "unknown", "{output}");
             }
+            let mut e = sessidx::model::Event::new("tool", EventKind::ToolResult, "fixture");
+            e.ok = Some(false);
+            outcomes::classify(&mut e, &serde_json::json!(output), Agent::Pi);
+            assert!(e.denials.is_empty(), "{text}");
         }
     }
-    assert!(failures.is_empty(), "{failures:#?}");
     // The list order, not the position in the text, decides between two reasons.
     assert_eq!(
         outcomes::reason_id(
             "rg has no --include flag. The agent guard cannot inspect this shell syntax."
         ),
-        "Syntax"
+        "UnsupportedShellSyntax"
     );
+    for text in [
+        "DENIED: unrelated policy.",
+        "Could not parse the Bash command.",
+        "PreToolUse guard could not inspect this input; normal permission checks still apply.",
+        "Use rg in Bash instead of the built-in Grep tool.",
+    ] {
+        assert_eq!(outcomes::reason_id(text), "unknown", "{text}");
+    }
 }
