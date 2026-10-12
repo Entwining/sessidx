@@ -9,9 +9,8 @@ allow = ["MIT", "Apache-2.0"]
 exceptions = [
     { allow = ["Zlib"], crate = "foldhash" },
     { allow = ["Unicode-3.0"], crate = "unicode-ident" },
-    # The zstd C library is BSD-3-Clause or GPLv2. zstd-sys and zstd-safe declare
-    # BSD-3-Clause too, as zstd does from 0.14; until zstd 0.14 is taken, the zstd
-    # entry matches nothing and cargo deny warns about it.
+    # The zstd C library is BSD-3-Clause or GPLv2; zstd, zstd-safe, and zstd-sys
+    # declare BSD-3-Clause too.
     { allow = ["BSD-3-Clause"], crate = "zstd" },
     { allow = ["BSD-3-Clause"], crate = "zstd-safe" },
     { allow = ["BSD-3-Clause"], crate = "zstd-sys" },
