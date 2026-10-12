@@ -92,6 +92,37 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
             data += &line(&format!("label-{i}-{kind}"), kind, message);
         }
     }
+    for (i, case) in fixture["assignments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let text = case["input"].as_str().unwrap();
+        values.extend(
+            case["canaries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_owned()),
+        );
+        for (kind, message) in [
+            (
+                "user",
+                serde_json::json!({"role":"user","content":format!("needle {text}")}),
+            ),
+            (
+                "assistant",
+                serde_json::json!({"role":"assistant","content":[{"type":"tool_use","id":format!("assignment-{i}"),"name":"Bash","input":{"command":text}}]}),
+            ),
+            (
+                "user",
+                serde_json::json!({"role":"user","content":[{"type":"tool_result","tool_use_id":format!("assignment-{i}"),"is_error":false,"content":format!("needle {text}")}]}),
+            ),
+        ] {
+            data += &line(&format!("assignment-{i}-{kind}"), kind, message);
+        }
+    }
     for key in ["symbol", "slash", "url_path", "url_query", "uuid_layout"] {
         let value = fixture[key].as_str().unwrap();
         values.push(value.into());
@@ -447,6 +478,22 @@ fn scan_matches_original_ranges_before_redacting_display() {
 
 #[test]
 fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/credential-context.json")).unwrap();
+    let failures: Vec<_> = fixture["assignments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .filter(|(_, case)| {
+            redaction::redact(case["input"].as_str().unwrap()) != case["expected"].as_str().unwrap()
+        })
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        failures.is_empty(),
+        "assignment fixture cases failed: {failures:?}"
+    );
     for (text, expected) in [
         (
             r#"id=thread_id="q7Zx9Lm2Pw4Rt8Vb api_key=abc123""#,
@@ -491,6 +538,14 @@ fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
     ] {
         assert_eq!(redaction::redact(text), expected);
     }
+    assert_eq!(
+        redaction::redact_argv(&[
+            "curl".into(),
+            "--cookie".into(),
+            "session=small; theme=light".into()
+        ]),
+        ["curl", "--cookie", "[REDACTED]"]
+    );
     let identifiers = "id=".repeat(8192);
     assert_eq!(
         redaction::redact(&format!("{identifiers}api_key=0123456789abcdef")),
@@ -521,6 +576,9 @@ fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
         "thread_ids": ["vR9xT6qA2nL8cP4hY0sD7fG3jK5"],
         "parent_id": "sk-SyntheticKeyThree3",
         "AWSAccessKey": "plain",
+        "cookies": [{"name": "session", "value": "tiny"}],
+        "cookie": "small",
+        "session": "public-session",
         "description": "vR9xT6qA2nL8cP4hY0sD7fG3jK5",
         "sk-SyntheticKeyOne1": 1,
         "sk-SyntheticKeyTwo2": 2
@@ -540,6 +598,9 @@ fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
         "thread_ids": ["vR9xT6qA2nL8cP4hY0sD7fG3jK5"],
         "parent_id": "[REDACTED]",
         "AWSAccessKey": "[REDACTED]",
+        "cookies": "[REDACTED]",
+        "cookie": "[REDACTED]",
+        "session": "public-session",
         "description": "[REDACTED]",
         "[REDACTED]": 1,
         "[REDACTED]#2": 2

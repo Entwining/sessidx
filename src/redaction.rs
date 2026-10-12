@@ -11,17 +11,17 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 ].into_iter().map(|p| Regex::new(p).expect("static regex is valid")).collect()
 });
 /// `name=value` or `name: value`, with optional quotes around the name, or a
-/// `--name value` flag pair.
+/// `--name value` flag pair, or a Cookie/Set-Cookie header.
 static ASSIGNMENTS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"["']?([A-Za-z0-9_\-]+)["']?\s*[=:]\s*|(?:^|\s)--?([A-Za-z0-9][A-Za-z0-9_\-]*)[ \t]+"#,
+        r#"(?P<header>(?:(?P<quote>\\?["'])[ \t]*)?\b(?i:Cookie|Set-Cookie):[ \t]*)|(?:\\?["'])?(?P<name>[A-Za-z0-9_\-]+)(?:\\?["'])?\s*[=:]\s*|(?:^|\s)--?(?P<flag>[A-Za-z0-9][A-Za-z0-9_\-]*)[ \t]+"#,
     )
     .expect("static regex is valid")
 });
 // A quoted value without its closing quote runs to the end of the text, as in
 // a cut output prefix.
 static ASSIGNED_VALUE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|[^\s,"'<>}]+)"#)
+    Regex::new(r#"^(?:\\"(?s:.*?)(?:\\"|$)|\\'(?s:.*?)(?:\\'|$)|"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|[^\s,"'<>}]+)"#)
         .expect("static regex is valid")
 });
 // An unquoted value ends where the next URL query pair starts.
@@ -167,7 +167,18 @@ fn classify(name: &str) -> Name {
     ]
     .iter()
     .any(|w| ends(w))
-        || ["auth", "sig", "signature", "bearer"].iter().any(|w| is(w))
+        || [
+            "auth",
+            "sig",
+            "signature",
+            "bearer",
+            "cookie",
+            "cookies",
+            "sessionid",
+            "phpsessid",
+        ]
+        .iter()
+        .any(|w| is(w))
         || is("key") && qualified_key()
     {
         Name::Credential
@@ -272,31 +283,64 @@ fn redact_named(text: &str, judge_runs: bool) -> String {
     let mut unquoted_end = 0;
     for caps in ASSIGNMENTS.captures_iter(&out) {
         let assignment = caps.get_match();
+        let header = caps.name("header").is_some();
         let name = caps
-            .get(1)
-            .or_else(|| caps.get(2))
+            .name("name")
+            .or_else(|| caps.name("flag"))
             .map_or("", |m| m.as_str());
-        let class = classify(name);
+        let class = if header {
+            Name::Credential
+        } else {
+            classify(name)
+        };
         if assignment.start() < offset
             || class == Name::Ordinary
             || (class == Name::Identifier && assignment.end() < exempt_end)
         {
             continue;
         }
-        let value_end = if assignment.end() < unquoted_end {
+        let tail = &out[assignment.end()..];
+        let quote = if tail.starts_with(['"', '\'']) {
+            &tail[..1]
+        } else if tail.starts_with(r#"\""#) || tail.starts_with(r"\'") {
+            &tail[..2]
+        } else {
+            ""
+        };
+        let value_end = if header {
+            let line_end = assignment.end() + tail.find(['\r', '\n']).unwrap_or(tail.len());
+            if let Some(quote) = caps.name("quote") {
+                let value = ASSIGNED_VALUE
+                    .find(&out[quote.start()..line_end])
+                    .expect("header starts with a quote");
+                let end = quote.start() + value.end();
+                if out[assignment.end()..end].ends_with(quote.as_str()) {
+                    end - quote.len()
+                } else {
+                    end
+                }
+            } else {
+                line_end
+            }
+        } else if assignment.end() < unquoted_end {
             unquoted_end
         } else {
             let Some(value) = ASSIGNED_VALUE.find(&out[assignment.end()..]) else {
                 continue;
             };
-            let end = assignment.end() + value.end();
-            if !out[assignment.end()..end].starts_with(['"', '\'']) {
+            let mut end = assignment.end() + value.end();
+            if quote.is_empty() && out[..end].ends_with('\\') && out[end..].starts_with(['"', '\''])
+            {
+                end -= 1;
+            }
+            if quote.is_empty() {
                 unquoted_end = end;
             }
             end
         };
         let mut value = &out[assignment.end()..value_end];
-        if !value.starts_with(['"', '\''])
+        if !header
+            && quote.is_empty()
             && out[..assignment.start()].ends_with(['?', '&'])
             && let Some(pair) = QUERY_PAIR.find(value)
         {
@@ -310,10 +354,11 @@ fn redact_named(text: &str, judge_runs: bool) -> String {
             // Rule: docs/formats.md `identifier_values`.
             exempt_end = offset + value.len();
         } else {
-            let quote = &value[..usize::from(value.starts_with(['"', '\'']))];
-            redacted.push_str(quote);
+            if !header {
+                redacted.push_str(quote);
+            }
             redacted.push_str("[REDACTED]");
-            if value.len() > 1 && value.ends_with(quote) {
+            if !header && value.len() > quote.len() && value.ends_with(quote) {
                 redacted.push_str(quote);
             }
             offset += value.len();
