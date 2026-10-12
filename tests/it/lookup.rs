@@ -15,28 +15,167 @@ use std::{
 };
 
 #[test]
+fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
+    let (_dir, store, _) = indexed_files(Agent::Codex, &[]);
+    store
+        .db
+        .execute_batch(include_str!("../fixtures/session-paths.sql"))
+        .unwrap();
+    let counts_query = |key: &str| {
+        format!(
+            "SELECT s.path,(SELECT count(*) FROM events e WHERE {key} AND e.kind='tool_call') AS calls
+             FROM sessions s WHERE s.started_at >= '2026-10-01' ORDER BY s.file_id"
+        )
+    };
+    let path_query = counts_query("e.path=s.path");
+    let plan = store
+        .db
+        .prepare(&format!("EXPLAIN QUERY PLAN {path_query}"))
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.starts_with("SEARCH ") && step.contains("(path=?)")),
+        "{path_query}: {plan:?}"
+    );
+    assert!(
+        !plan
+            .iter()
+            .any(|step| step == "SCAN e" || step.starts_with("SCAN e ")),
+        "{path_query}: {plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .any(|step| step.starts_with("SEARCH e ") && step.contains("file_id=?")),
+        "{path_query}: {plan:?}"
+    );
+    let counts = |key| {
+        store
+            .db
+            .prepare(&counts_query(key))
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let by_path = counts("e.path=s.path");
+    assert_eq!(by_path, counts("e.file_id=s.file_id"));
+    assert_eq!(
+        by_path.iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+        [2, 3, 1]
+    );
+    assert_eq!(
+        counts("e.agent=s.agent AND e.session_id=s.session_id")
+            .iter()
+            .map(|(_, n)| *n)
+            .collect::<Vec<_>>(),
+        [5, 5, 1]
+    );
+    let path = "/synthetic/transcript-1.jsonl";
+    assert_eq!(query::session_file(&store.db, path).unwrap(), Some(1));
+    assert!(
+        store
+            .db
+            .execute(
+                "UPDATE sessions SET path='/synthetic/transcript-1.jsonl' WHERE file_id=2",
+                []
+            )
+            .is_err()
+    );
+    // An unindexed path lookup scans the whole sessions table, so grow it until
+    // that scan dominates the indexed search the progress handler measures.
+    store
+        .db
+        .execute_batch(
+            "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<50000)
+             INSERT INTO files(id,path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json)
+             SELECT 1000+i,'/synthetic/bulk-'||i||'.jsonl','codex',0,i,0,'0','',0,'{}' FROM n;
+             INSERT INTO sessions(file_id,agent,session_id,session_kind,session_kind_source,path,cwd,started_at)
+             SELECT id,agent,'bulk-'||id,'main','synthetic',path,'/synthetic','2020-01-01' FROM files WHERE id>1000;",
+        )
+        .unwrap();
+    let steps = Arc::new(AtomicUsize::new(0));
+    let counter = steps.clone();
+    store
+        .db
+        .progress_handler(
+            100,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
+    let work = |run: &dyn Fn()| {
+        steps.store(0, Ordering::Relaxed);
+        run();
+        steps.load(Ordering::Relaxed)
+    };
+    let (indexed_file, indexed_show) = (
+        work(&|| assert_eq!(query::session_file(&store.db, path).unwrap(), Some(1))),
+        work(&|| {
+            let (hits, _) = query::show(&store.db, path, 0, 10, 0).unwrap();
+            assert_eq!(hits.len(), 2);
+        }),
+    );
+    store.db.execute_batch("DROP INDEX sessions_path").unwrap();
+    let (unindexed_file, unindexed_show) = (
+        work(&|| assert_eq!(query::session_file(&store.db, path).unwrap(), Some(1))),
+        work(&|| {
+            let (hits, _) = query::show(&store.db, path, 0, 10, 0).unwrap();
+            assert_eq!(hits.len(), 2);
+        }),
+    );
+    // One callback per 100 virtual machine instructions. The indexed lookup
+    // searches `sessions_path`; the unindexed one scans and sorts 50,000 rows.
+    assert!(
+        indexed_file * 5 < unindexed_file,
+        "{indexed_file} indexed against {unindexed_file} unindexed"
+    );
+    assert!(
+        indexed_show * 5 < unindexed_show,
+        "{indexed_show} indexed against {unindexed_show} unindexed"
+    );
+}
+
+#[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters {
         session: Some("session".into()),
         ..Filters::default()
     };
-    let (clause, args) = filters.sql(&store.db).unwrap();
-    let plan = store
+    let path: String = store
         .db
-        .prepare(&format!(
-            "EXPLAIN QUERY PLAN SELECT e.id FROM events e JOIN sessions s ON s.file_id=e.file_id WHERE {clause} ORDER BY e.id"
-        ))
-        .unwrap()
-        .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(3))
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
+        .query_row("SELECT path FROM sessions", [], |r| r.get(0))
         .unwrap();
-    assert!(
-        plan.iter()
-            .any(|s| s.starts_with("SEARCH e ") && s.contains("(file_id=?)")),
-        "{plan:?}"
-    );
+    for selector in ["session".to_owned(), path] {
+        let (clause, args) = Filters {
+            session: Some(selector),
+            ..Filters::default()
+        }
+        .sql(&store.db)
+        .unwrap();
+        let plan = store
+            .db
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN SELECT e.id FROM events e JOIN sessions s ON s.file_id=e.file_id WHERE {clause} ORDER BY e.id"
+            ))
+            .unwrap()
+            .query_map(rusqlite::params_from_iter(args), |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|s| s.starts_with("SEARCH e ") && s.contains("(file_id=?)")),
+            "{plan:?}"
+        );
+    }
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,role,role_source,kind,kind_source,model_source,ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source FROM n JOIN event_rows r ON r.id=1;").unwrap();
     let (hits, coverage) = query::scan(
         &store.db,

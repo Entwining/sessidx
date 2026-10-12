@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS sessions (
  path TEXT NOT NULL, cwd TEXT NOT NULL, started_at TEXT, instruction_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS sessions_id ON sessions(session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_path ON sessions(path);
 -- Every indexed event needs a range for show/grep and identity for dedup. Bodies live in
 -- event_texts so that scans over this metadata stay narrow.
 CREATE TABLE IF NOT EXISTS event_rows (
@@ -99,4 +100,4 @@ CREATE VIEW IF NOT EXISTS call_outcomes AS
   FROM sessions rs JOIN event_rows r ON r.file_id=rs.file_id
   WHERE rs.agent=c.agent AND rs.session_id=c.session_id AND r.call_id=unhex(c.call_id) AND r.kind='tool_result') AS ok_source
  FROM canonical_events c WHERE c.kind='tool_call';
-PRAGMA user_version=8;
+PRAGMA user_version=9;
