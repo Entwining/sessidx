@@ -1,4 +1,7 @@
-use crate::model::Agent;
+use crate::{
+    model::Agent,
+    redaction::{Redacted, is_run_char},
+};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -79,7 +82,12 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
                     }
                     text.push('\n');
                 }
-                let end = s.floor_char_boundary(LIMIT - text.len());
+                let mut end = s.floor_char_boundary(LIMIT - text.len());
+                // Rule: docs/formats.md `tool_output_prefix`. A run cut by the
+                // limit can end in part of a secret that no rule recognizes.
+                if s[end..].starts_with(is_run_char) {
+                    end = s[..end].trim_end_matches(is_run_char).len();
+                }
                 text.push_str(&s[..end]);
                 *truncated = end < s.len();
             }
@@ -108,14 +116,9 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
     // Tool output and UTF-8 clipping: tests/it/output_prefix.rs::tool_output_prefix_is_bounded_and_raw_tail_remains_reachable.
     let mut text = String::with_capacity(LIMIT);
     append(output, &mut text, &mut e.text_truncated);
-    let redacted = crate::redaction::redact_serialized(&text);
-    let end = redacted.floor_char_boundary(LIMIT);
-    e.text_truncated |= end < redacted.len();
-    e.text = if end == 0 {
-        None
-    } else {
-        Some(redacted[..end].into())
-    };
+    let mut redacted = Redacted::new(&text);
+    e.text_truncated |= redacted.truncate(LIMIT);
+    e.text = (!redacted.is_empty()).then_some(redacted);
 }
 
 pub fn shell(tool: &str, args: &Value) -> Option<String> {

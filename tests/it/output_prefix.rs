@@ -111,3 +111,48 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
         1
     );
 }
+
+#[test]
+fn a_value_cut_by_the_prefix_limit_leaves_no_fragment() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/output-prefix.json")).unwrap();
+    for (head, canary, into) in [
+        (
+            "{\"password\":\"",
+            "0123456789abcdef1032547698badcfe89abcdef",
+            6,
+        ),
+        (
+            "{\"password\":\"",
+            "0123456789abcdef1032547698badcfe89abcdef",
+            16,
+        ),
+        (
+            "{\"password\":\"",
+            "0123456789abcdef1032547698badcfe89abcdef",
+            26,
+        ),
+        ("", "q7Zx9Lm2Pw4Rt8VbN3cK6yH1sD5fG0jA", 8),
+    ] {
+        let pad = "x".repeat(2048 - 1 - head.len() - into);
+        let mut record = fixture[0]["record"].clone();
+        record["message"]["content"][0]["content"] =
+            serde_json::json!(format!("{pad} {head}{canary}\"}}"));
+        let event = sessidx::adapters::parse(Agent::Claude, &record, &mut Default::default())
+            .events
+            .remove(0);
+        let text = event.text.unwrap();
+        assert!(event.text_truncated);
+        assert!(text.starts_with(&pad), "{into}");
+        if !head.is_empty() {
+            assert!(text.contains(" {\"password\":\"["), "{into}");
+        }
+        assert!(
+            !canary
+                .as_bytes()
+                .windows(6)
+                .any(|w| text.as_bytes().windows(6).any(|t| t == w)),
+            "a fragment of the value cut at {into} survived"
+        );
+    }
+}

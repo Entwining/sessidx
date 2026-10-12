@@ -1,8 +1,4 @@
-use crate::{
-    model::name,
-    query::Filters,
-    redaction::{redact, redact_metadata},
-};
+use crate::{model::name, query::Filters};
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use rusqlite::{
@@ -208,11 +204,11 @@ pub fn count(
         .mapped(|r| {
             let mut obj = serde_json::Map::new();
             for (i, key) in keys.iter().enumerate() {
-                obj.insert(key.clone(), json!(redact_metadata(&r.get::<_, String>(i)?)));
+                obj.insert(key.clone(), json!(r.get::<_, String>(i)?));
             }
             obj.insert("metric".into(), json!(name(metric)));
             if let Some(program) = program {
-                obj.insert("program".into(), json!(redact(program)));
+                obj.insert("program".into(), json!(program));
             }
             for (i, (field, _)) in fields.iter().enumerate() {
                 obj.insert((*field).into(), json!(r.get::<_, i64>(keys.len() + i)?));
@@ -230,7 +226,7 @@ pub fn doctor(db: &Connection) -> Result<Json> {
     let signatures: Vec<Json> = db
         .prepare("SELECT signature,sum(n) FROM shapes WHERE known=0 GROUP BY signature ORDER BY sum(n) DESC LIMIT 100")?
         .query_map([], |r| {
-            Ok(json!({"signature": redact(&r.get::<_, String>(0)?), "records": r.get::<_, i64>(1)?}))
+            Ok(json!({"signature": r.get::<_, String>(0)?, "records": r.get::<_, i64>(1)?}))
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(json!({
@@ -274,11 +270,11 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
         let names = stmt
             .column_names()
             .iter()
-            .map(|s| redact(s))
+            .map(|s| s.to_string())
             .collect::<Vec<_>>();
         anyhow::ensure!(
             names.iter().collect::<std::collections::HashSet<_>>().len() == names.len(),
-            "duplicate SQL column names after redaction; alias each column uniquely"
+            "duplicate SQL column names; alias each column uniquely"
         );
         let mut rows = stmt.query([])?;
         let mut result = Vec::new();
@@ -293,7 +289,7 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
                     ValueRef::Null => Json::Null,
                     ValueRef::Integer(n) => json!(n),
                     ValueRef::Real(n) => json!(n),
-                    ValueRef::Text(v) => json!(redact(&String::from_utf8_lossy(v))),
+                    ValueRef::Text(v) => json!(String::from_utf8_lossy(v)),
                     ValueRef::Blob(_) => json!("[blob omitted]"),
                 };
                 obj.insert(name.clone(), value);

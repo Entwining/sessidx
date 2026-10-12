@@ -138,11 +138,11 @@ pub fn session_file(db: &Connection, selector: &str) -> Result<Option<i64>> {
         [(file_id, _)] => Ok(Some(*file_id)),
         _ => anyhow::bail!(
             "session ID {} names {} transcripts; pass one of their paths: {}",
-            redact(selector),
+            selector,
             matches.len(),
             matches
                 .iter()
-                .map(|(_, path)| redact(path))
+                .map(|(_, path)| path.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -332,7 +332,7 @@ pub fn search(
         }
         let mut hit = hit(r)?;
         if let Body::Text { text, .. } = &mut hit.body {
-            *text = redact(&r.get::<_, String>(14)?);
+            *text = r.get(14)?;
         }
         let file_id: i64 = r.get(15)?;
         match sessions.last_mut() {

@@ -4,7 +4,7 @@ mod pi;
 
 use crate::{
     model::{Agent, EventKind, Record, State},
-    redaction::{redact, redact_metadata},
+    redaction::{redact, redact_argv, redact_metadata},
 };
 use serde_json::Value;
 
@@ -57,10 +57,8 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
         }
         for site in &mut e.sites {
             site.program = site.program.as_deref().map(redact_metadata);
-            site.argv = site.argv.iter().map(|s| redact(s)).collect();
+            site.argv = redact_argv(&site.argv);
         }
-        e.text = e.text.as_deref().map(crate::redaction::redact_serialized);
-        e.command = e.command.as_deref().map(redact);
         e.role = redact(&e.role);
     }
     r

@@ -1,6 +1,7 @@
 use crate::{
     model::{Agent, Event, EventKind, Record, SessionKind, State},
     normalize::{arguments, message_text, shell, string, timestamp},
+    redaction::Redacted,
 };
 use serde_json::Value;
 
@@ -146,7 +147,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             },
         );
         e.kind_source = "root.type,message.content";
-        e.text = Some(message_text(content));
+        e.text = Some(Redacted::new(&message_text(content)));
         e.native_id = if typ == "assistant" {
             string(m, "id").map(|id| format!("message:{id}"))
         } else {
@@ -172,7 +173,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     e.call_id = string(b, "id");
                     let args = arguments(&b["input"]);
                     e.command = e.tool.as_deref().and_then(|t| shell(t, &args));
-                    e.text = Some(args.to_string());
+                    e.text = Some(Redacted::new(&args.to_string()));
                     e
                 }
                 "tool_result" | "advisor_tool_result" => {

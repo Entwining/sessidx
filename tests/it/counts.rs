@@ -108,19 +108,13 @@ fn counts_select_by_program_and_shared_filters_and_sql_is_read_only() {
     assert!(counting::sql(&store.db, "DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "SELECT 1; DELETE FROM events").is_err());
     assert!(counting::sql(&store.db, "WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
-    for sql in [
-        "SELECT 1 AS id, 2 AS id",
-        "SELECT 1 AS \"token=abc\", 2 AS \"[REDACTED]\"",
-    ] {
-        let duplicate = counting::sql(&store.db, sql);
-        assert!(duplicate.is_err());
-        assert!(
-            duplicate
-                .unwrap_err()
-                .to_string()
-                .contains("alias each column")
-        );
-    }
+    let duplicate = counting::sql(&store.db, "SELECT 1 AS id, 2 AS id");
+    assert!(
+        duplicate
+            .unwrap_err()
+            .to_string()
+            .contains("alias each column")
+    );
     assert_eq!(counting::doctor(&store.db).unwrap()["parse_errors"], 0);
 }
 

@@ -3,7 +3,7 @@ use crate::{
     discovery::{self, Root},
     model::{Agent, State, name},
     normalize::hash,
-    redaction::{redact, redact_metadata, spaced_cjk},
+    redaction::{redact_metadata, spaced_cjk},
     source,
 };
 use anyhow::{Context, Result};
@@ -504,7 +504,7 @@ impl Store {
                         )?
                         .execute(params![
                             event_id,
-                            text,
+                            &*text,
                             event.text_truncated
                         ])?;
                         tx.prepare_cached("INSERT INTO fts(rowid,text) VALUES (?,?)")?
@@ -579,7 +579,7 @@ fn shape(v: &serde_json::Value) -> String {
         .as_object()
         .into_iter()
         .flat_map(|o| o.keys())
-        .map(|k| redact(k))
+        .map(|k| redact_metadata(k))
         .collect();
     keys.sort();
     let typ = redact_metadata(v.get("type").and_then(|s| s.as_str()).unwrap_or("unknown"));

@@ -86,7 +86,7 @@ pub struct Event {
     pub role_source: &'static str,
     pub kind: EventKind,
     pub kind_source: &'static str,
-    pub text: Option<String>,
+    pub text: Option<crate::redaction::Redacted>,
     pub text_truncated: bool,
     pub tool: Option<String>,
     pub call_id: Option<String>,

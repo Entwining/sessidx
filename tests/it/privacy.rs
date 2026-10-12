@@ -1,4 +1,4 @@
-use crate::common::{body, indexed, indexed_files, search_hits, serial, sessidx};
+use crate::common::{body, indexed, indexed_files, search_hits, serial, sessidx, stream};
 use sessidx::{
     counting,
     model::Agent,
@@ -259,6 +259,23 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "alphaBetaGammaDelta/../omegaPsi",
         "2026-10-08T15:23:34.928Z",
         "2026-09-17T23:58:46.731942+08:00",
+        "release...feature-login",
+        "HEAD:src/redaction.rs",
+        "helpers:pinGitHubActionDigests",
+        "PostToolUseFailure:Bash",
+        "/synthetic/project/src/",
+        "src/redaction/module/",
+        "3f9c2a71-5d4e-4b8a-9c06-e2d1b7a4f580.jsonl",
+        "x86_64-apple-darwin",
+        "codex://threads/01234567-89ab-cdef-0123-456789abcdef",
+        "rollout-2026-10-06T15-11-28-01234567-89ab-cdef-0123-456789abcdef.jsonl",
+        "rollout-2026-10-06T15-11-28-01a2b3c4-d5e6-7f80-9a1b-2c3d4e5f6a7b.jsonl",
+        "2026-10-12T07-20-15-738Z_01a2b3c4-d5e6-7f80-9a1b-2c3d4e5f6a7b.jsonl",
+        "crates/core/src/main.rs:107:4:8",
+        "alphaBetaGammaDelta/.../omegaPsi",
+        "order:9182736455647382",
+        "/synthetic/vR9xT6qA2nL8cP4hY0sD7f/main.rs:12",
+        "/synthetic/vR9xT6qA2nL8cP4hY0sD7f/",
     ] {
         let hits = search_hits(
             &store.db,
@@ -271,7 +288,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         assert_eq!(hits.len(), 1);
         assert!(body(&hits[0]).contains(value));
     }
-    // `sql` redacts every text value it returns, timestamps included.
+    // `sql` prints stored text as stored.
     let rows = counting::sql(
         &store.db,
         "SELECT ts FROM events WHERE session_id='identifiers' AND ts IS NOT NULL",
@@ -292,26 +309,21 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "std::fs::File::try_lock",
         "ghp_AlphabeticSyntheticToken",
         "_module_42::Foo_Bar1/Item99",
-        "module.name:invalidColon9",
-        "module..missing_segment9",
         "a1b2.c3d4_e5F6.g7H8",
-        "--invalid--flagSyntaxExtra",
-        "/path/to/session.jsonl:42:7:3",
-        "crates/core/src/main.rs:107:4:8",
         "src/redaction.rs:83",
         "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:83",
         "vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ:12:5",
-        "order:9182736455647382",
-        "aBcDeFgHiJkLmNoP:42",
         "./vR9xT6qA2nL8cP4hY0sD7f/G3jK5mB1wZ",
         ".vR9xT6qA2nL8cP4hY0sD7fG3jK5",
         "/vR9xT6qA2nL8cP4hY0sD7fG3jK5mB",
         "2026/10/10/vR9xT6qA2nL8cP4hY0",
-        "alphaBetaGammaDelta/@@omegaPsi",
-        "alphaBetaGammaDelta/.../omegaPsi",
         "0123456789.0123456789-0123456789/0123456789",
         "0123456789/0123456789/0123456789/_",
         "2026-10-08T15:23:34.928Zq7Xk9Lm2",
+        "HEAD:q7Zx9Lm2Pw4Rt8Vb",
+        "src/vR9xT6qA2nL8cP4hY0sD7f/",
+        "vR9xT6qA2nL8cP4hY0sD7fG3jK5.jsonl",
+        "/synthetic/vR9xT6qA2nL8+cP4hY0sD7fG3jK5",
     ] {
         assert!(
             !body(&context[0]).contains(value),
@@ -431,6 +443,136 @@ fn scan_matches_original_ranges_before_redacting_display() {
     assert_eq!(hits.len(), 1);
     assert!(!body(&hits[0]).contains(token));
     assert!(!c.incomplete);
+}
+
+#[test]
+fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
+    for (text, expected) in [
+        (
+            r#"id=thread_id="q7Zx9Lm2Pw4Rt8Vb api_key=abc123""#,
+            r#"id=thread_id="q7Zx9Lm2Pw4Rt8Vb api_key=[REDACTED]""#,
+        ),
+        (
+            r#"{"db_password":"hunter2","kept":1} api_key: abc123"#,
+            r#"{"db_password":"[REDACTED]","kept":1} api_key: [REDACTED]"#,
+        ),
+        (
+            "https://example.invalid/?api_key=abc&kept=1",
+            "https://example.invalid/?api_key=[REDACTED]&kept=1",
+        ),
+        (
+            "https://example.invalid/?kept=1&api_key=abc&tail=2",
+            "https://example.invalid/?kept=1&api_key=[REDACTED]&tail=2",
+        ),
+        (
+            "mysql --password hunter2hunter2 -u root",
+            "mysql --password [REDACTED] -u root",
+        ),
+        (
+            "thread_id=q7Zx9Lm2Pw4Rt8Vb request_id: req_011CzQ8vN2rK7xP4mT9aF6wH",
+            "thread_id=q7Zx9Lm2Pw4Rt8Vb request_id: req_011CzQ8vN2rK7xP4mT9aF6wH",
+        ),
+        (r#"{"password":""#, r#"{"password":"[REDACTED]"#),
+        ("password=alpha&bravo", "password=[REDACTED]"),
+        ("password=alpha&bravo=charlie", "password=[REDACTED]"),
+        ("password=&bravo=charlie", "password=[REDACTED]"),
+        (
+            r#"id="api_key=abc123" password_confirmation: abc123 apiKeyValue=abc123"#,
+            r#"id="api_key=[REDACTED]" password_confirmation: [REDACTED] apiKeyValue=[REDACTED]"#,
+        ),
+        (
+            "time_to_first_token_ms=5 tokenizer: q7Zx9Lm2",
+            "time_to_first_token_ms=5 tokenizer: q7Zx9Lm2",
+        ),
+        (
+            r#"id="thread_id='synthetic" q7Zx9Lm2Pw4Rt8Vb"#,
+            r#"id="thread_id='synthetic" [REDACTED]"#,
+        ),
+    ] {
+        assert_eq!(redaction::redact(text), expected);
+    }
+    let identifiers = "id=".repeat(8192);
+    assert_eq!(
+        redaction::redact(&format!("{identifiers}api_key=0123456789abcdef")),
+        format!("{identifiers}api_key=[REDACTED]")
+    );
+    let query = format!(
+        "https://example.invalid/?{}kept=1",
+        "api_key=abc&".repeat(8192)
+    );
+    assert_eq!(
+        redaction::redact(&query),
+        format!(
+            "https://example.invalid/?{}kept=1",
+            "api_key=[REDACTED]&".repeat(8192)
+        )
+    );
+    let serial = serial();
+    let input = serde_json::json!({
+        "command": "mysql --password hunter2hunter2 -u root",
+        "ephemeral_1h_input_count": 1,
+        "ephemeral_5m_input_count": 2,
+        "input_tokens": 12,
+        "password": 123456,
+        "api_key_value": "0123456789abcdef",
+        "tool_use_id": "toolu_01AbCdEfGhIjKlMnOpQrStUv",
+        "sessionId": "vR9xT6qA2nL8cP4hY0sD7fG3jK5",
+        "toolUseID": "vR9xT6qA2nL8cP4hY0sD7fG3jK5",
+        "thread_ids": ["vR9xT6qA2nL8cP4hY0sD7fG3jK5"],
+        "parent_id": "sk-SyntheticKeyThree3",
+        "AWSAccessKey": "plain",
+        "description": "vR9xT6qA2nL8cP4hY0sD7fG3jK5",
+        "sk-SyntheticKeyOne1": 1,
+        "sk-SyntheticKeyTwo2": 2
+    });
+    let data = serde_json::json!({"type":"assistant","uuid":"names","sessionId":"session-q7Zx9Lm2Pw4Rt8Vb","message":{"role":"assistant","content":[{"type":"tool_use","id":"names-call","name":"Bash","input":input}]}}).to_string() + "\n";
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("session-q7Zx9Lm2Pw4Rt8Vb", &data)]);
+    let expected = serde_json::json!({
+        "command": "mysql --password [REDACTED] -u root",
+        "ephemeral_1h_input_count": 1,
+        "ephemeral_5m_input_count": 2,
+        "input_tokens": 12,
+        "password": "[REDACTED]",
+        "api_key_value": "[REDACTED]",
+        "tool_use_id": "toolu_01AbCdEfGhIjKlMnOpQrStUv",
+        "sessionId": "vR9xT6qA2nL8cP4hY0sD7fG3jK5",
+        "toolUseID": "vR9xT6qA2nL8cP4hY0sD7fG3jK5",
+        "thread_ids": ["vR9xT6qA2nL8cP4hY0sD7fG3jK5"],
+        "parent_id": "[REDACTED]",
+        "AWSAccessKey": "[REDACTED]",
+        "description": "[REDACTED]",
+        "[REDACTED]": 1,
+        "[REDACTED]#2": 2
+    });
+    let rows = stream(
+        &sessidx(
+            &serial,
+            &store.path,
+            &roots,
+            &[
+                "sql",
+                "SELECT session_id, text AS \"token=abc\" FROM events WHERE kind='tool_call'",
+            ],
+        )
+        .output()
+        .unwrap(),
+        0,
+    );
+    let row = &rows[0]["data"];
+    assert_eq!(row["session_id"], "session-q7Zx9Lm2Pw4Rt8Vb");
+    let stored: serde_json::Value =
+        serde_json::from_str(row["token=abc"].as_str().unwrap()).unwrap();
+    assert_eq!(stored, expected);
+    let (shown, _) = query::show(&store.db, "session-q7Zx9Lm2Pw4Rt8Vb", 0, 20, 0).unwrap();
+    let query::Body::Record { record } = &shown[0].body else {
+        panic!("show returns source records");
+    };
+    assert_eq!(record["message"]["content"][0]["input"], expected);
+    let argv: String = store
+        .db
+        .query_row("SELECT argv_json FROM commands", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(argv, r#"["mysql","--password","[REDACTED]","-u","root"]"#);
 }
 
 #[test]

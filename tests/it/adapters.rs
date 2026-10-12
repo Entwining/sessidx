@@ -1,7 +1,7 @@
 use crate::common::{events, indexed};
 use clap::ValueEnum;
 use sessidx::{
-    adapters,
+    adapters, counting,
     discovery::Root,
     model::{Agent, EventKind, State},
     store::Store,
@@ -184,6 +184,14 @@ fn raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind() {
     );
     let n:i64=store.db.query_row("SELECT coalesce(sum(n),0) FROM shapes WHERE signature LIKE 'inter_agent_communication_metadata/%'",[],|r|r.get(0)).unwrap();
     assert_eq!(n, 1);
+    let (_, store, _) = indexed(
+        Agent::Pi,
+        "{\"type\":\"custom\",\"customType\":\"example-store\",\"data\":{},\"id\":\"a1b2c3d4\",\"parentId\":null}\n",
+    );
+    assert_eq!(
+        counting::doctor(&store.db).unwrap()["unknown_shape_signatures"][0]["signature"],
+        "custom/:customType, data, id, parentId, type"
+    );
     let variants: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/inventory.json")).unwrap();
     let es: Vec<_> = variants

@@ -1,6 +1,7 @@
 use crate::{
     model::{Agent, Event, EventKind, Record, SessionKind, State},
     normalize::{arguments, hash, shell, string, text, timestamp},
+    redaction::Redacted,
 };
 use serde_json::Value;
 
@@ -68,15 +69,14 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     let role = p["role"].as_str().unwrap_or("unknown");
                     let mut e = Event::new(role, EventKind::Message, "payload.role");
                     e.kind_source = "payload.type";
-                    e.text = Some(text(&p["content"]));
+                    let content = text(&p["content"]);
                     if s.instruction_hash.is_none()
                         && role == "user"
-                        && e.text
-                            .as_deref()
-                            .is_some_and(|t| t.starts_with("# AGENTS.md instructions"))
+                        && content.starts_with("# AGENTS.md instructions")
                     {
-                        s.instruction_hash = e.text.as_deref().map(|t| hash(t.as_bytes()));
+                        s.instruction_hash = Some(hash(content.as_bytes()));
                     }
+                    e.text = Some(Redacted::new(&content));
                     e
                 }
                 "function_call" | "custom_tool_call" | "tool_search_call" => {
@@ -102,7 +102,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                                 }]
                             });
                     }
-                    e.text = Some(args.to_string());
+                    e.text = Some(Redacted::new(&args.to_string()));
                     e
                 }
                 "function_call_output" | "custom_tool_call_output" | "tool_search_output" => {
@@ -119,7 +119,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         EventKind::Communication,
                         "payload.type",
                     );
-                    e.text = Some(text(&p["content"]));
+                    e.text = Some(Redacted::new(&text(&p["content"])));
                     e
                 }
                 "reasoning" | "compaction" | "web_search_call" => {

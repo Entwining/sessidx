@@ -1,6 +1,7 @@
 use crate::{
     model::{Agent, Event, EventKind, Record, SessionKind, State},
     normalize::{arguments, message_text, shell, string, text, timestamp},
+    redaction::Redacted,
 };
 use serde_json::Value;
 
@@ -75,7 +76,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         body.push_str(&section);
                     }
                 }
-                e.text = Some(body);
+                e.text = Some(Redacted::new(&body));
                 e.native_id = string(v, "id");
                 e.ts = ts.clone();
                 e.model = string(m, "model");
@@ -91,7 +92,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                             e.tool = string(b, "name");
                             let args = arguments(&b["arguments"]);
                             e.command = e.tool.as_deref().and_then(|t| shell(t, &args));
-                            e.text = Some(args.to_string());
+                            e.text = Some(Redacted::new(&args.to_string()));
                             e
                         }
                         _ => continue,
