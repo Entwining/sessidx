@@ -9,16 +9,16 @@ allow = ["MIT", "Apache-2.0"]
 exceptions = [
     { allow = ["Zlib"], crate = "foldhash" },
     { allow = ["Unicode-3.0"], crate = "unicode-ident" },
-    # The zstd C library is BSD-3-Clause or GPLv2; zstd, zstd-safe, and zstd-sys
-    # declare BSD-3-Clause too.
+    # zstd-sys compiles the zstd C library, which is BSD-3-Clause or GPLv2; these
+    # crates take its BSD-3-Clause side.
     { allow = ["BSD-3-Clause"], crate = "zstd" },
     { allow = ["BSD-3-Clause"], crate = "zstd-safe" },
     { allow = ["BSD-3-Clause"], crate = "zstd-sys" },
 ]
 
 [bans]
-# Each duplicate pair has one side inside brush-parser's dependency tree, which
-# this crate cannot unify; a warning nobody can act on would bury real output.
+# brush-parser's dependency tree brings duplicate versions this crate cannot
+# unify; a warning nobody can act on would bury real output.
 multiple-versions = "allow"
 
 [sources]
