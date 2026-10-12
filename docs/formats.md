@@ -1,6 +1,6 @@
 # Format normalization
 
-All records in `tests/fixtures` are synthetic. The source inventory contains 78 root/content variants from the three declared roots; this document maps every variant to an array entry in `tests/fixtures/inventory.json`. Its census selected files by mtime since 2026-08-01, so it is not a universal schema or a runtime guarantee. Rules below own their reasons once. Extra fields, ancestry, guardian overlays, and retries are exercised in `tests/fixtures/attribution.json`.
+All records in `tests/fixtures` are synthetic. This document maps every root/content variant that the source inventory found under the Claude Code, Codex, and Pi session roots to an array entry in `tests/fixtures/inventory.json`. The inventory's census selected files by mtime since 2026-08-01, so it is not a universal schema or a runtime guarantee. Each rule's reason lives only in its row below. Extra fields, ancestry, guardian overlays, and retries are exercised in `tests/fixtures/attribution.json`.
 
 ## Rules and regression tests
 
@@ -177,7 +177,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `session_access` | `tests/it/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | Resolve a session ID or transcript path to its transcript before scanning, so that events are reached by file_id without a cross-table OR. EXPLAIN must show SEARCH of events by file_id; a scan is insufficient. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
 | `events_body_on_demand` | `src/schema.sql` in `tests/it/identity.rs::events_read_bodies_only_when_a_query_names_them` | Event bodies take about half the database. Joined into the `events` view, they were read by every whole-history aggregate, which exceeded the two-second `sql` budget even on metadata. As subqueries, they are read only when a query names `text`. | `events_read_bodies_only_when_a_query_names_them` |
 | `grep_sqlite_deadline` | `tests/it/lookup.rs::session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` | The first SQLite step can exhaust grep coverage before returning a row; a progress handler must interrupt it and preserve the continuation. | `session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step` |
-| `cursor_high_water` | `tests/it/cursors.rs::cli_streams_end_coverage_and_query_bound_cursors` | Later pages must exclude records added above the first page event high-water mark. | `cli_streams_end_coverage_and_query_bound_cursors` |
+| `cursor_high_water` | `tests/it/cursors.rs::cli_streams_end_coverage_and_query_bound_cursors` | Later pages must exclude events indexed after the first page. | `cli_streams_end_coverage_and_query_bound_cursors` |
 | `cursor_invalidation` | `tests/it/cursors.rs::cli_streams_end_coverage_and_query_bound_cursors` | File replacement/deletion records the first removed event, invalidating only cursors whose high-water mark includes it. | `cli_streams_end_coverage_and_query_bound_cursors` |
 | `cursor_rebuild` | `tests/it/cursors.rs::cli_streams_end_coverage_and_query_bound_cursors` | Full rebuild records a zero-boundary invalidation before replacing indexed events. | `cli_streams_end_coverage_and_query_bound_cursors` |
 | `cursor_search_order` | `tests/it/cursors.rs::search_cursor_freezes_order_when_append_changes_fts_statistics` | Appends change global FTS statistics even below a row watermark; preserve the first request session order in its cursor. | `search_cursor_freezes_order_when_append_changes_fts_statistics` |
@@ -297,7 +297,7 @@ Known auxiliary records receive context pointers without body storage. Thinking,
 | pi | `context_edit / none` | 63 | `context_pointers` |
 | pi | `custom / none` | 64 | `unclassified custom payload` |
 | pi | `message / assistant` | 65 | `pi_message` |
-| pi | `message / bashExecution` | 66 | `pi_message` |
+| pi | `message / bashExecution` | 66 | `context_pointers` |
 | pi | `message / system` | 67 | `pi_message` |
 | pi | `message / toolResult` | 68 | `pi_flag` |
 | pi | `message / user` | 69 | `pi_message` |
@@ -310,6 +310,6 @@ Known auxiliary records receive context pointers without body storage. Thinking,
 | pi | `message / thinking` | 76 | `pi_message` |
 | pi | `message / toolCall` | 77 | `pi_call` |
 
-Exact pointer and append/truncate/inode-replacement invariants use `incremental_append_truncate_replace_equals_rebuild_and_exact_pointers`; they are storage invariants rather than additional format aliases. `inventory_variants_are_classified_with_future_shape_negative_control` expects 77 classified variants and one opaque Pi custom variant, with unknown-future roots as negative controls. The privacy byte-search fixture covers each storage/output boundary without retaining real corpus content.
+Exact pointer and append/truncate/inode-replacement invariants use `incremental_append_truncate_replace_equals_rebuild_and_exact_pointers`; they are storage invariants rather than additional format aliases. `inventory_variants_are_classified_with_future_shape_negative_control` expects every variant except the opaque Pi custom one to be classified, with unknown-future roots as negative controls. The privacy byte-search fixture covers each storage/output boundary without retaining real corpus content.
 
 Pi message/bashExecution is a user-run record; it receives only a context pointer and is neither indexed as a logical message nor counted as an agent call.

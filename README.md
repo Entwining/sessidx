@@ -30,7 +30,7 @@ It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`
 
 ### Keep history searchable
 
-When an agent deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/data-usage#data-retention) (30 days by default; sessions started or last continued in Claude Desktop or Cowork are exempt by default), so raise that setting to keep a longer searchable history.
+When an agent deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically), 30 days by default; raise it to keep a longer searchable history. Transcripts of sessions you started in Claude Desktop or Cowork, or most recently continued there, are kept at any age by default.
 
 ## Use it from an agent
 

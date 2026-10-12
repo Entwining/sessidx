@@ -6,9 +6,27 @@ This is the contract that callers, including the bundled agent skill, rely on: w
 
 Every command emits JSON Lines on stdout, except help/version text. Data records carry `type`: `session` for search (with `hits`), `hit` for grep, `record` for show, `count`, `row` for SQL (columns inside `data`, preserving a column named `type`), `index`, or `doctor`. Select data before using `jq`, for example `jq -c 'select(.type == "record") | .record.message'`.
 
-One final `end` record contains `complete`, `stale`, `next`, `searched`, `unavailable_ranges`, and refresh coverage in `refresh`. A limit, deadline, unavailable range or stale refresh makes `complete=false`; parse errors, unknown records and deferred tails are reported in refresh coverage without changing it. `searched.returned` is the number of data records written (for `index`, the source records it indexed), and `searched.unit` names what `searched.records` counts: `session_hits` (hits inside the returned sessions), `source_ranges` (attempted ranges, with successfully read `bytes`), `aggregate_rows`, `sql_rows`, `source_records` (index), or `diagnostic` (doctor, which counts none). These are observable counts, not estimates of SQLite pages or all underlying events examined. `refresh` reports `records` and `files_changed` indexed by this run; `deferred_tails`, the files whose final record still awaits its newline; `parse_errors` and `unknown_records`, totals over the whole index; `missing_roots`, `writer_busy`, `stale`, and `continuation`, the file where a budget-limited refresh stopped. `sql` does not refresh, so its `refresh` holds only `stale` and `writer_busy`.
+One final `end` record contains `complete`, `stale`, `next`, `searched`, `unavailable_ranges`, and refresh coverage in `refresh`. A limit, deadline, unavailable range, or stale refresh makes `complete=false`; parse errors, unknown records, and deferred tails are reported in `refresh` without changing it.
 
-Exit codes are 0 for data, 1 for no data, and 2 for errors. A complete empty result and an incomplete one are distinguished by `end.complete`. Errors produce one `end` record with `error`, `complete=false`, `stale=null` (unknown), `next=null`, and zero `searched` counts, without refresh coverage; no recovery instruction exists only on stderr. A reader that closes stdout early, such as `head`, ends the command quietly with exit 0. Successful maintenance exits 0; an `index` run that leaves the index stale (writer busy, or a previously indexed root missing) exits 2 with its normal records and no `error`.
+`searched.returned` is the number of data records written (for `index`, the source records it indexed). `searched.records` counts the unit that `searched.unit` names, as observed, not as an estimate of SQLite pages or of all underlying events examined:
+
+- `session_hits` (`search`): hits inside the returned sessions.
+- `source_ranges` (`grep`, `show`): attempted ranges; `searched.bytes` is the total read from those that could be read.
+- `aggregate_rows` (`count`) and `sql_rows` (`sql`).
+- `source_records` (`index`).
+- `diagnostic` (`doctor`), which counts none.
+
+`refresh` reports:
+
+- `records` and `files_changed`: what this run indexed.
+- `deferred_tails`: files whose final record still awaits its newline.
+- `parse_errors` and `unknown_records`: totals over the whole index.
+- `missing_roots` (see [Sources and database](#sources-and-database)), `writer_busy`, and `stale`.
+- `continuation`: the file where a budget-limited refresh stopped.
+
+`sql` does not refresh, so its `refresh` holds only `stale` and `writer_busy`.
+
+Exit codes are 0 for data, 1 for no data, and 2 for errors. A complete empty result and an incomplete one are distinguished by `end.complete`. Errors produce one `end` record with `error`, `complete=false`, `stale=null` (unknown), `next=null`, and zero `searched` counts, without refresh coverage. Any recovery instruction is in `error`, never only on stderr. A reader that closes stdout early, such as `head`, ends the command quietly with exit 0. Successful maintenance exits 0; an `index` run that leaves the index stale (writer busy, or a previously indexed root missing) exits 2 with its normal records and no `error`.
 
 ## Sources and database
 
@@ -32,7 +50,7 @@ A session is one transcript file, identified by the agent's native ID from that 
 
 Search, grep, and count share the filters listed by `--help`. Filters select results; they do not narrow discovery. Option values are checked before any refresh: an unknown enum value, a `--limit` outside 1–1000, a repeated `--by` grouping, or a malformed `--since`, `--until`, or `--root` exits 2 with an error that names the flag and, for a closed set, lists its valid values; there are no aliases.
 
-`search` and `grep` default to 20 results; `show` defaults to 100. `--limit` accepts 1–1000. Pagination uses only `--cursor`: pass the opaque string from `end.next` to the same command and filters. Later pages stay below the first page event high-water mark. Search pagination covers the first 100 ranked sessions, whose order the cursor freezes; once a page reaches that bound while more sessions match, the end record has `complete=false` and no `next`, so narrow the query to reach the rest. Appends are allowed; a changed query, a replacement/deletion affecting those events, or a rebuild requires restarting without the cursor. Limits bound returned rows, not SQLite's work.
+`search` and `grep` default to 20 results; `show` defaults to 100. Pagination uses only `--cursor`: pass the opaque string from `end.next` to the same command and filters. Later pages include only events indexed before the first page. Search pagination covers the first 100 ranked sessions, whose order the cursor freezes; once a page reaches that bound while more sessions match, the end record has `complete=false` and no `next`, so narrow the query to reach the rest. Appends are allowed; a changed query, a replacement/deletion affecting those events, or a rebuild requires restarting without the cursor. Limits bound returned rows, not SQLite's work.
 
 ### count
 
@@ -42,7 +60,7 @@ Search, grep, and count share the filters listed by `--help`. Filters select res
 - `failures` counts native tool-call attempts: `calls` = `failed` + `succeeded` + `outcome_unknown`, where a call whose result carries no failure or success evidence has an unknown outcome rather than a successful one. With `--program`, `calls` holds the calls whose shell syntax names the program, and `calls_with_unresolved_program` counts the other calls with a site whose program is unknown, which might run it.
 - `denials` counts native tool-result events: `results`, of which `denied` carry denial evidence, of which `denied_reason_unknown` have a denial whose reason is unknown. With `--program`, `results` holds the results of calls that name the program, and `results_with_unresolved_program` the other results whose call has a site whose program is unknown.
 
-Multi-command results remain call-level. `--by` takes a comma-separated subset of `agent`, `model`, `role`, `week` (UTC ISO week), and `session_kind`; the default is `agent,model,role,week`, `--by` with no value returns one total row, and an empty value, an empty segment, or a repeated name is an error. Native IDs deduplicate history; identical text and retries remain separate. Unknown models and session kinds stay explicit. `count` uses canonical events; `doctor` counts stored rows, including inherited copies and context.
+`failures` counts tool calls and `denials` counts tool-result events; a call that runs several shell commands contributes once to each, not once per command. `--by` takes a comma-separated subset of `agent`, `model`, `role`, `week` (UTC ISO week), and `session_kind`; the default is `agent,model,role,week`, `--by` with no value returns one total row, and an empty value, an empty segment, or a repeated name is an error. Native IDs deduplicate history; identical text and retries remain separate. Unknown models and session kinds stay explicit. `count` uses canonical events; `doctor` counts stored rows, including inherited copies and context.
 
 ### sql
 
@@ -54,4 +72,4 @@ Multi-command results remain call-level. `--by` takes a comma-separated subset o
 
 ## Refresh
 
-Each lookup, count, or diagnostic refreshes with a two-second budget. Refresh coverage reports writer contention, missing roots, parse errors and unknown shapes. Writer-lock acquisition does not wait; SQLite busy waits are limited to 50 ms. Filesystem operations and individual SQLite operations can exceed a deadline, so the budget is not a hard end-to-end guarantee. A normal unterminated final record is deferred until its newline arrives, separately from staleness. `index --full` rebuilds derived data and its schema under the writer lock.
+`search`, `grep`, `show`, `count`, and `doctor` refresh with a two-second budget; `index` refreshes without one, and `sql` does not refresh. Refresh coverage reports writer contention, missing roots, parse errors and unknown shapes. Writer-lock acquisition does not wait; SQLite busy waits are limited to 50 ms. Filesystem operations and individual SQLite operations can exceed a deadline, so the budget is not a hard end-to-end guarantee. A normal unterminated final record is deferred until its newline arrives, separately from staleness. `index --full` rebuilds derived data and its schema under the writer lock.
