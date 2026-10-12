@@ -120,14 +120,16 @@ fn walk_command(c: &Command, out: &mut Vec<Site>, depth: usize) -> Result<(), ()
                 word(w, out, depth)?;
                 argv.push(w.value.clone());
             }
-            for i in s
-                .prefix
-                .iter()
-                .flat_map(|p| &p.0)
-                .chain(s.suffix.iter().flat_map(|p| &p.0))
-            {
+            // brush-parser's cmd_prefix holds only redirects and assignments, which
+            // configure the command rather than pass it arguments.
+            for i in s.prefix.iter().flat_map(|p| &p.0) {
                 item(i, out, depth)?;
-                if let CommandPrefixOrSuffixItem::Word(w) = i {
+            }
+            for i in s.suffix.iter().flat_map(|p| &p.0) {
+                item(i, out, depth)?;
+                if let CommandPrefixOrSuffixItem::Word(w)
+                | CommandPrefixOrSuffixItem::AssignmentWord(_, w) = i
+                {
                     argv.push(w.value.clone());
                 }
             }

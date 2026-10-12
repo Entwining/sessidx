@@ -5,6 +5,35 @@ use sessidx::{
 };
 
 #[test]
+fn suffix_assignments_stay_in_argv_and_prefix_assignments_do_not() {
+    for (command, expected) in [
+        ("make CC=clang all", vec!["make", "CC=clang", "all"]),
+        (
+            "gh api repos/o/r/issues -f title=hello -F draft=true",
+            vec![
+                "gh",
+                "api",
+                "repos/o/r/issues",
+                "-f",
+                "title=hello",
+                "-F",
+                "draft=true",
+            ],
+        ),
+        ("FOO=1 env", vec!["env"]),
+    ] {
+        let r = adapters::parse(
+            Agent::Claude,
+            &serde_json::json!({"type":"assistant","uuid":"assign","sessionId":"claude-assign","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-assign","name":"Bash","input":{"command":command}}]}}),
+            &mut State::default(),
+        );
+        let sites: Vec<_> = r.events.iter().flat_map(|e| &e.sites).collect();
+        assert_eq!(sites.len(), 1, "{command}");
+        assert_eq!(sites[0].argv, expected, "{command}");
+    }
+}
+
+#[test]
 fn brush_sites_include_nested_syntax_without_counting_quoted_program_names() {
     let sites = shell::sites(
         "rg one src | cat; if test -d src; then rg two src; fi; echo \"$(rg three src)\"; printf 'rg is an argument'; f() { rg four src; }; cat <(rg five src); while read l; do echo \"$l\"; done < <(rg six src); cat <<< \"$(rg seven src)\"; cat <<EOF\n$(rg eight src)\nEOF\n",
