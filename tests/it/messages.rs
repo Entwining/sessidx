@@ -105,14 +105,14 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             assert_eq!(
                 es.iter()
                     .flat_map(|e| &e.denials)
-                    .filter(|(source, _)| source == "classifier")
+                    .filter(|d| d.source == "classifier")
                     .count(),
                 1
             );
             assert_eq!(
                 es.iter()
                     .flat_map(|e| &e.denials)
-                    .filter(|(source, reason)| source == "hook" && reason == "RgInclude")
+                    .filter(|d| d.source == "hook" && d.reason_id == "rg_include")
                     .count(),
                 1
             );
@@ -145,7 +145,7 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             assert_eq!(
                 es.iter()
                     .flat_map(|e| &e.denials)
-                    .filter(|(source, reason)| source == "guard" && reason == "RgInclude")
+                    .filter(|d| d.source == "guard" && d.reason_id == "rg_include")
                     .count(),
                 1
             );

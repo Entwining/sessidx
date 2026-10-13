@@ -22,14 +22,14 @@ fn codex_text_array_batch_failures_and_quoted_negative_control() {
     assert_eq!(
         es.iter()
             .flat_map(|e| &e.denials)
-            .filter(|(s, _)| s == "hook")
+            .filter(|d| d.source == "hook")
             .count(),
         1
     );
     assert_eq!(
         es.iter()
             .flat_map(|e| &e.denials)
-            .filter(|(s, _)| s == "batch_hook")
+            .filter(|d| d.source == "batch_hook")
             .count(),
         2
     );
@@ -50,7 +50,7 @@ fn split_script_error_and_truncated_batch_are_denials_with_transport_quote_contr
     let mut stmt = store
         .db
         .prepare(
-            "SELECT source,count(*) FROM denials WHERE reason_id='RgInclude' GROUP BY source ORDER BY source",
+            "SELECT source,count(*) FROM denials WHERE reason_id='rg_include' GROUP BY source ORDER BY source",
         )
         .unwrap();
     let denials = stmt
@@ -326,7 +326,7 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         sessidx::outcomes::classify(&mut e, &f["output"], agent);
         assert_eq!(e.ok, f["ok"].as_bool(), "fixture {i}");
         assert_eq!(e.exit_code, f["exit_code"].as_i64(), "fixture {i}");
-        let sources: Vec<_> = e.denials.iter().map(|(s, _)| s.as_str()).collect();
+        let sources: Vec<_> = e.denials.iter().map(|d| d.source).collect();
         let expected: Vec<_> = f["source"].as_str().into_iter().collect();
         assert_eq!(sources, expected, "fixture {i}");
     }
@@ -366,7 +366,7 @@ fn claude_denial_kinds_map_channels_and_interruptions_record_no_denial() {
         let r = adapters::parse(Agent::Claude, &record, &mut State::default());
         assert_eq!(
             r.events[0].denials,
-            [((*source).into(), "unknown".into())],
+            [sessidx::model::Denial::channel(source)],
             "{kind} {decision:?}"
         );
     }
@@ -382,7 +382,14 @@ fn claude_denial_kinds_map_channels_and_interruptions_record_no_denial() {
     // structured channel is pushed only when no text-derived row remains.
     let record = serde_json::json!({"type":"user","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"content":[{"type":"tool_result","is_error":true,"content":"PreToolUse:Bash hook error: rg has no --include flag."}]}});
     let r = adapters::parse(Agent::Claude, &record, &mut State::default());
-    assert_eq!(r.events[0].denials, [("hook".into(), "RgInclude".into())]);
+    assert_eq!(
+        r.events[0].denials,
+        [sessidx::model::Denial::legacy(
+            "hook",
+            "policy",
+            "rg_include"
+        )]
+    );
 }
 
 #[test]
@@ -395,26 +402,42 @@ fn published_guard_sentences_classify_and_recognize_only_leading_pi_reasons() {
         .iter()
         .map(|f| f["sentence"].as_str().unwrap())
         .collect();
-    let published: std::collections::BTreeSet<&str> =
-        outcomes::GUARD_REASONS.iter().map(|(s, _, _)| *s).collect();
+    let published: std::collections::BTreeSet<&str> = outcomes::GUARD_REASONS
+        .iter()
+        .map(|(s, _, _, _)| *s)
+        .collect();
     assert_eq!(
         published, covered,
         "every published sentence needs a fixture"
     );
+    // The table is frozen: it never gains rows.
+    assert_eq!(outcomes::GUARD_REASONS.len(), 67);
     for f in fixtures.as_array().unwrap() {
         let text = f["text"].as_str().unwrap();
         let sentence = f["sentence"].as_str().unwrap();
+        let class = f["class"].as_str().unwrap();
         let id = f["reason_id"].as_str().unwrap();
         assert_eq!(
             outcomes::reason_id(&format!("DENIED: {text}")),
-            id,
+            (class, id),
             "{text}"
         );
         for output in [text.to_owned(), format!("Blocked: {text}")] {
             let mut e = sessidx::model::Event::new("tool", EventKind::ToolResult, "fixture");
             e.ok = Some(false);
             outcomes::classify(&mut e, &serde_json::json!(output), Agent::Pi);
-            assert_eq!(e.denials, [("guard".into(), id.into())], "{text}");
+            assert_eq!(e.denials.len(), 1, "{text}");
+            let d = &e.denials[0];
+            assert_eq!(
+                (
+                    d.source,
+                    d.class,
+                    d.producer.as_deref(),
+                    d.reason_id.as_str()
+                ),
+                ("guard", class, None, id),
+                "{text}"
+            );
         }
         // Partial sentences, diagnostic mentions and quotes are not bare refusals.
         for output in [
@@ -424,7 +447,11 @@ fn published_guard_sentences_classify_and_recognize_only_leading_pi_reasons() {
             format!("\"{text}\""),
         ] {
             if !output.contains(sentence) {
-                assert_eq!(outcomes::reason_id(&output), "unknown", "{output}");
+                assert_eq!(
+                    outcomes::reason_id(&output),
+                    ("unknown", "unknown"),
+                    "{output}"
+                );
             }
             let mut e = sessidx::model::Event::new("tool", EventKind::ToolResult, "fixture");
             e.ok = Some(false);
@@ -437,7 +464,7 @@ fn published_guard_sentences_classify_and_recognize_only_leading_pi_reasons() {
         outcomes::reason_id(
             "rg has no --include flag. The agent guard cannot inspect this shell syntax."
         ),
-        "UnsupportedShellSyntax"
+        ("coverage", "unsupported_shell_syntax")
     );
     for text in [
         "DENIED: unrelated policy.",
@@ -445,6 +472,143 @@ fn published_guard_sentences_classify_and_recognize_only_leading_pi_reasons() {
         "PreToolUse guard could not inspect this input; normal permission checks still apply.",
         "Use rg in Bash instead of the built-in Grep tool.",
     ] {
-        assert_eq!(outcomes::reason_id(text), "unknown", "{text}");
+        assert_eq!(outcomes::reason_id(text), ("unknown", "unknown"), "{text}");
     }
+}
+
+#[test]
+fn marker_grammar_accepts_only_its_exact_shapes() {
+    // marker = "[" class ":" producer "/" reason "]" followed by a space or
+    // the end of the text. Rule: docs/formats.md `reason_marker`.
+    let parsed = |slot: &str| outcomes::parse_marker(slot).map(|m| (m.class, m.producer, m.reason));
+    for (slot, expected) in [
+        (
+            "[policy:example-guard/credential_file] reason text",
+            Some(("policy", "example-guard", "credential_file")),
+        ),
+        (
+            "[coverage:example-guard/unsupported_shell_syntax] reason text",
+            Some(("coverage", "example-guard", "unsupported_shell_syntax")),
+        ),
+        (
+            "[error:example-guard/deadline] reason text",
+            Some(("error", "example-guard", "deadline")),
+        ),
+        (
+            "[policy:example-guard/at_end]",
+            Some(("policy", "example-guard", "at_end")),
+        ),
+        (
+            "[policy:example.guard-1/r_2.a] reason text",
+            Some(("policy", "example.guard-1", "r_2.a")),
+        ),
+        (
+            "[policy:example-guard/UPPER_lower_1] reason text",
+            Some(("policy", "example-guard", "UPPER_lower_1")),
+        ),
+        ("[security:example-guard/x] unknown class", None),
+        ("[policy:1guard/x] producer starting with a digit", None),
+        ("[policy:example-Guard/x] uppercase later in producer", None),
+        ("[policy:example-guard/a/b] slash in reason", None),
+        ("[policy:/x] empty producer", None),
+        ("[policy:example-guard/] empty reason", None),
+        ("[policy:example-guard/x missing bracket", None),
+        ("[policy:example-guard/x]letter after bracket", None),
+        ("[policy:example-guard/x]\nnewline after bracket", None),
+        (
+            "[policy:example-guard/x] tail [coverage:g/y] second",
+            Some(("policy", "example-guard", "x")),
+        ),
+    ] {
+        let expected = expected
+            .map(|(class, producer, reason)| (class, producer.to_string(), reason.to_string()));
+        assert_eq!(parsed(slot), expected, "{slot:?}");
+    }
+    // producer and reason end at 63 characters.
+    let producer = format!("{}a", "b".repeat(62));
+    let reason = "r".repeat(63);
+    assert_eq!(
+        parsed(&format!("[policy:{producer}/{reason}] tail")),
+        Some(("policy", producer, reason))
+    );
+    let producer = format!("{}ac", "b".repeat(62));
+    assert_eq!(parsed(&format!("[policy:{producer}/r] tail")), None);
+    let reason = "r".repeat(64);
+    assert_eq!(
+        parsed(&format!("[policy:example-guard/{reason}] tail")),
+        None
+    );
+}
+
+#[test]
+fn markers_read_at_slot_starts_and_win_over_frozen_sentences() {
+    let fixtures: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/markers.json")).unwrap();
+    for (i, f) in fixtures.as_array().unwrap().iter().enumerate() {
+        let agent = Agent::from_str(f["agent"].as_str().unwrap(), false).unwrap();
+        let mut e = sessidx::model::Event::new("tool", EventKind::ToolResult, "fixture");
+        if agent != Agent::Codex {
+            e.ok = f["ok"].as_bool();
+        }
+        sessidx::outcomes::classify(&mut e, &f["output"], agent);
+        assert_eq!(e.ok, f["ok"].as_bool(), "fixture {i}");
+        let denials: Vec<_> = e
+            .denials
+            .iter()
+            .map(|d| {
+                (
+                    d.source,
+                    d.class,
+                    d.producer.as_deref(),
+                    d.reason_id.as_str(),
+                )
+            })
+            .collect();
+        let expected: Vec<_> = f["denials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d[0].as_str().unwrap(),
+                    d[1].as_str().unwrap(),
+                    d[2].as_str(),
+                    d[3].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(denials, expected, "fixture {i}");
+    }
+}
+
+#[test]
+fn marker_and_legacy_denial_rows_reach_the_sql_table() {
+    let (_, store, _) = indexed(
+        Agent::Claude,
+        concat!(
+            "{\"type\":\"assistant\",\"uuid\":\"marker-call\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"m\",\"name\":\"Bash\",\"input\":{\"command\":\"rg word\"}}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"marker-result\",\"toolDenialKind\":\"permission-rule\",\"permissionDecision\":{\"decision\":\"reject\",\"source\":\"hook\"},\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"m\",\"is_error\":true,\"content\":\"PreToolUse:Bash hook error: [policy:example-guard/credential_file] this reads a credential file.\"}]}}\n",
+            "{\"type\":\"user\",\"uuid\":\"legacy-result\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"is_error\":true,\"content\":\"DENIED: rg has no --include flag.\"}]}}\n",
+        ),
+    );
+    let rows: Vec<(String, String, Option<String>, String)> = store
+        .db
+        .prepare("SELECT source,class,producer,reason_id FROM denials ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (
+                "hook".into(),
+                "policy".into(),
+                Some("example-guard".into()),
+                "credential_file".into()
+            ),
+            ("guard".into(), "policy".into(), None, "rg_include".into()),
+        ]
+    );
 }

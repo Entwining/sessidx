@@ -1,5 +1,5 @@
 use crate::{
-    model::{Agent, Event},
+    model::{Agent, Denial, Event},
     normalize::text,
 };
 use regex::Regex;
@@ -13,6 +13,13 @@ static EXIT: LazyLock<Regex> = LazyLock::new(|| {
 static PARTIAL_REJECTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#""status"\s*:\s*"rejected"\s*,\s*"reason"\s*:\s*("(?:\\.|[^"\\])*")"#)
         .expect("static regex is valid")
+});
+// Rule: docs/formats.md `reason_marker`.
+static MARKER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^\[(policy|coverage|error):([a-z][a-z0-9.-]{0,62})/([A-Za-z0-9_.-]{1,63})\](?: |$)",
+    )
+    .expect("static regex is valid")
 });
 pub fn classify(e: &mut Event, output: &Value, agent: Agent) {
     if agent != Agent::Codex {
@@ -82,7 +89,7 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                         .starts_with("Command blocked by PreToolUse hook:")
                     {
                         e.denials
-                            .push(("batch_hook".into(), reason_id(&reason).into()));
+                            .push(codex_hook_denial("batch_hook", reason.trim_start()));
                     }
                 } else if status == "fulfilled"
                     && let Some(v) = m.get("value")
@@ -178,358 +185,486 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
     }
 }
 
-/// Published guard sentences with their reason ID and the producer commit,
-/// file and line that printed them.
-pub const GUARD_REASONS: &[(&str, &str, &str)] = &[
+/// Published guard sentences with their class, public reason ID, and the
+/// producer commit, file and line that printed them. Frozen: the table never
+/// gains rows. Rule: docs/formats.md `legacy_guard_sentences`.
+pub const GUARD_REASONS: &[(&str, &str, &str, &str)] = &[
     (
         "The agent guard cannot inspect this shell syntax.",
-        "UnsupportedShellSyntax",
+        "coverage",
+        "unsupported_shell_syntax",
         "Entwining/agent-guard@3d74318573e3ee4cd9342dc359f2de7241411711:src/reasons.ts:2",
     ),
     (
         "This reads a protected macOS app-data directory.",
-        "AppData",
+        "policy",
+        "app_data",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:2",
     ),
     (
         "A scan rooted at the home directory or ~/Library reaches every app-data entry.",
-        "Broad",
+        "policy",
+        "broad_scan",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:3",
     ),
     (
         "This reads a credential or environment file.",
-        "File",
+        "policy",
+        "credential_file",
         "Entwining/agent-guard@97b0ed550bcd997f8757bc3acb5fc47a90139221:src/reasons.ts:6",
     ),
     (
         "reading .env file contents would expose secrets.",
-        "File",
+        "policy",
+        "credential_file",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:26",
     ),
     (
         "reading sensitive file contents.",
-        "File",
+        "policy",
+        "credential_file",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:33",
     ),
     (
         "Credential and environment files are opaque client inputs; do not display their contents.",
-        "File",
+        "policy",
+        "credential_file",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:90",
     ),
     (
         "This inline code names a credential or environment file.",
-        "CodeFile",
+        "policy",
+        "inline_credential_file",
         "Entwining/agent-guard@97b0ed550bcd997f8757bc3acb5fc47a90139221:src/reasons.ts:8",
     ),
     (
         "A recursive search that includes hidden files can read credentials.",
-        "HiddenSearch",
+        "policy",
+        "hidden_search",
         "Entwining/agent-guard@3d74318573e3ee4cd9342dc359f2de7241411711:src/reasons.ts:7",
     ),
     (
         "This dumps environment or shell variables, including secrets.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:5",
     ),
     (
         "dumps environment variables including secrets.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:12",
     ),
     (
         "dumps shell variables including secrets.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:19",
     ),
     (
         "Do not dump the process environment.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:68",
     ),
     (
         "Do not dump an envchain namespace.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:76",
     ),
     (
         "Do not dump exported variables.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:100",
     ),
     (
         "Do not dump shell variables.",
-        "Dump",
+        "policy",
+        "variable_dump",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:108",
     ),
     (
         "This prints the value of a credential variable.",
-        "Variable",
+        "policy",
+        "credential_variable",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:6",
     ),
     (
         "printing secret variable values.",
-        "Variable",
+        "policy",
+        "credential_variable",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:55",
     ),
     (
         "Do not print credential environment variables.",
-        "Variable",
+        "policy",
+        "credential_variable",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:96",
     ),
     (
         "Do not print credential shell variables.",
-        "Variable",
+        "policy",
+        "credential_variable",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:114",
     ),
     (
         "This prints a Git hosting token.",
-        "Token",
+        "policy",
+        "git_hosting_token",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:7",
     ),
     (
         "gh auth token prints GitHub credentials.",
-        "Token",
+        "policy",
+        "git_hosting_token",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:50",
     ),
     (
         "Do not print Git hosting credentials.",
-        "Token",
+        "policy",
+        "git_hosting_token",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:122",
     ),
     (
         "Token-display flags are not allowed in gh auth status.",
-        "Token",
+        "policy",
+        "git_hosting_token",
         "liby/dotfiles@e0bc28ae5873e672eb4123e5588ceac5276717bc:dot_claude/hooks/executable_pre-tool-guard.py:21",
     ),
     (
         "This extracts a password from the macOS Keychain.",
-        "Keychain",
+        "policy",
+        "keychain",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:8",
     ),
     (
         "Do not extract credentials from the macOS Keychain.",
-        "Keychain",
+        "policy",
+        "keychain",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:136",
     ),
     (
         "This prints a stored secret or access token.",
-        "StoredSecret",
+        "policy",
+        "stored_secret",
         "Entwining/agent-guard@7500ceae31a2db76850056ed7c351b946d08acf2:src/reasons.ts:13",
     ),
     (
         "curl verbose or trace output can print HTTP headers including Authorization.",
-        "Trace",
+        "policy",
+        "curl_trace",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:9",
     ),
     (
         "curl verbose prints HTTP headers including Authorization.",
-        "Trace",
+        "policy",
+        "curl_trace",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:45",
     ),
     (
         "Authenticated curl tracing can print credential headers.",
-        "Trace",
+        "policy",
+        "curl_trace",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:155",
     ),
     (
         "This sends the contents of a credential file.",
-        "Upload",
+        "policy",
+        "credential_upload",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:10",
     ),
     (
         "This reads private material in the named .ssh directory or its filesystem alias.",
-        "Ssh",
+        "policy",
+        "ssh_private",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/policy.rs:26",
     ),
     (
         "This reads private material under ~/.ssh.",
-        "Ssh",
+        "policy",
+        "ssh_private",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:11",
     ),
     (
         "reading SSH private key.",
-        "Ssh",
+        "policy",
+        "ssh_private",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:39",
     ),
     (
         "reading private material under ~/.ssh.",
-        "Ssh",
+        "policy",
+        "ssh_private",
         "liby/dotfiles@b61320361b40cc8c94d755d12b4ccbd085cbca9c:dot_claude/hooks/executable_pre-bash-guard-secrets.sh:29",
     ),
     (
         "Grep would search private ~/.ssh material.",
-        "GrepSsh",
+        "policy",
+        "grep_ssh_private",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:12",
     ),
     (
         "Grep would search private material in the named .ssh directory or its filesystem alias.",
-        "GrepSsh",
+        "policy",
+        "grep_ssh_private",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/policy.rs:27",
     ),
     (
         "Grep requires a verifiable search scope outside private ~/.ssh material.",
-        "GrepSsh",
+        "policy",
+        "grep_ssh_private",
         "liby/dotfiles@e0bc28ae5873e672eb4123e5588ceac5276717bc:dot_claude/hooks/executable_pre-tool-guard.py:157",
     ),
     (
         "The agent guard could not complete its symlink check.",
-        "Symlink",
+        "error",
+        "unknown",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:13",
     ),
     (
         "rg -r means --replace.",
-        "RgReplace",
+        "policy",
+        "rg_replace",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:15",
     ),
     (
         "rg is not grep: a clustered -r flag invokes --replace, which silently rewrites every match in the output while exiting 0.",
-        "RgReplace",
+        "policy",
+        "rg_replace",
         "liby/dotfiles@8db3bad01bdd7a1edac9b8101efbed6510790bce:dot_claude/hooks/executable_pre-bash-policy.sh:51",
     ),
     (
         "rg has no --include flag.",
-        "RgInclude",
+        "policy",
+        "rg_include",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:16",
     ),
     (
         "rg regex is not grep BRE: a\\|b matches a literal pipe.",
-        "RgBre",
+        "policy",
+        "rg_bre",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:17",
     ),
     (
         "rg regex is not grep BRE: \\| is an escaped literal pipe, so a\\|b matches the literal text a|b and silently finds nothing.",
-        "RgBre",
+        "policy",
+        "rg_bre",
         "liby/dotfiles@c75e67980ce61fe2efdf18fe777edac879255e9c:dot_claude/hooks/executable_pre-bash-policy.sh:77",
     ),
     (
         "rg regex is not grep BRE: a\\|b matches literal a|b.",
-        "RgBre",
+        "policy",
+        "rg_bre",
         "liby/dotfiles@e0bc28ae5873e672eb4123e5588ceac5276717bc:dot_claude/hooks/executable_pre-tool-guard.py:26",
     ),
     (
         "find is harder to scope for this repository's searches.",
-        "Find",
+        "policy",
+        "find",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:14",
     ),
     (
         "Use fd instead of find.",
-        "Find",
+        "policy",
+        "find",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-policy.sh:12",
     ),
     (
         "An explicit path or wrapper bypasses the provider-aware Claude launcher.",
-        "Launcher",
+        "policy",
+        "claude_launcher",
         "Entwining/agent-guard@8c14bc20cf5245bd00078aa2b8b81de631393d3d:src/reasons.ts:18",
     ),
     (
         "Run Claude as `envchain claude-gateway claude ...`.",
-        "Launcher",
+        "policy",
+        "claude_launcher",
         "liby/dotfiles@9f5c2a59d298039d7628a6285cf0e15115c98e97:dot_codex/managed-hooks/executable_guard-bash:79",
     ),
     (
         "Run Claude as `claude ...`; the provider-aware launcher selects the persisted mode.",
-        "Launcher",
+        "policy",
+        "claude_launcher",
         "liby/dotfiles@2df53d4a6affcf10c0bbc4597dabdeceb08be041:dot_codex/managed-hooks/executable_guard-bash:48",
     ),
     (
         "Do not run dev/build/start/serve commands.",
-        "Server",
+        "policy",
+        "dev_server",
         "liby/dotfiles@ec3933b6ba3466bdffca26bb6fe1d53914a53292:dot_claude/hooks/executable_pre-bash-policy.sh:17",
     ),
     (
         "Do not run dev/start/serve commands.",
-        "Server",
+        "policy",
+        "dev_server",
         "liby/dotfiles@ccc3b3049ec88d152d502ef7ed9dc3665db88d8b:dot_claude/hooks/executable_pre-bash-policy.sh:17",
     ),
     (
         "Do not run dev/start/serve commands, even when explicitly asked; do not retry.",
-        "Server",
+        "policy",
+        "dev_server",
         "liby/dotfiles@8a87467c8f823545b1175f93b9c6962aabf399bb:dot_claude/hooks/executable_pre-bash-policy.sh:17",
     ),
     (
         "Shell nesting exceeds the supported depth of 64.",
-        "NestingLimit",
+        "coverage",
+        "nesting_limit",
         "Entwining/agent-guard@00fe9158737f92247ce3e54997ae4b7fdf066660:src/policy.rs:56",
     ),
     (
         "The agent guard cannot inspect this unsupported or unresolved operation.",
-        "CoverageGap",
+        "coverage",
+        "unknown",
         "Entwining/agent-guard@00fe9158737f92247ce3e54997ae4b7fdf066660:src/policy.rs:71",
     ),
     (
         "The agent guard cannot verify the execution owner for this operation.",
-        "ExecutionOwnerUnavailable",
+        "coverage",
+        "execution_owner_unavailable",
         "Entwining/agent-guard@00fe9158737f92247ce3e54997ae4b7fdf066660:src/policy.rs:68",
     ),
     (
         "The agent guard could not complete this check before its deadline, so the call is blocked.",
-        "Deadline",
+        "error",
+        "deadline",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/lib.rs:210",
     ),
     (
         "The agent guard could not complete this check within its resource limit, so the call is blocked.",
-        "ResourceLimit",
+        "error",
+        "resource_limit",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/lib.rs:213",
     ),
     (
         "The agent guard could not complete this check, so the call is blocked.",
-        "CheckError",
+        "error",
+        "unknown",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/lib.rs:224",
     ),
     (
         "The event is not valid UTF-8.",
-        "InvalidEncoding",
+        "coverage",
+        "invalid_encoding",
         "Entwining/agent-guard@00fe9158737f92247ce3e54997ae4b7fdf066660:src/policy.rs:62",
     ),
     (
         "The event requires an absolute cwd.",
-        "AbsoluteCwdRequired",
+        "coverage",
+        "absolute_cwd_required",
         "Entwining/agent-guard@00fe9158737f92247ce3e54997ae4b7fdf066660:src/policy.rs:59",
     ),
     (
         "The guard cannot inspect an inode-addressed /.vol path.",
-        "InodeAlias",
+        "coverage",
+        "inode_alias",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/policy.rs:56",
     ),
     (
         "The guard cannot resolve this path through bounded or cyclic aliases.",
-        "IdentityBound",
+        "coverage",
+        "identity_bound",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/policy.rs:62",
     ),
     (
         "This changes a protected credential, environment or SSH resource.",
-        "ResourceChange",
+        "policy",
+        "resource_change",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/policy.rs:33",
     ),
     (
         "This relocates protected credential, environment or SSH content to an unprotected name.",
-        "ResourceChange",
+        "policy",
+        "resource_change",
         "Entwining/agent-guard@98ddc80e6ca761ecb8f242c033f3a67a7a9998d9:src/policy/messages.rs:24",
     ),
     (
         "This command exceeds the guard's inspection budget.",
-        "InspectionBudget",
+        "coverage",
+        "inspection_budget",
         "Entwining/agent-guard@9a5334c00b42959ac5b37a05c62b6fda6942c452:src/policy.rs:59",
     ),
     (
         "This event exceeds the input byte limit.",
-        "InputByteLimit",
+        "coverage",
+        "input_byte_limit",
         "Entwining/agent-guard@00fe9158737f92247ce3e54997ae4b7fdf066660:src/policy.rs:53",
     ),
 ];
 
-pub fn reason_id(s: &str) -> &'static str {
+/// A reason marker a guard puts at the start of its refusal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Marker {
+    pub class: &'static str,
+    pub producer: String,
+    pub reason: String,
+}
+
+/// The marker at the start of `slot`, if one is there.
+pub fn parse_marker(slot: &str) -> Option<Marker> {
+    let c = MARKER.captures(slot)?;
+    Some(Marker {
+        class: match &c[1] {
+            "policy" => "policy",
+            "coverage" => "coverage",
+            _ => "error",
+        },
+        producer: c[2].into(),
+        reason: c[3].into(),
+    })
+}
+
+/// Classifies a recognized denial text by the frozen sentence table:
+/// (class, reason ID), or ("unknown", "unknown") when no sentence matches.
+/// Shared sentences keep their class with the ID `unknown`.
+pub fn reason_id(s: &str) -> (&'static str, &'static str) {
     GUARD_REASONS
         .iter()
-        .find(|(sentence, _, _)| s.contains(sentence))
-        .map_or("unknown", |(_, id, _)| id)
+        .find(|(sentence, _, _, _)| s.contains(sentence))
+        .map_or(("unknown", "unknown"), |(_, class, id, _)| (class, id))
 }
 
 fn starts_with_guard_reason(line: &str) -> bool {
     let reason = line.strip_prefix("Blocked: ").unwrap_or(line);
     GUARD_REASONS
         .iter()
-        .any(|(sentence, _, _)| reason.starts_with(sentence))
+        .any(|(sentence, _, _, _)| reason.starts_with(sentence))
+}
+
+/// A Codex hook denial: the marker at the start of the hook's reason, which
+/// Codex renders as `Command blocked by PreToolUse hook: <reason>. Command:
+/// <command>`, or the frozen sentence table.
+fn codex_hook_denial(source: &'static str, reason: &str) -> Denial {
+    reason
+        .strip_prefix("Command blocked by PreToolUse hook: ")
+        .and_then(|slot| parse_marker(slot.split_once(". Command: ").map_or(slot, |(r, _)| r)))
+        .map_or_else(
+            || {
+                let (class, id) = reason_id(reason);
+                Denial::legacy(source, class, id)
+            },
+            |m| Denial::from_marker(source, m),
+        )
+}
+
+/// The marker in a failed result's first non-empty text block: after Claude
+/// Code's `PreToolUse:<Tool> hook error: ` wrapper on its first line, past an
+/// optional `[<hook command>]: ` segment, on the `hook` channel; otherwise at
+/// the block's start, on the `marker` channel.
+fn leading_marker(text: &str) -> Option<(&'static str, Marker)> {
+    let first = text.lines().next()?;
+    if !(first.starts_with("PreToolUse:") || first.starts_with("Error: PreToolUse:")) {
+        return parse_marker(text).map(|m| ("marker", m));
+    }
+    let slot = text.split_once("hook error: ")?.1;
+    // A command segment ends in `]: `; a marker ends in `] ` or the end of
+    // the text.
+    let slot = slot
+        .strip_prefix('[')
+        .and_then(|s| s.split_once("]: "))
+        .map_or(slot, |(_, reason)| reason);
+    parse_marker(slot).map(|m| ("hook", m))
 }
 
 fn flag_denials(v: &Value, agent: Agent, e: &mut Event, leading: &mut bool) {
@@ -567,12 +702,22 @@ fn denials(s: &str, agent: Agent, e: &mut Event, leading: bool) {
             .trim_start()
             .starts_with("Command blocked by PreToolUse hook:")
         {
-            let denial = ("hook".into(), reason_id(payload).into());
+            let denial = codex_hook_denial("hook", payload.trim_start());
             if !e.denials.contains(&denial) {
                 e.denials.push(denial);
             }
         }
         return;
+    }
+    // A marker replaces the frozen sentences for its block. Rules:
+    // docs/formats.md `reason_marker`, `marker_denial`, `pi_blocked_default`.
+    if leading && e.ok == Some(false) {
+        if let Some((source, marker)) = leading_marker(s.trim_start()) {
+            e.denials.push(Denial::from_marker(source, marker));
+            return;
+        } else if agent == Agent::Pi && s.trim() == "Tool execution was blocked" {
+            e.denials.push(Denial::channel("hook"));
+        }
     }
     for line in s.lines() {
         let line = line.trim();
@@ -607,7 +752,8 @@ fn denials(s: &str, agent: Agent, e: &mut Event, leading: bool) {
             None
         };
         if let Some(source) = source {
-            let denial = (source.into(), reason_id(line).into());
+            let (class, id) = reason_id(line);
+            let denial = Denial::legacy(source, class, id);
             if !e.denials.contains(&denial) {
                 e.denials.push(denial);
             }

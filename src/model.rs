@@ -77,6 +77,57 @@ pub struct State {
     pub instruction_hash: Option<String>,
 }
 
+/// One recognized denial of a tool call: the channel that recorded it, and
+/// the class, producer, and rule ID a reason marker or a frozen legacy
+/// sentence names. Values: docs/cli.md `denials`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Denial {
+    pub source: &'static str,
+    pub class: &'static str,
+    pub producer: Option<String>,
+    pub reason_id: String,
+}
+
+impl Denial {
+    /// A denial known only by its channel.
+    pub fn channel(source: &'static str) -> Self {
+        Self {
+            source,
+            class: "unknown",
+            producer: None,
+            reason_id: "unknown".into(),
+        }
+    }
+
+    /// A denial classified by the frozen guard sentence table.
+    pub fn legacy(source: &'static str, class: &'static str, reason_id: &'static str) -> Self {
+        Self {
+            source,
+            class,
+            producer: None,
+            reason_id: reason_id.into(),
+        }
+    }
+
+    /// A denial whose reason a reason marker declares. A marker that
+    /// redaction would change keeps only its class, so the row never holds
+    /// what the stored text does not. Rule: docs/formats.md `reason_marker`.
+    pub fn from_marker(source: &'static str, marker: crate::outcomes::Marker) -> Self {
+        let text = format!("[{}:{}/{}]", marker.class, marker.producer, marker.reason);
+        let kept = crate::redaction::redact(&text) == text;
+        Self {
+            source,
+            class: marker.class,
+            producer: kept.then_some(marker.producer),
+            reason_id: if kept {
+                marker.reason
+            } else {
+                "unknown".into()
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Event {
     pub native_id: Option<String>,
@@ -95,7 +146,7 @@ pub struct Event {
     pub ok: Option<bool>,
     pub ok_source: &'static str,
     pub exit_code: Option<i64>,
-    pub denials: Vec<(String, String)>,
+    pub denials: Vec<Denial>,
 }
 
 impl Event {

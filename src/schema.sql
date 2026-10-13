@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS commands (
 CREATE INDEX IF NOT EXISTS commands_event ON commands(event_id);
 CREATE TABLE IF NOT EXISTS denials (
  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES event_rows(id) ON DELETE CASCADE,
- source TEXT NOT NULL, reason_id TEXT NOT NULL
+ source TEXT NOT NULL, class TEXT NOT NULL, producer TEXT, reason_id TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS denials_event ON denials(event_id);
 -- Child FK indexes avoid scanning all commands/denials when a file is replaced.

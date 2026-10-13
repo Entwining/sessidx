@@ -1,0 +1,16 @@
+[
+  {"agent":"claude","ok":false,"denials":[["hook","policy","example-guard","credential_file"]],"output":"PreToolUse:Bash hook error: [/synthetic/hooks/guard.sh]: [policy:example-guard/credential_file] this reads a credential file."},
+  {"agent":"claude","ok":false,"denials":[["hook","policy",null,"hidden_search"]],"output":"PreToolUse:Bash hook error: [/synthetic/hooks/guard.sh]: DENIED: [policy:example-guard/x] A recursive search that includes hidden files can read credentials."},
+  {"agent":"claude","ok":false,"denials":[["hook","error","example-guard","deadline"]],"output":"Error: PreToolUse:Bash hook error: [error:example-guard/deadline] the check deadline was exceeded."},
+  {"agent":"claude","ok":false,"denials":[["hook","unknown",null,"unknown"]],"output":"PreToolUse:Bash hook error: [polic:example-guard/x] an unknown class is no marker."},
+  {"agent":"codex","ok":false,"denials":[["batch_hook","policy","example-guard","variable_dump"]],"output":{"results":{"isError":false,"content":[{"status":"rejected","reason":"Command blocked by PreToolUse hook: [policy:example-guard/variable_dump] this dumps variables. Command: env"}]}}},
+  {"agent":"pi","ok":false,"denials":[["marker","policy","example-guard","own_reason"]],"output":"[policy:example-guard/own_reason] rg has no --include flag."},
+  {"agent":"pi","ok":false,"denials":[["hook","unknown",null,"unknown"]],"output":"Tool execution was blocked"},
+  {"agent":"pi","ok":true,"denials":[],"output":"[policy:example-guard/x] a marker in a successful result is ignored"},
+  {"agent":"pi","ok":false,"denials":[],"output":[{"type":"text","text":"ordinary"},{"type":"text","text":"[policy:example-guard/x] a marker in a later block is ignored"}]},
+  {"agent":"pi","ok":false,"denials":[],"output":"Tool execution was blocked by the policy guard"},
+  {"agent":"claude","ok":false,"denials":[["hook","unknown",null,"unknown"]],"output":"a diagnostic first\nPreToolUse:Bash hook error: [policy:example-guard/x] a wrapper on a later line is not the slot."},
+  {"agent":"pi","ok":false,"denials":[["marker","error","example-guard","deadline"]],"output":"[error:example-guard/deadline] refused\nDENIED: rg has no --include flag."},
+  {"agent":"codex","ok":false,"denials":[["hook","policy","example-guard","at_end"]],"output":"Script error:\nCommand blocked by PreToolUse hook: [policy:example-guard/at_end]. Command: env"},
+  {"agent":"pi","ok":false,"denials":[["marker","error",null,"unknown"]],"output":"[error:example-guard/sk-abcdefghijklmnop] a marker that redaction would change keeps only its class."}
+]

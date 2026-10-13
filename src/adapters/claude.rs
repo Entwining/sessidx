@@ -1,5 +1,5 @@
 use crate::{
-    model::{Agent, Event, EventKind, Record, SessionKind, State},
+    model::{Agent, Denial, Event, EventKind, Record, SessionKind, State},
     normalize::{arguments, message_text, shell, string, timestamp},
     redaction::Redacted,
 };
@@ -198,7 +198,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                         // Claude Code itself maps interrupted and cancelled to an error
                         // outcome, not a denial; is_error still marks the result failed.
                         if !matches!(kind, "interrupted" | "cancelled") {
-                            e.denials.retain(|(source, _)| source != "native_denial");
+                            e.denials.retain(|d| d.source != "native_denial");
                             let hook = v.get("permissionDecision").is_some_and(|d| {
                                 d.get("decision").and_then(Value::as_str) == Some("reject")
                                     && d.get("source").and_then(Value::as_str) == Some("hook")
@@ -217,7 +217,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                                 }
                             };
                             if e.denials.is_empty() {
-                                e.denials.push((source.into(), "unknown".into()));
+                                e.denials.push(Denial::channel(source));
                             }
                         }
                     }

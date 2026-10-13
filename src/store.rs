@@ -492,11 +492,17 @@ impl Store {
                     for (site, command) in event.sites.into_iter().enumerate() {
                         tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
                     }
-                    for (source, reason) in event.denials {
+                    for denial in event.denials {
                         tx.prepare_cached(
-                            "INSERT INTO denials(event_id,source,reason_id) VALUES (?,?,?)",
+                            "INSERT INTO denials(event_id,source,class,producer,reason_id) VALUES (?,?,?,?,?)",
                         )?
-                        .execute(params![event_id, source, reason])?;
+                        .execute(params![
+                            event_id,
+                            denial.source,
+                            denial.class,
+                            denial.producer,
+                            denial.reason_id
+                        ])?;
                     }
                     if let Some(text) = event.text {
                         tx.prepare_cached(
