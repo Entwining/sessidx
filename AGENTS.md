@@ -2,6 +2,16 @@
 
 sessidx indexes local Claude Code, Codex, and Pi session logs into SQLite for two uses: lookup (find the session where something happened, the context behind a commit, a past failure) by people and by agents, and retrospective counting by agent, model, role, and week with honest denominators. It replaces grepping gigabytes of logs per question and rewriting throwaway parsers per retrospective, which produced contradictory counts. Agents reach it through the [`sessidx` skill](skills/sessidx/SKILL.md), which requires `sessidx` on `PATH`.
 
+## Goals
+
+The architecture can change; these goals do not.
+
+- **Lookup and counting stay the two uses**, served to agents first and to people through the same commands, as Changing the CLI describes.
+- **Speed and ease of use come first.** A query refreshes within two seconds and reads only what its answer needs, not the whole history; the release targets are warm lookup p95 within 2 s and indexing RSS within 512 MiB, measured as Develop and validate describes. A design that needs a larger budget, a background service, or an extra manual step on the ordinary path is what gets fixed.
+- **Fix the cause where it is owned.** A second code path kept equal to the first by a test, a case for one log, or a raised limit leaves the cause in place. A schema or parser version bump costs users one reindex, which is cheap next to keeping a worse design, so raise one whenever the fix needs it.
+- **Borrow designs with a record.** Databases, search engines, and comparable session tools have met most of these problems. Take a design that has held up elsewhere, such as PostgreSQL's autovacuum threshold for compaction or IMAP response codes for reason markers, cite it in the rule's `docs/formats.md` row, and measure it on the maintainer's logs, because its reputation elsewhere is not evidence here.
+- **Skip cases that practically never occur**, unless covering one is small, and say in the rule what stays uncovered.
+
 ## Where things are owned
 
 | File | Owns |
@@ -12,7 +22,7 @@ sessidx indexes local Claude Code, Codex, and Pi session logs into SQLite for tw
 | `skills/sessidx/SKILL.md` | When an agent should use sessidx and how it reads the results |
 | `docs/design.md` | Storage, refresh, privacy, counting units, and known limits as they currently work |
 | `docs/formats.md` | One row per normalization rule with its fixture and regression test, and the observed-variant inventory; the only place a rule's reason lives |
-| This file | Purpose, decisions that are easy to undo by accident, workflow, and environment traps |
+| This file | Purpose, goals, decisions that are easy to undo by accident, the roadmap, workflow, and environment traps |
 
 Change the owner, not a copy. A rule without a `docs/formats.md` row and a fixture whose test fails when the rule is removed is not finished. Agents that use sessidx learn it from the skill alone, so a change to the CLI contract also changes the skill in the same commit. Put a rule in the strongest mechanism that can hold it: a type, then a lint in `clippy.toml` or `Cargo.toml` `[lints]`, then a test or CI check, and prose only for what none of them can enforce. `clippy.toml` already enforces the no-environment-variable decision below, and every lint suppression needs a reason.
 
@@ -26,6 +36,7 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 - **Tool outputs are pointers plus their first 2 KiB in full-text search.** On held-out "find the session where this error happened" cases, `search` found all 42 with the prefix and none without it; the only fallback, `grep` narrowed to an agent and month, found 14 and completed 3 within its deadline. The prefix costs about a quarter of the database and some ranking noise when output text outranks a message. Full outputs would multiply size and secret exposure; the rest is reached by `grep` or `show`.
 - **Chinese text is matched as phrases over a character-spaced copy** in FTS5 `unicode61`. Trigram tokenization was rejected because queries under three characters fall back to a full scan.
 - **Codex code-mode commands are taken only from `cmd` string literals** in the wrapper source; nothing evaluates JavaScript (user decision). Anything else in a wrapper that references a shell tool stays one unparsed site, so it is counted in `unparsed_calls` instead of disappearing from `count commands`.
+- **Frozen until a real lookup or count fails:** `show`'s continuation inside a record larger than a page (`part` and `cut`), `search`'s frozen order of its first 100 ranked sessions, and the code-mode `cmd` literal rule above. Each was built for a failure seen in real use, and extending one for a shape no real log has shown adds a path nothing uses. Change one with the failing case as its fixture. Redaction follows the same rule: add or widen a pattern or exemption only with the by-shape redaction counts described above.
 - **Refresh happens on query within a two-second budget.** There is no daemon or LaunchAgent. Never raise the budget to hide a slow path, and never let a query wait without bound on the writer lock: a wedged refresh that holds the lock blocks every later query. Deleting the rows of vanished transcripts counts against the budget too, after new records.
 - **Counts name what they count and partition their population**, as `calls` = `failed` + `succeeded` + `outcome_unknown`, and name what lies outside it apart. A generic numerator, denominator, and unclassified once mixed parts inside the denominator with parts outside it, in different units per metric. Shell command sites are static syntax and never prove execution. Inherited history is deduplicated only by native IDs, never by identical text.
 - **Guards declare their denial reasons; sessidx does not learn their wording.** A reason comes from the agent's own structured fields or from a producer-neutral reason marker read the same way for every producer (#56). The table of the maintainer's past guard sentences is frozen: a sentence or a producer-specific case added for a new guard, agent-guard included, ties sessidx releases to that guard's wording and still leaves every other guard `unknown`. Structured hook fields cannot carry the reason, because Claude Code drops unknown fields, Codex fails the hook on one and runs the command, and Pi passes only a block flag and reason.
@@ -37,7 +48,13 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 - **No database size target.** Remove waste that does not reduce function and report the measured size.
 - **No file-length limit.** Split a module where its behavior separates, not at a line count; Clippy has no file-length lint to enforce one.
 
-Not in v1, with the reason: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, token and cost accounting, Claude and Pi loaded-instruction attribution, and Pi branch reconstruction.
+## Roadmap
+
+Next: index each model request's token usage and compaction events (#58), without prices, once real logs show whether the records of one Claude message carry the same usage.
+
+Later: refresh work that grows with the number of transcripts instead of with the change (`docs/design.md`), about 0.16 s warm on 9,096 transcripts, of which the directory walk is 101 ms warm and 285–292 ms cold. FSEvents history would let discovery follow changes, but dropped events need the walk as a fallback, a second discovery path; one scan of `files` instead of a lookup per transcript saves only about 23 ms. Neither is taken while the cost stays far inside the refresh budget.
+
+Not planned: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, cost accounting, Claude and Pi loaded-instruction attribution, and Pi branch reconstruction.
 
 ## Changing the CLI
 

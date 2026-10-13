@@ -103,7 +103,7 @@ The last line of every command is an `end` record. Check its `complete` field be
 - [docs/design.md](docs/design.md): storage, refresh, privacy, counting units, and known limits.
 - [docs/formats.md](docs/formats.md): each normalization rule and observed log variant with its synthetic fixture and regression test.
 - [skills/sessidx/SKILL.md](skills/sessidx/SKILL.md): how an agent uses sessidx and reads its results.
-- [AGENTS.md](AGENTS.md): decisions to keep and how to change and validate the code.
+- [AGENTS.md](AGENTS.md): goals, decisions to keep, the roadmap, and how to change and validate the code.
 
 ## License
 
