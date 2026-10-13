@@ -79,9 +79,20 @@ CREATE TRIGGER IF NOT EXISTS events_delete AFTER DELETE ON event_rows BEGIN DELE
 -- Native identity, never matching text, deduplicates inherited events for counts.
 -- Rule: docs/formats.md `canonical_first_copy`. The probe skips the event itself by the
 -- rowid in its index entry: most events have no other copy, and comparing one with
--- itself loaded its row and session for nothing.
+-- itself loaded its row and session for nothing. A message's text joins its fragments in
+-- the kept row's transcript, each repeated record once. Rule: docs/formats.md `claude_fragment_text`.
 CREATE VIEW IF NOT EXISTS canonical_events AS
- SELECT e.* FROM events e JOIN event_rows r ON r.id=e.id JOIN sessions s ON s.file_id=r.file_id
+ SELECT e.id,e.agent,e.session_id,e.path,e.line_no,e.ts,e.role,e.kind,e.model,e.tool,e.call_id,e.ok,e.exit_code,
+ CASE WHEN r.native_id IS NOT NULL AND r.kind='message' THEN coalesce(
+  (SELECT group_concat(t.text,char(10) ORDER BY f.line_no,f.ordinal)
+   FROM event_rows f JOIN event_texts t ON t.event_id=f.id
+   WHERE f.native_id=r.native_id AND f.kind=r.kind AND f.file_id=r.file_id AND t.text<>''
+   AND NOT EXISTS (SELECT 1 FROM event_rows d WHERE d.native_id=f.native_id AND d.kind=f.kind
+    AND d.file_id=f.file_id AND d.raw_hash=f.raw_hash AND d.id<f.id)),
+  e.text) ELSE e.text END AS text,
+ e.text_truncated,e.role_source,e.kind_source,e.model_source,e.ok_source,e.native_id,
+ e.file_id,e.byte_off,e.byte_len,e.ordinal,e.raw_hash
+ FROM events e JOIN event_rows r ON r.id=e.id JOIN sessions s ON s.file_id=r.file_id
  WHERE r.native_id IS NULL OR NOT EXISTS (
   SELECT 1 FROM event_rows r2 JOIN sessions s2 ON s2.file_id=r2.file_id
   WHERE r2.native_id=r.native_id AND r2.kind=r.kind AND r2.id<>r.id AND s2.agent=s.agent

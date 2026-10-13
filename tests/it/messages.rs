@@ -57,6 +57,68 @@ fn native_message_fragments_empty_replies_summary_and_history_dedup() {
 }
 
 #[test]
+fn canonical_message_text_joins_its_fragments_in_the_kept_transcript() {
+    let fragments = include_str!("../fixtures/fragments.jsonl");
+    let resumed = format!(
+        "{fragments}{}\n",
+        r#"{"type":"assistant","uuid":"r1","sessionId":"fragments","timestamp":"2026-10-01T00:00:08Z","message":{"id":"msg-thinking-first","role":"assistant","model":"claude-x","content":[{"type":"text","text":"copy only"}]}}"#
+    );
+    let (_dir, store, _) = indexed_files(
+        Agent::Claude,
+        &[("fragments", fragments), ("resumed", &resumed)],
+    );
+    let rows = store
+        .db
+        .prepare("SELECT path, line_no, text FROM canonical_events WHERE (kind='message' AND role='assistant') OR kind='tool_result' ORDER BY line_no")
+        .unwrap()
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?.ends_with("/fragments.jsonl"),
+                r.get::<_, i64>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (true, 1, "the visible answer".to_owned()),
+            (true, 3, "text first".to_owned()),
+            (true, 5, "same output".to_owned()),
+            (true, 7, "part one\npart two".to_owned()),
+            (true, 9, String::new()),
+        ]
+    );
+    let columns = |view: &str| {
+        store
+            .db
+            .prepare(&format!("SELECT name FROM pragma_table_info('{view}')"))
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    assert_eq!(columns("canonical_events"), columns("events"));
+    let plan = store
+        .db
+        .prepare("EXPLAIN QUERY PLAN SELECT text FROM canonical_events WHERE kind='message'")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    for probe in [
+        "SEARCH f USING INDEX events_native (native_id=? AND kind=?)",
+        "SEARCH d USING INDEX events_native (native_id=? AND kind=? AND rowid<?)",
+    ] {
+        assert!(plan.iter().any(|s| s == probe), "{plan:?}");
+    }
+}
+
+#[test]
 fn pi_empty_response_and_explicit_message_model_override() {
     let records = [
         serde_json::json!({"type":"model_change","modelId":"last-model"}),
