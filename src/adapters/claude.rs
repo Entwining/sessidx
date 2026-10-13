@@ -190,20 +190,35 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     }
                     crate::outcomes::classify(&mut e, &b["content"], Agent::Claude);
                     crate::normalize::output_prefix(&mut e, &b["content"]);
+                    // Claude Code 2.1.296 writes toolDenialKind from a fixed set and
+                    // labels hook denials permission-rule; permissionDecision (2.1.293+)
+                    // names the deciding channel. Rules: docs/formats.md
+                    // `native_denial_kind` and `permission_decision`.
                     if let Some(kind) = v.get("toolDenialKind").and_then(Value::as_str) {
-                        e.denials.retain(|(source, _)| source != "native_denial");
-                        let source = match kind {
-                            "classifier" | "automode-blocked" => "classifier",
-                            "classifier-unavailable" | "automode-unavailable" => {
-                                "classifier_unavailable"
+                        // Claude Code itself maps interrupted and cancelled to an error
+                        // outcome, not a denial; is_error still marks the result failed.
+                        if !matches!(kind, "interrupted" | "cancelled") {
+                            e.denials.retain(|(source, _)| source != "native_denial");
+                            let hook = v.get("permissionDecision").is_some_and(|d| {
+                                d.get("decision").and_then(Value::as_str) == Some("reject")
+                                    && d.get("source").and_then(Value::as_str) == Some("hook")
+                            });
+                            let source = if hook {
+                                "hook"
+                            } else {
+                                match kind {
+                                    "automode-blocked" => "classifier",
+                                    "automode-unavailable" | "automode-parsing-error" => {
+                                        "classifier_unavailable"
+                                    }
+                                    "permission-rule" => "permission_rule",
+                                    "user-rejected" => "user_rejected",
+                                    _ => "native_denial",
+                                }
+                            };
+                            if e.denials.is_empty() {
+                                e.denials.push((source.into(), "unknown".into()));
                             }
-                            "hook" => "hook",
-                            "permission-rule" => "permission_rule",
-                            "user-rejected" => "user_rejected",
-                            _ => "native_denial",
-                        };
-                        if e.denials.is_empty() {
-                            e.denials.push((source.into(), "unknown".into()));
                         }
                     }
                     e

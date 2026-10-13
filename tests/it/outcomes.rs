@@ -330,21 +330,59 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
         let expected: Vec<_> = f["source"].as_str().into_iter().collect();
         assert_eq!(sources, expected, "fixture {i}");
     }
-    for (kind, source) in [
-        ("permission-rule", "permission_rule"),
-        ("classifier-unavailable", "classifier_unavailable"),
-        ("automode-unavailable", "classifier_unavailable"),
-        ("hook", "hook"),
-        ("user-rejected", "user_rejected"),
-    ] {
-        let record = serde_json::json!({"type":"user","toolDenialKind":kind,"message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied."}]}});
+}
+
+#[test]
+fn claude_denial_kinds_map_channels_and_interruptions_record_no_denial() {
+    // Claude Code 2.1.296 writes toolDenialKind from a fixed set and labels
+    // hook denials permission-rule; permissionDecision (2.1.293+) names the
+    // deciding channel. The structured value replaces the generic
+    // text-derived native_denial source.
+    let cases: &[(&str, Option<serde_json::Value>, &str)] = &[
+        ("user-rejected", None, "user_rejected"),
+        ("permission-rule", None, "permission_rule"),
+        ("automode-blocked", None, "classifier"),
+        ("automode-unavailable", None, "classifier_unavailable"),
+        ("automode-parsing-error", None, "classifier_unavailable"),
+        (
+            "permission-rule",
+            Some(serde_json::json!({"decision":"reject","source":"hook","reasonType":"hook"})),
+            "hook",
+        ),
+        (
+            "automode-blocked",
+            Some(
+                serde_json::json!({"decision":"reject","source":"config","reasonType":"classifier"}),
+            ),
+            "classifier",
+        ),
+        ("future-kind", None, "native_denial"),
+    ];
+    for (kind, decision, source) in cases {
+        let mut record = serde_json::json!({"type":"user","toolDenialKind":kind,"message":{"content":[{"type":"tool_result","is_error":true,"content":"Permission to use Bash has been denied."}]}});
+        if let Some(d) = decision {
+            record["permissionDecision"] = d.clone();
+        }
         let r = adapters::parse(Agent::Claude, &record, &mut State::default());
         assert_eq!(
             r.events[0].denials,
-            [(source.into(), "unknown".into())],
-            "{kind}"
+            [((*source).into(), "unknown".into())],
+            "{kind} {decision:?}"
         );
     }
+    // Claude Code itself maps interrupted and cancelled to an error outcome,
+    // not a denial; the result still counts as failed from is_error.
+    for kind in ["interrupted", "cancelled"] {
+        let record = serde_json::json!({"type":"user","toolDenialKind":kind,"message":{"content":[{"type":"tool_result","is_error":true,"content":"synthetic interruption"}]}});
+        let r = adapters::parse(Agent::Claude, &record, &mut State::default());
+        assert!(r.events[0].denials.is_empty(), "{kind}");
+        assert_eq!(r.events[0].ok, Some(false), "{kind}");
+    }
+    // A text-derived denial row is kept, with its reason, and the
+    // structured channel is pushed only when no text-derived row remains.
+    let record = serde_json::json!({"type":"user","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"content":[{"type":"tool_result","is_error":true,"content":"PreToolUse:Bash hook error: rg has no --include flag."}]}});
+    let r = adapters::parse(Agent::Claude, &record, &mut State::default());
+    assert_eq!(r.events[0].denials, [("hook".into(), "RgInclude".into())]);
 }
 
 #[test]

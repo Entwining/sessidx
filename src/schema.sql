@@ -100,4 +100,4 @@ CREATE VIEW IF NOT EXISTS call_outcomes AS
   FROM sessions rs JOIN event_rows r ON r.file_id=rs.file_id
   WHERE rs.agent=c.agent AND rs.session_id=c.session_id AND r.call_id=unhex(c.call_id) AND r.kind='tool_result') AS ok_source
  FROM canonical_events c WHERE c.kind='tool_call';
-PRAGMA user_version=9;
+PRAGMA user_version=10;
