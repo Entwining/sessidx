@@ -38,7 +38,7 @@ struct Cli {
 
 #[derive(clap::Args)]
 struct Page {
-    /// Maximum results, 1-1000
+    /// Maximum results per page, 1-1000; a page also ends within 24 KiB
     #[arg(long, default_value_t = 20, value_parser = RangedU64ValueParser::<usize>::new().range(1..=1000))]
     limit: usize,
     /// Continue from the previous end record's `next` with the same command and filters
@@ -73,7 +73,7 @@ enum Command {
         /// Source lines to include on each side of a path:line target
         #[arg(long, default_value_t = 3)]
         around: usize,
-        /// Maximum records, 1-1000
+        /// Maximum records per page, 1-1000; a page also ends within 24 KiB
         #[arg(long, default_value_t = 100, value_parser = RangedU64ValueParser::<usize>::new().range(1..=1000))]
         limit: usize,
         /// Continue from the previous end record's `next` with the same target
@@ -128,6 +128,9 @@ struct Cursor {
     high_water: i64,
     revision: i64,
     search_order: Option<Vec<i64>>,
+    /// Where `show` resumes in a record's JSON text, as `Coverage::within`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    within: Option<usize>,
 }
 
 fn scope(db: &rusqlite::Connection, request: &Value) -> Result<String> {
@@ -147,7 +150,7 @@ fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) ->
     })?;
     let Some(cursor) = cursor else {
         return Ok(Cursor {
-            version: 3,
+            version: 4,
             scope: scope(db, request)?,
             position: 0,
             high_water: db.query_row("SELECT coalesce(max(id),0) FROM event_rows", [], |r| {
@@ -155,6 +158,7 @@ fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) ->
             })?,
             revision,
             search_order: None,
+            within: None,
         });
     };
     let cursor: Cursor = serde_json::from_str(cursor)
@@ -165,23 +169,25 @@ fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) ->
         |r| r.get(0),
     )?;
     anyhow::ensure!(
-        cursor.version == 3
+        cursor.version == 4
             && cursor.position >= 0
             && cursor.high_water >= 0
             && cursor.revision <= revision
             && cursor.revision >= 0
             && cursor.scope == scope(db, request)?
             && !changed,
-        "cursor belongs to another query or index version; restart without --cursor"
+        query::CURSOR_MISMATCH
     );
     Ok(cursor)
 }
 
-fn next(snapshot: &Cursor, position: Option<i64>) -> Result<Option<String>> {
-    position
+fn next(snapshot: &Cursor, coverage: &Coverage) -> Result<Option<String>> {
+    coverage
+        .continuation
         .map(|position| {
             Ok(serde_json::to_string(&Cursor {
                 position,
+                within: coverage.within,
                 ..snapshot.clone()
             })?)
         })
@@ -285,18 +291,16 @@ fn search(
         emit("session", serde_json::to_value(session)?)?;
     }
     // Past the frozen prefix the end stays incomplete without a cursor.
-    let cursor = next(
-        &snapshot,
-        (more && reached < query::SEARCH_PAGE_SESSIONS).then_some(reached as i64),
-    )?;
+    let coverage = Coverage {
+        incomplete: more,
+        continuation: (more && reached < query::SEARCH_PAGE_SESSIONS).then_some(reached as i64),
+        records,
+        ..Coverage::default()
+    };
     end(
         &json!(refresh),
-        &Coverage {
-            incomplete: more,
-            records,
-            ..Coverage::default()
-        },
-        cursor,
+        &coverage,
+        next(&snapshot, &coverage)?,
         "session_hits",
         sessions.len(),
     )?;
@@ -334,7 +338,7 @@ fn grep(
     end(
         &json!(refresh),
         &coverage,
-        next(&snapshot, coverage.continuation)?,
+        next(&snapshot, &coverage)?,
         "source_ranges",
         hits.len(),
     )?;
@@ -354,15 +358,22 @@ fn show(
     let request = json!(["show", path, target, around]);
     let snapshot = snapshot(&db, cursor, &request)?;
     let after = snapshot.position;
-    let (hits, coverage) =
-        query::show_snapshot(&db, target, around, limit, after, snapshot.high_water)?;
+    let (hits, coverage) = query::show_snapshot(
+        &db,
+        target,
+        around,
+        limit,
+        after,
+        snapshot.within,
+        snapshot.high_water,
+    )?;
     for hit in &hits {
         emit("record", serde_json::to_value(hit)?)?;
     }
     end(
         &json!(refresh),
         &coverage,
-        next(&snapshot, coverage.continuation)?,
+        next(&snapshot, &coverage)?,
         "source_ranges",
         hits.len(),
     )?;

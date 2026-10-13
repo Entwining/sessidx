@@ -172,6 +172,8 @@ pub struct Hit {
     pub body: Body,
     #[serde(rename = "ref")]
     pub reference: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cut: Vec<Cut>,
     #[serde(skip)]
     pub byte_off: u64,
     #[serde(skip)]
@@ -180,23 +182,117 @@ pub struct Hit {
     pub event_id: i64,
 }
 
-/// What a hit carries of its event: the indexed text for ranked lookup, or the
-/// whole source record, parsed and redacted, for grep and show.
+/// What a hit carries of its event: the indexed text for ranked lookup, the
+/// whole source record, parsed and redacted, for grep and show, or part of
+/// that record's JSON text when it does not fit a page alone.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Body {
     Text { text: String, truncated: bool },
     Record { record: Json },
+    Part { part: String },
     Unavailable { unavailable: String },
+}
+
+impl Hit {
+    /// Replaces a record that does not fit a page alone with the part of its
+    /// JSON text from `offset` that does, and returns where the next part
+    /// starts while any is left.
+    fn fit(&mut self, kind: &str, offset: usize) -> Result<Option<usize>> {
+        let Body::Record { record } = &self.body else {
+            return Ok(None);
+        };
+        let text = record.to_string();
+        anyhow::ensure!(text.is_char_boundary(offset), CURSOR_MISMATCH);
+        self.body = Body::Part { part: text };
+        let line = line_len(self, kind);
+        if let Body::Part { part } = &mut self.body {
+            self.cut = fit(line, vec![("/part".to_owned(), part, offset)]);
+        }
+        Ok(self
+            .cut
+            .iter()
+            .find(|c| c.offset + c.kept < c.bytes)
+            .map(|c| c.offset + c.kept))
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
 pub struct Coverage {
     pub incomplete: bool,
     pub continuation: Option<i64>,
+    /// Where `show` resumes in the JSON text of the record after `continuation`.
+    pub within: Option<usize>,
     pub unavailable_ranges: usize,
     pub records: usize,
     pub bytes: u64,
+}
+
+/// Data lines per page, in bytes. Rule: docs/formats.md `display_page`.
+const PAGE_BYTES: usize = 24 * 1024;
+
+/// A string shortened to fit a page: `field` is its JSON Pointer in the data
+/// record, `bytes` the length of the whole string, and the page holds `kept`
+/// bytes of it starting at `offset`.
+#[derive(Debug, Serialize)]
+pub struct Cut {
+    pub field: String,
+    pub bytes: usize,
+    pub offset: usize,
+    pub kept: usize,
+}
+
+/// Serializing fails only for a map with non-string keys, which no output has.
+fn json_len(value: &impl Serialize) -> usize {
+    serde_json::to_vec(value)
+        .expect("output records serialize")
+        .len()
+}
+
+fn line_len(record: &impl Serialize, kind: &str) -> usize {
+    json_len(record) + r#","type":"""#.len() + kind.len() + 1
+}
+
+pub const CURSOR_MISMATCH: &str =
+    "cursor belongs to another query or index version; restart without --cursor";
+
+/// Shortens strings, each from its offset, to the largest common length that
+/// fits a data line of `line` bytes into [`PAGE_BYTES`], so short ones stay
+/// whole, and lists each string that was shortened or starts past its
+/// beginning.
+fn fit(line: usize, slots: Vec<(String, &mut String, usize)>) -> Vec<Cut> {
+    let whole: usize = slots.iter().map(|(_, text, _)| json_len(text)).sum();
+    let layout = |limit: usize| {
+        let mut size = line - whole;
+        let mut kept = Vec::new();
+        let mut cuts = Vec::new();
+        for (field, text, offset) in &slots {
+            let rest = &text[*offset..];
+            let k = rest.floor_char_boundary(limit);
+            size += json_len(&&rest[..k]);
+            if k < rest.len() || *offset > 0 {
+                cuts.push(Cut {
+                    field: field.clone(),
+                    bytes: text.len(),
+                    offset: *offset,
+                    kept: k,
+                });
+            }
+            kept.push(k);
+        }
+        if !cuts.is_empty() {
+            size += r#","cut":"#.len() + json_len(&cuts);
+        }
+        (size, kept, cuts)
+    };
+    // Four bytes hold any character, so a continuing record always advances.
+    let limits: Vec<usize> = (4..=PAGE_BYTES).collect();
+    let fitting = limits.partition_point(|&limit| layout(limit).0 <= PAGE_BYTES);
+    let (_, kept, cuts) = layout(limits[fitting.saturating_sub(1)]);
+    for ((_, text, offset), k) in slots.into_iter().zip(kept) {
+        *text = text[offset..offset + k].to_owned();
+    }
+    cuts
 }
 
 const COLUMNS: &str = "e.agent,e.session_id,e.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
@@ -223,6 +319,7 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
             truncated: row.get(10)?,
         },
         reference,
+        cut: Vec::new(),
         byte_off: row.get(7)?,
         byte_len: row.get(8)?,
         event_id: row.get(9)?,
@@ -263,8 +360,27 @@ pub struct Session {
     pub started_at: Option<String>,
     pub matched_hits: usize,
     pub hits: Vec<Hit>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub cut: Vec<Cut>,
     #[serde(skip)]
     file_id: i64,
+}
+
+impl Session {
+    /// Cuts hit texts so the session's line fits a page.
+    fn fit(&mut self) {
+        let line = line_len(self, "session");
+        let slots = self
+            .hits
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(i, hit)| match &mut hit.body {
+                Body::Text { text, .. } => Some((format!("/hits/{i}/text"), text, 0)),
+                _ => None,
+            })
+            .collect();
+        self.cut = fit(line, slots);
+    }
 }
 
 pub struct SearchPage {
@@ -347,9 +463,23 @@ pub fn search(
                 started_at: r.get(19)?,
                 matched_hits: r.get(11)?,
                 hits: vec![hit],
+                cut: Vec::new(),
                 file_id,
             }),
         }
+    }
+    // A session that does not fit after others starts the next page.
+    let mut used = 0;
+    for (i, session) in sessions.iter_mut().enumerate() {
+        let line = line_len(session, "session");
+        if used + line > PAGE_BYTES {
+            if i > 0 {
+                sessions.truncate(i);
+                break;
+            }
+            session.fit();
+        }
+        used += line_len(session, "session");
     }
     Ok(SearchPage {
         sessions,
@@ -436,6 +566,7 @@ pub fn scan(
         let mut coverage = Coverage::default();
         let mut cursor = after;
         let mut source = None;
+        let mut used = 0;
         loop {
             if Instant::now() >= deadline || hits.len() >= limit {
                 coverage.incomplete = true;
@@ -465,6 +596,18 @@ pub fn scan(
                         item.body = Body::Record {
                             record: display_range(&bytes)?,
                         };
+                        if used + line_len(&item, "hit") > PAGE_BYTES {
+                            // The next page starts with this hit.
+                            if !hits.is_empty() {
+                                coverage.records -= 1;
+                                coverage.bytes -= bytes.len() as u64;
+                                coverage.incomplete = true;
+                                coverage.continuation = Some(item.event_id - 1);
+                                break;
+                            }
+                            item.fit("hit", 0)?;
+                        }
+                        used += line_len(&item, "hit");
                         hits.push(item);
                     }
                 }
@@ -487,7 +630,7 @@ pub fn show(
     limit: usize,
     after: i64,
 ) -> Result<(Vec<Hit>, Coverage)> {
-    show_snapshot(db, target, around, limit, after, i64::MAX)
+    show_snapshot(db, target, around, limit, after, None, i64::MAX)
 }
 
 pub fn show_snapshot(
@@ -496,6 +639,7 @@ pub fn show_snapshot(
     around: usize,
     limit: usize,
     after: i64,
+    mut within: Option<usize>,
     high_water: i64,
 ) -> Result<(Vec<Hit>, Coverage)> {
     let mut args = Vec::new();
@@ -520,36 +664,60 @@ pub fn show_snapshot(
     let sql = format!(
         "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.id<=? AND {FIRST_OF_LINE_ROLE} ORDER BY e.id LIMIT ?"
     );
-    let mut hits = db
+    let rows = db
         .prepare(&sql)?
         .query_map(params_from_iter(args), hit)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let more = hits.len() > limit;
-    hits.truncate(limit);
-    let mut coverage = Coverage {
-        incomplete: more,
-        continuation: if more {
-            hits.last().map(|h| h.event_id)
-        } else {
-            None
-        },
-        ..Coverage::default()
-    };
-    coverage.records = hits.len();
+    let mut hits: Vec<Hit> = Vec::new();
+    let mut coverage = Coverage::default();
     let mut source = None;
-    for item in &mut hits {
-        match read_range(db, item, &mut source).and_then(|bytes| {
-            coverage.bytes += bytes.len() as u64;
+    let mut used = 0;
+    for mut item in rows {
+        if hits.len() == limit {
+            coverage.incomplete = true;
+            coverage.continuation = hits.last().map(|h| h.event_id);
+            break;
+        }
+        let mut read = 0;
+        let unavailable = match read_range(db, &item, &mut source).and_then(|bytes| {
+            read = bytes.len() as u64;
             display_range(&bytes)
         }) {
-            Ok(record) => item.body = Body::Record { record },
+            Ok(record) => {
+                item.body = Body::Record { record };
+                false
+            }
             Err(e) => {
                 item.body = Body::Unavailable {
                     unavailable: redact(&format!("{e:#}")),
                 };
-                coverage.unavailable_ranges += 1;
-                coverage.incomplete = true;
+                true
             }
+        };
+        let offset = within.take();
+        if offset.is_some() || used + line_len(&item, "record") > PAGE_BYTES {
+            // A record that does not fit after others starts the next page;
+            // one that fills a page alone continues inside it.
+            if !hits.is_empty() {
+                coverage.incomplete = true;
+                coverage.continuation = hits.last().map(|h| h.event_id);
+                break;
+            }
+            coverage.within = item.fit("record", offset.unwrap_or(0))?;
+        }
+        coverage.records += 1;
+        coverage.bytes += read;
+        if unavailable {
+            coverage.unavailable_ranges += 1;
+            coverage.incomplete = true;
+        }
+        used += line_len(&item, "record");
+        let id = item.event_id;
+        hits.push(item);
+        if coverage.within.is_some() {
+            coverage.incomplete = true;
+            coverage.continuation = Some(id - 1);
+            break;
         }
     }
     Ok((hits, coverage))

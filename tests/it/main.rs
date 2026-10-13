@@ -11,6 +11,7 @@ mod lookup;
 mod messages;
 mod outcomes;
 mod output_prefix;
+mod pages;
 mod privacy;
 mod refresh;
 mod schema;

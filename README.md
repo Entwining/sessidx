@@ -83,7 +83,7 @@ $ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, 
 {"agent":"pi","calls":1,"failed":0,"succeeded":1,"outcome_unknown":0}
 ```
 
-The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
+The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the 24 KiB page size, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
 
 | Command | Use it to |
 | --- | --- |

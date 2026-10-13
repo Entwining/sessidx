@@ -240,47 +240,34 @@ fn search_pagination_is_bounded_by_a_frozen_session_prefix() {
         path: logs,
     }];
     let half = (reachable / 2).to_string();
-    let first = stream(
-        &sessidx(
-            &serial,
-            &store.path,
-            &roots,
-            &["search", "boundneedle", "--limit", &half],
-        )
-        .output()
-        .unwrap(),
-        0,
-    );
-    let cursor = first.last().unwrap()["next"].as_str().unwrap();
-    // The cursor carries one integer per reachable session, never one per match.
-    assert!(cursor.len() < 16 * reachable, "{} bytes", cursor.len());
-    let second = stream(
-        &sessidx(
-            &serial,
-            &store.path,
-            &roots,
-            &[
-                "search",
-                "boundneedle",
-                "--limit",
-                &half,
-                "--cursor",
-                cursor,
-            ],
-        )
-        .output()
-        .unwrap(),
-        0,
-    );
-    let end = second.last().unwrap();
+    let mut sessions = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+    let end = loop {
+        assert!(sessions.len() <= reachable, "search does not stop");
+        let mut args = vec!["search", "boundneedle", "--limit", &half];
+        args.extend(cursor.iter().flat_map(|c| ["--cursor", c.as_str()]));
+        let page = stream(
+            &sessidx(&serial, &store.path, &roots, &args)
+                .output()
+                .unwrap(),
+            0,
+        );
+        sessions.extend(
+            page.iter()
+                .filter(|r| r["type"] == "session")
+                .map(|r| r["session_id"].clone()),
+        );
+        let end = page.last().unwrap().clone();
+        match end["next"].as_str() {
+            // The cursor carries one integer per reachable session, never one per match.
+            Some(next) => {
+                assert!(next.len() < 16 * reachable, "{} bytes", next.len());
+                cursor = Some(next.to_owned());
+            }
+            None => break end,
+        }
+    };
     assert_eq!(end["complete"], false);
-    assert!(end["next"].is_null());
-    let sessions: std::collections::HashSet<_> = first
-        .iter()
-        .chain(&second)
-        .filter(|r| r["type"] == "session")
-        .map(|r| r["session_id"].clone())
-        .collect();
     assert_eq!(sessions.len(), reachable);
 }
 
