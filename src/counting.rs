@@ -1,5 +1,10 @@
-use crate::{model::name, query::Filters};
-use anyhow::{Context, Result};
+use crate::{
+    model::name,
+    query::Filters,
+    store::{DAILY_COUNTS, PROGRAM_COUNTS, Rollup},
+};
+use anyhow::Result;
+use chrono::{NaiveDate, NaiveTime};
 use clap::ValueEnum;
 use rusqlite::{
     Connection,
@@ -8,17 +13,6 @@ use rusqlite::{
 };
 use serde_json::{Value as Json, json};
 use std::time::{Duration, Instant};
-
-/// Calls whose canonical event holds a site of `:program`, joined to results
-/// instead of probed per result: SQLite 3.53 plans that probe as a scan of the
-/// result's whole transcript. Rule: docs/formats.md `count_view_parity`.
-const PROGRAM_CALLS: &str = "WITH program_calls AS MATERIALIZED (
- SELECT DISTINCT ce.agent,ce.session_id,ce.call_id FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id
- WHERE cp.program=:program AND ce.call_id IS NOT NULL) ";
-
-/// A shell site whose program is unknown: unparsed syntax, or a parsed command
-/// whose program is not a literal word.
-const UNRESOLVED_SITE: &str = "(cp.parsed=0 OR cp.program IS NULL)";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum Metric {
@@ -40,6 +34,11 @@ pub enum By {
 /// One row per group. The counts of a metric partition its population, and
 /// what lies outside the population is named apart from it. Rule:
 /// docs/formats.md `count_partitions`.
+///
+/// Counts come from `daily_counts`, and with a program from
+/// `daily_program_counts` too, for the whole UTC days inside the window, and
+/// from the events themselves for the part of a day at either edge. Rule:
+/// docs/formats.md `daily_counts`.
 pub fn count(
     db: &Connection,
     metric: Metric,
@@ -47,161 +46,206 @@ pub fn count(
     program: Option<&str>,
     filters: &Filters,
 ) -> Result<Vec<Json>> {
-    let mut keys = Vec::new();
-    let mut expressions: Vec<String> = Vec::new();
-    for &key in by {
-        keys.push(name(key));
-        expressions.push(
-            match key {
-                By::Agent => "s.agent",
-                By::Model => "coalesce(e.model,'unknown')",
-                By::Role => "e.role",
-                By::Week => "coalesce(strftime('%G-W%V',e.ts),'unknown')",
-                By::SessionKind => "s.session_kind",
-            }
-            .into(),
-        );
-    }
-    let (clause, args) = filters.sql(db)?;
-    let selected = match (program, metric) {
-        (None, _) => "1",
-        (Some(_), Metric::Commands) => "c.program=:program",
-        (Some(_), Metric::Failures) => {
-            "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program=:program)"
-        }
-        (Some(_), Metric::Denials) => "pc.call_id IS NOT NULL",
-    };
-    let unresolved = match metric {
-        Metric::Denials => format!(
-            "EXISTS(SELECT 1 FROM sessions cs JOIN event_rows cr ON cr.file_id=cs.file_id JOIN commands cp ON cp.event_id=cr.id WHERE cs.agent=e.agent AND cs.session_id=e.session_id AND cr.call_id=unhex(e.call_id) AND cr.kind!='tool_result' AND {UNRESOLVED_SITE})"
+    let keys: Vec<String> = by.iter().map(|&key| name(key)).collect();
+    let expressions: Vec<&str> = by
+        .iter()
+        .map(|key| match key {
+            By::Agent => "s.agent",
+            By::Model => "coalesce(x.model,'unknown')",
+            By::Role => "x.role",
+            By::Week => "coalesce(strftime('%G-W%V',x.day),'unknown')",
+            By::SessionKind => "s.session_kind",
+        })
+        .collect();
+    // Columns named `program_*` are the program's rows; the others, every
+    // event's.
+    let (kind, mut fields): (&str, Vec<(&str, &str)>) = match (metric, program.is_some()) {
+        (Metric::Commands, _) => (
+            "tool_call",
+            vec![
+                ("sites", "sum(x.sites)"),
+                ("sites_without_program", "sum(x.sites_without_program)"),
+                ("unparsed_calls", "sum(x.unparsed_calls)"),
+            ],
         ),
-        _ => format!(
-            "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND {UNRESOLVED_SITE})"
+        (Metric::Failures, false) => (
+            "tool_call",
+            vec![
+                ("calls", "sum(x.events)"),
+                ("failed", "sum(x.failed)"),
+                ("succeeded", "sum(x.succeeded)"),
+                ("outcome_unknown", "sum(x.events-x.failed-x.succeeded)"),
+            ],
+        ),
+        (Metric::Failures, true) => (
+            "tool_call",
+            vec![
+                ("calls", "sum(x.program_events)"),
+                ("failed", "sum(x.program_failed)"),
+                ("succeeded", "sum(x.program_succeeded)"),
+                (
+                    "outcome_unknown",
+                    "sum(x.program_events-x.program_failed-x.program_succeeded)",
+                ),
+            ],
+        ),
+        (Metric::Denials, false) => (
+            "tool_result",
+            vec![
+                ("results", "sum(x.events)"),
+                ("denied", "sum(x.denied)"),
+                ("denied_reason_unknown", "sum(x.denied_reason_unknown)"),
+            ],
+        ),
+        (Metric::Denials, true) => (
+            "tool_result",
+            vec![
+                ("results", "sum(x.program_events)"),
+                ("denied", "sum(x.program_denied)"),
+                (
+                    "denied_reason_unknown",
+                    "sum(x.program_denied_reason_unknown)",
+                ),
+            ],
         ),
     };
-    let sum = |condition: &str| format!("sum(CASE WHEN {condition} THEN 1 ELSE 0 END)");
-    let mut fields: Vec<(&str, String)> = match metric {
-        Metric::Commands => vec![
-            ("sites", sum("c.parsed=1")),
-            (
-                "sites_without_program",
-                sum("c.parsed=1 AND c.program IS NULL"),
-            ),
-            (
-                "unparsed_calls",
-                "count(DISTINCT CASE WHEN c.parsed=0 THEN e.id END)".into(),
-            ),
-        ],
-        // Columns of the `calls` CTE below.
-        Metric::Failures => vec![
-            ("calls", sum("selected")),
-            ("failed", sum("selected AND ok=0")),
-            ("succeeded", sum("selected AND ok=1")),
-            ("outcome_unknown", sum("selected AND ok IS NULL")),
-        ],
-        Metric::Denials => vec![
-            ("results", sum(selected)),
-            (
-                "denied",
-                sum(&format!(
-                    "{selected} AND EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id)"
-                )),
-            ),
-            (
-                "denied_reason_unknown",
-                sum(&format!(
-                    "{selected} AND EXISTS(SELECT 1 FROM denials d WHERE d.event_id=e.id AND d.reason_id='unknown')"
-                )),
-            ),
-        ],
-    };
+    // Events whose program is unknown, less those that also name the program.
+    let unresolved = "sum(x.unresolved_program-x.program_unresolved_program)";
     if program.is_some() {
         fields.push(match metric {
-            Metric::Commands => ("matching_sites", sum("c.parsed=1 AND c.program=:program")),
-            Metric::Failures => (
-                "calls_with_unresolved_program",
-                sum("NOT selected AND unresolved"),
-            ),
-            Metric::Denials => (
-                "results_with_unresolved_program",
-                sum(&format!("NOT {selected} AND {unresolved}")),
-            ),
+            Metric::Commands => ("matching_sites", "sum(x.program_matching_sites)"),
+            Metric::Failures => ("calls_with_unresolved_program", unresolved),
+            Metric::Denials => ("results_with_unresolved_program", unresolved),
         });
     }
-    let events = "FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id";
-    let (with, source, group_keys) = match metric {
-        Metric::Commands => (
-            String::new(),
-            format!(
-                "{events} JOIN commands c ON c.event_id=e.id WHERE {clause} AND e.kind='tool_call'"
-            ),
-            expressions,
-        ),
-        // Each selected call's outcome is evaluated once, in this CTE.
-        // Rule: docs/formats.md `call_outcome_probe`.
-        Metric::Failures => {
-            let aliases: Vec<String> = (0..expressions.len()).map(|i| format!("k{i}")).collect();
-            let mut evaluated: Vec<String> = expressions
-                .iter()
-                .zip(&aliases)
-                .map(|(e, k)| format!("{e} AS {k}"))
-                .collect();
-            evaluated.push(format!("{selected} AS selected"));
-            if program.is_some() {
-                evaluated.push(format!("{unresolved} AS unresolved"));
-            }
-            evaluated.push(format!("CASE WHEN {selected} THEN e.ok END AS ok"));
-            (
-                format!(
-                    "WITH calls AS MATERIALIZED (SELECT {} FROM call_outcomes e JOIN sessions s ON s.file_id=e.file_id WHERE {clause}) ",
-                    evaluated.join(",")
-                ),
-                "FROM calls".to_owned(),
-                aliases,
-            )
+    // Whole days run from the first midnight at or after --since to the last
+    // at or before --until; a bound already at midnight leaves an empty edge.
+    let whole_from = filters.since.map(|t| {
+        let day = t.date_naive();
+        if t.time() == NaiveTime::MIN {
+            day
+        } else {
+            day + chrono::Days::new(1)
         }
-        Metric::Denials if program.is_some() => (
-            PROGRAM_CALLS.to_owned(),
-            format!(
-                "{events} LEFT JOIN program_calls pc ON pc.agent=e.agent AND pc.session_id=e.session_id AND pc.call_id=e.call_id WHERE {clause} AND e.kind='tool_result'"
-            ),
-            expressions,
-        ),
-        Metric::Denials => (
-            String::new(),
-            format!("{events} WHERE {clause} AND e.kind='tool_result'"),
-            expressions,
-        ),
-    };
-    let group = if group_keys.is_empty() {
+    });
+    let whole_to = filters.until.map(|t| t.date_naive());
+    let stamp = |day: NaiveDate| day.format("%Y-%m-%dT00:00:00.000Z").to_string();
+    let mut whole_days = None;
+    let mut edges = Vec::new();
+    if let (Some(from), Some(to)) = (whole_from, whole_to)
+        && from >= to
+    {
+        edges.push((filters.since(), filters.until()));
+    } else {
+        whole_days = Some((whole_from, whole_to));
+        if let (Some(since), Some(from)) = (filters.since(), whole_from) {
+            edges.push((Some(since), Some(stamp(from))));
+        }
+        if let (Some(until), Some(to)) = (filters.until(), whole_to) {
+            edges.push((Some(stamp(to)), Some(until)));
+        }
+    }
+    // The program's rollup follows every event's, and its columns are
+    // prefixed `program_`.
+    let rollups: Vec<(&Rollup, Option<&str>)> = std::iter::once((&DAILY_COUNTS, None))
+        .chain(program.map(|p| (&PROGRAM_COUNTS, Some(p))))
+        .collect();
+    let mut parts = Vec::new();
+    let mut args = Vec::new();
+    for (i, &(rollup, program)) in rollups.iter().enumerate() {
+        // Each part has every rollup's counters, zero for the others'.
+        let columns = rollups
+            .iter()
+            .enumerate()
+            .flat_map(|(j, (other, _))| {
+                other.counters.iter().map(move |c| {
+                    let prefix = if j == 0 { "" } else { "program_" };
+                    let value = if i == j { c } else { "0" };
+                    format!("{value} AS {prefix}{c}")
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        if let Some((from, to)) = whole_days {
+            let mut days = vec!["kind=?".to_owned()];
+            args.push(Value::Text(kind.into()));
+            if program.is_none() {
+                days.push("canonical=1".into());
+            }
+            if let Some(program) = program {
+                days.push("program=?".into());
+                args.push(Value::Text(program.into()));
+            }
+            for (op, day) in [(">=", from), ("<", to)] {
+                if let Some(day) = day {
+                    days.push(format!("day{op}?"));
+                    args.push(Value::Text(day.format("%Y-%m-%d").to_string()));
+                }
+            }
+            parts.push(format!(
+                "SELECT file_id,day,role,model,{columns} FROM {} WHERE {}",
+                rollup.table,
+                days.join(" AND ")
+            ));
+        }
+        for (since, until) in &edges {
+            let mut selection = vec!["e.kind=?".to_owned(), "e.canonical=1".to_owned()];
+            args.push(Value::Text(kind.into()));
+            if let Some(program) = program {
+                selection.push("c.program=?".into());
+                args.push(Value::Text(program.into()));
+            }
+            for (op, value) in [(">=", since), ("<", until)] {
+                if let Some(value) = value {
+                    selection.push(format!("e.ts{op}?"));
+                    args.push(Value::Text(value.clone()));
+                }
+            }
+            parts.push(format!(
+                "SELECT file_id,day,role,model,{columns} FROM ({})",
+                rollup.grouped(&selection.join(" AND "))
+            ));
+        }
+    }
+    let (sessions, session_args) = filters.session_sql(db)?;
+    args.extend(session_args);
+    let mut conditions = vec![sessions];
+    if let Some(role) = filters.role {
+        conditions.push("x.role=?".into());
+        args.push(Value::Text(name(role)));
+    }
+    if let Metric::Commands = metric {
+        // A group exists where a shell call does, as in a join with
+        // `commands`, and every row of a program is one.
+        conditions.push(if program.is_some() {
+            "(x.shell_calls>0 OR x.program_events>0)".into()
+        } else {
+            "x.shell_calls>0".into()
+        });
+    }
+    let group = if expressions.is_empty() {
         String::new()
     } else {
         format!(
             " GROUP BY {} ORDER BY {}",
-            group_keys.join(","),
-            group_keys.join(",")
+            expressions.join(","),
+            expressions.join(",")
         )
     };
-    let columns = group_keys
+    let columns = expressions
         .iter()
-        .cloned()
+        .map(|e| (*e).to_owned())
         .chain(fields.iter().map(|(_, sql)| format!("coalesce({sql},0)")))
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!("{with}SELECT {columns} {source}{group}");
-    let mut stmt = db.prepare(&sql)?;
-    let mut args = args.into_iter();
-    for i in 1..=stmt.parameter_count() {
-        let value = if stmt.parameter_name(i) == Some(":program") {
-            Value::Text(program.context("program parameter missing")?.into())
-        } else {
-            args.next().context("filter parameter missing")?
-        };
-        stmt.raw_bind_parameter(i, value)?;
-    }
-    let values = stmt
-        .raw_query()
-        .mapped(|r| {
+    let sql = format!(
+        "SELECT {columns} FROM ({}) x JOIN sessions s ON s.file_id=x.file_id WHERE {}{group}",
+        parts.join(" UNION ALL "),
+        conditions.join(" AND ")
+    );
+    let values = db
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(args), |r| {
             let mut obj = serde_json::Map::new();
             for (i, key) in keys.iter().enumerate() {
                 obj.insert(key.clone(), json!(r.get::<_, String>(i)?));
@@ -214,13 +258,14 @@ pub fn count(
                 obj.insert((*field).into(), json!(r.get::<_, i64>(keys.len() + i)?));
             }
             Ok(Json::Object(obj))
-        })
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(values)
 }
 
 /// Each count is named after the population it counts, so that a reader can
-/// compare it with the population it belongs to.
+/// compare it with the population it belongs to. Event counts come from
+/// `daily_counts`.
 pub fn doctor(db: &Connection) -> Result<Json> {
     let scalar = |sql: &str| -> Result<i64> { Ok(db.query_row(sql, [], |r| r.get(0))?) };
     let signatures: Vec<Json> = db
@@ -238,14 +283,14 @@ pub fn doctor(db: &Connection) -> Result<Json> {
         "unknown_shape_signatures": signatures,
         "sessions": scalar("SELECT count(*) FROM sessions")?,
         "sessions_with_unknown_kind": scalar("SELECT count(*) FROM sessions WHERE session_kind='unknown'")?,
-        "events": scalar("SELECT count(*) FROM event_rows")?,
-        "canonical_events": scalar("SELECT count(*) FROM canonical_events")?,
-        "tool_events": scalar("SELECT count(*) FROM event_rows WHERE kind IN ('tool_call','server_tool_call','tool_result')")?,
-        "tool_events_without_model": scalar("SELECT count(*) FROM event_rows WHERE kind IN ('tool_call','server_tool_call','tool_result') AND model IS NULL")?,
-        "shell_calls": scalar("SELECT count(DISTINCT event_id) FROM commands")?,
-        "shell_calls_unparsed": scalar("SELECT count(DISTINCT event_id) FROM commands WHERE parsed=0")?,
-        "denials": scalar("SELECT count(*) FROM denials")?,
-        "denials_with_unknown_reason": scalar("SELECT count(*) FROM denials WHERE reason_id='unknown'")?,
+        "events": scalar("SELECT coalesce(sum(events),0) FROM daily_counts")?,
+        "canonical_events": scalar("SELECT coalesce(sum(events),0) FROM daily_counts WHERE canonical=1")?,
+        "tool_events": scalar("SELECT coalesce(sum(events),0) FROM daily_counts WHERE kind IN ('tool_call','server_tool_call','tool_result')")?,
+        "tool_events_without_model": scalar("SELECT coalesce(sum(events),0) FROM daily_counts WHERE kind IN ('tool_call','server_tool_call','tool_result') AND model IS NULL")?,
+        "shell_calls": scalar("SELECT coalesce(sum(shell_calls),0) FROM daily_counts")?,
+        "shell_calls_unparsed": scalar("SELECT coalesce(sum(unparsed_calls),0) FROM daily_counts")?,
+        "denials": scalar("SELECT coalesce(sum(denial_rows),0) FROM daily_counts")?,
+        "denials_with_unknown_reason": scalar("SELECT coalesce(sum(denial_rows_reason_unknown),0) FROM daily_counts")?,
     }))
 }
 

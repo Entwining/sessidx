@@ -120,18 +120,31 @@ fn root(s: &str) -> Result<Root, String> {
     })
 }
 
+/// A page's place in a query over one snapshot of the index: events up to
+/// `high_water`, and the changes up to `revision`, which later changes are
+/// checked against.
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Cursor {
     version: u8,
     scope: String,
-    position: i64,
     high_water: i64,
     revision: i64,
+    /// grep and show: the last event examined.
+    after: Option<query::Position>,
+    /// search: how many sessions of the frozen ranking were passed, returned
+    /// or no longer matching, the file IDs of that ranking, and how many
+    /// sessions matched.
+    offset: usize,
     search_order: Option<Vec<i64>>,
-    /// Where `show` resumes in a record's JSON text, as `Coverage::within`.
+    search_matched: usize,
+    /// show: where the record at `after` resumes in its JSON text, as
+    /// `Coverage::within`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     within: Option<usize>,
 }
+
+const CURSOR_VERSION: u8 = 5;
 
 fn scope(db: &rusqlite::Connection, request: &Value) -> Result<String> {
     let mut hash = Sha256::new();
@@ -144,53 +157,53 @@ fn scope(db: &rusqlite::Connection, request: &Value) -> Result<String> {
     Ok(hex::encode(hash.finalize()))
 }
 
-fn snapshot(db: &rusqlite::Connection, cursor: Option<&str>, request: &Value) -> Result<Cursor> {
+/// The snapshot a page reads: a new one without a cursor, or the cursor's
+/// unless `invalidated` finds a change since it that the later pages would
+/// read. Rule: docs/formats.md `cursor_invalidation`.
+fn snapshot(
+    db: &rusqlite::Connection,
+    cursor: Option<&str>,
+    request: &Value,
+    invalidated: impl Fn(&Cursor) -> Result<bool>,
+) -> Result<Cursor> {
     let revision: i64 = db.query_row("SELECT coalesce(max(id),0) FROM index_changes", [], |r| {
         r.get(0)
     })?;
     let Some(cursor) = cursor else {
         return Ok(Cursor {
-            version: 4,
+            version: CURSOR_VERSION,
             scope: scope(db, request)?,
-            position: 0,
             high_water: db.query_row("SELECT coalesce(max(id),0) FROM event_rows", [], |r| {
                 r.get(0)
             })?,
             revision,
+            after: None,
+            offset: 0,
             search_order: None,
+            search_matched: 0,
             within: None,
         });
     };
     let cursor: Cursor = serde_json::from_str(cursor)
         .context("invalid cursor; restart the query without --cursor")?;
-    let changed: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM index_changes WHERE id>? AND first_event_id<=?)",
-        [cursor.revision, cursor.high_water],
-        |r| r.get(0),
-    )?;
     anyhow::ensure!(
-        cursor.version == 4
-            && cursor.position >= 0
+        cursor.version == CURSOR_VERSION
+            && cursor
+                .after
+                .is_none_or(|(file, line, ordinal)| file >= 0 && line >= 0 && ordinal >= 0)
             && cursor.high_water >= 0
             && cursor.revision <= revision
             && cursor.revision >= 0
             && cursor.scope == scope(db, request)?
-            && !changed,
+            && !invalidated(&cursor)?,
         query::CURSOR_MISMATCH
     );
     Ok(cursor)
 }
 
-fn next(snapshot: &Cursor, coverage: &Coverage) -> Result<Option<String>> {
-    coverage
-        .continuation
-        .map(|position| {
-            Ok(serde_json::to_string(&Cursor {
-                position,
-                within: coverage.within,
-                ..snapshot.clone()
-            })?)
-        })
+fn encode(cursor: Option<Cursor>) -> Result<Option<String>> {
+    cursor
+        .map(|cursor| Ok(serde_json::to_string(&cursor)?))
         .transpose()
 }
 
@@ -275,32 +288,68 @@ fn search(
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
     let request = json!(["search_sessions", path, query, filters]);
-    let mut snapshot = snapshot(&db, page.cursor.as_deref(), &request)?;
-    let offset = snapshot.position;
+    // Only the frozen sessions not yet returned matter to later pages.
+    let mut snapshot = snapshot(&db, page.cursor.as_deref(), &request, |c| {
+        let unvisited = c
+            .search_order
+            .as_deref()
+            .and_then(|order| order.get(c.offset..))
+            .unwrap_or_default();
+        Ok(db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM index_changes WHERE id>? AND file_id IN (SELECT value FROM json_each(?)))",
+            rusqlite::params![c.revision, serde_json::to_string(unvisited)?],
+            |r| r.get(0),
+        )?)
+    })?;
+    let offset = snapshot.offset;
     filters.high_water = Some(snapshot.high_water);
-    filters.search_order = snapshot.search_order.clone();
-    let found = query::search(&db, query, &filters, page.limit, offset as usize)?;
+    let remaining: Option<Vec<i64>> = snapshot
+        .search_order
+        .as_ref()
+        .map(|order| order.iter().skip(offset).copied().collect());
+    filters.search_order = remaining.clone();
+    let found = query::search(&db, query, &filters, page.limit, Duration::from_secs(2))?;
     if snapshot.search_order.is_none() {
         snapshot.search_order = found.order;
+        snapshot.search_matched = found.matched_sessions;
     }
     let sessions = found.sessions;
     let records = sessions.iter().map(|s| s.hits.len()).sum();
-    let reached = offset as usize + sessions.len();
-    let more = reached < found.matched_sessions;
+    // A frozen session that stopped matching, as when an append changed its
+    // kind, is passed over rather than read again. Rule: docs/formats.md
+    // `search_page_progress`.
+    let reached = match remaining {
+        None => offset + sessions.len(),
+        Some(remaining) if sessions.len() == found.matched_sessions => offset + remaining.len(),
+        Some(remaining) => {
+            let last = sessions.last().map(|s| s.file_id);
+            offset
+                + remaining
+                    .iter()
+                    .position(|&id| Some(id) == last)
+                    .map_or(remaining.len(), |i| i + 1)
+        }
+    };
+    let more = reached < snapshot.search_matched;
     for session in &sessions {
         emit("session", serde_json::to_value(session)?)?;
     }
     // Past the frozen prefix the end stays incomplete without a cursor.
     let coverage = Coverage {
         incomplete: more,
-        continuation: (more && reached < query::SEARCH_PAGE_SESSIONS).then_some(reached as i64),
         records,
         ..Coverage::default()
     };
+    let cursor = encode(
+        (more && reached < query::SEARCH_PAGE_SESSIONS).then_some(Cursor {
+            offset: reached,
+            ..snapshot
+        }),
+    )?;
     end(
         &json!(refresh),
         &coverage,
-        next(&snapshot, &coverage)?,
+        cursor,
         "session_hits",
         sessions.len(),
     )?;
@@ -321,15 +370,22 @@ fn grep(
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
     let request = json!(["grep", path, pattern, filters]);
-    let snapshot = snapshot(&db, page.cursor.as_deref(), &request)?;
-    let after = snapshot.position;
+    // Files are read in ID order, so a change matters only from the file the
+    // cursor stopped in, and only to a file that held events then.
+    let snapshot = snapshot(&db, page.cursor.as_deref(), &request, |c| {
+        Ok(db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM index_changes WHERE id>? AND first_event_id<=? AND file_id>=?)",
+            [c.revision, c.high_water, c.after.map_or(0, |a| a.0)],
+            |r| r.get(0),
+        )?)
+    })?;
     filters.high_water = Some(snapshot.high_water);
     let (hits, coverage) = query::scan(
         &db,
         pattern,
         &filters,
         page.limit,
-        after,
+        snapshot.after,
         Duration::from_secs(2),
     )?;
     for hit in &hits {
@@ -338,7 +394,10 @@ fn grep(
     end(
         &json!(refresh),
         &coverage,
-        next(&snapshot, &coverage)?,
+        encode(coverage.continuation.map(|after| Cursor {
+            after: Some(after),
+            ..snapshot
+        }))?,
         "source_ranges",
         hits.len(),
     )?;
@@ -356,14 +415,14 @@ fn show(
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
     let request = json!(["show", path, target, around]);
-    let snapshot = snapshot(&db, cursor, &request)?;
-    let after = snapshot.position;
+    // A replaced transcript has a new file ID, which `show_snapshot` refuses.
+    let snapshot = snapshot(&db, cursor, &request, |_| Ok(false))?;
     let (hits, coverage) = query::show_snapshot(
         &db,
         target,
         around,
         limit,
-        after,
+        snapshot.after,
         snapshot.within,
         snapshot.high_water,
     )?;
@@ -373,7 +432,11 @@ fn show(
     end(
         &json!(refresh),
         &coverage,
-        next(&snapshot, &coverage)?,
+        encode(coverage.continuation.map(|after| Cursor {
+            after: Some(after),
+            within: coverage.within,
+            ..snapshot
+        }))?,
         "source_ranges",
         hits.len(),
     )?;
@@ -428,9 +491,12 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         "no index at {}; run sessidx index to build it",
         path.display()
     );
-    let read_lock = Store::read_lock(path)?;
-    // sql does not refresh, so its coverage holds only what the lock shows.
-    let refresh = json!({"stale": read_lock.is_none(), "writer_busy": read_lock.is_none()});
+    // sql does not refresh, so its coverage holds only whether a writer held
+    // the lock when it started. Holding the lock through the query would make
+    // every refresh meanwhile report a busy writer. Rule: docs/formats.md
+    // `sql_lock_probe`.
+    let writer_busy = Store::read_lock(path)?.is_none();
+    let refresh = json!({"stale": writer_busy, "writer_busy": writer_busy});
     let db =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.busy_timeout(Duration::from_millis(50))?;

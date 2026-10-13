@@ -5,6 +5,7 @@ mod common;
 mod compressed;
 mod counts;
 mod cursors;
+mod derived;
 mod docs;
 mod identity;
 mod lookup;

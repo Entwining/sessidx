@@ -203,7 +203,7 @@ fn copied_history() -> (tempfile::TempDir, Store) {
     // Denied calls whose program selection depends on matching the call: two
     // `rg` sites in one call, a call without `rg`, a server call with `rg`,
     // and a call whose shell syntax does not parse; then an `rg` call with no
-    // result, whose outcome is unknown.
+    // result, whose outcome is unknown. The last three are a day later.
     let claude = format!(
         "{}{}",
         include_str!("../fixtures/claude.jsonl"),
@@ -214,15 +214,15 @@ fn copied_history() -> (tempfile::TempDir, Store) {
             "\n",
             r#"{"type":"user","uuid":"c5","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:04Z","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-ls","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
             "\n",
-            r#"{"type":"assistant","uuid":"c6","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:05Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"server_tool_use","id":"call-server","name":"Bash","input":{"command":"rg three"}}]}}"#,
+            r#"{"type":"assistant","uuid":"c6","sessionId":"claude-fixture","timestamp":"2026-10-02T12:00:05Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"server_tool_use","id":"call-server","name":"Bash","input":{"command":"rg three"}}]}}"#,
             "\n",
-            r#"{"type":"user","uuid":"c7","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:06Z","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-server","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            r#"{"type":"user","uuid":"c7","sessionId":"claude-fixture","timestamp":"2026-10-02T12:00:06Z","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-server","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
             "\n",
-            r#"{"type":"assistant","uuid":"c8","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:07Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-unparsed","name":"Bash","input":{"command":"echo 'unterminated"}}]}}"#,
+            r#"{"type":"assistant","uuid":"c8","sessionId":"claude-fixture","timestamp":"2026-10-02T12:00:07Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-unparsed","name":"Bash","input":{"command":"echo 'unterminated"}}]}}"#,
             "\n",
-            r#"{"type":"user","uuid":"c9","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:08Z","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-unparsed","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
+            r#"{"type":"user","uuid":"c9","sessionId":"claude-fixture","timestamp":"2026-10-02T12:00:08Z","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-unparsed","is_error":true,"content":"Permission to use Bash has been denied."}]}}"#,
             "\n",
-            r#"{"type":"assistant","uuid":"c10","sessionId":"claude-fixture","timestamp":"2026-10-01T00:00:09Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-pending","name":"Bash","input":{"command":"rg pending"}}]}}"#,
+            r#"{"type":"assistant","uuid":"c10","sessionId":"claude-fixture","timestamp":"2026-10-02T12:00:09Z","message":{"role":"assistant","model":"claude-sonnet","content":[{"type":"tool_use","id":"call-pending","name":"Bash","input":{"command":"rg pending"}}]}}"#,
             "\n",
             r#"{"type":"user","uuid":"shared","sessionId":"claude-fixture","message":{"role":"user","content":"one"}}"#,
             "\n",
@@ -239,22 +239,27 @@ fn copied_history() -> (tempfile::TempDir, Store) {
             "\n",
         )
     );
+    // A Pi fork is a session of its own, and a call it reruns gets a result
+    // with a new ID: a first copy whose call is not one.
+    let pi_fork = pi
+        .replace(r#""id":"pi-fixture""#, r#""id":"pi-fork""#)
+        .replace(r#""id":"p2""#, r#""id":"p2-rerun""#);
     let mut roots = Vec::new();
-    for (agent, fixture) in [
-        (Agent::Claude, claude.as_str()),
-        (Agent::Codex, include_str!("../fixtures/codex.jsonl")),
-        (Agent::Pi, pi.as_str()),
+    for (agent, fixture, copy) in [
+        (Agent::Claude, claude.as_str(), claude.clone()),
+        (
+            Agent::Codex,
+            include_str!("../fixtures/codex.jsonl"),
+            include_str!("../fixtures/codex.jsonl").replace("gpt-fixture", "gpt-copy"),
+        ),
+        (Agent::Pi, pi.as_str(), pi_fork),
     ] {
         let root = dir.path().join(name(agent));
         fs::create_dir(&root).unwrap();
         // A resumed or forked session repeats its parent's records with the same
         // native IDs; the copy's own context can attribute them differently.
         fs::write(root.join("a.jsonl"), fixture).unwrap();
-        fs::write(
-            root.join("b.jsonl"),
-            fixture.replace("gpt-fixture", "gpt-copy"),
-        )
-        .unwrap();
+        fs::write(root.join("b.jsonl"), copy).unwrap();
         roots.push(Root { agent, path: root });
     }
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
@@ -274,16 +279,46 @@ fn counts_equal_the_public_views_over_copied_history() {
     let names = ["agent", "model", "role", "week", "session_kind"];
     let keys = "s.agent,coalesce(e.model,'unknown'),e.role,coalesce(strftime('%G-W%V',e.ts),'unknown'),s.session_kind";
     let events = "FROM canonical_events e JOIN sessions s ON s.file_id=e.file_id";
-    let calls = "FROM call_outcomes e JOIN sessions s ON s.file_id=e.file_id";
+    let calls = "FROM call_outcomes e JOIN sessions s ON s.file_id=e.file_id WHERE 1";
     let unresolved = "(cp.parsed=0 OR cp.program IS NULL)";
+    // Windows of whole days and of parts of a day at either edge.
+    let windows = [
+        (None, None),
+        (Some("2026-10-01T00:00:03Z"), None),
+        (None, Some("2026-10-02T12:00:07Z")),
+        (Some("2026-10-01T00:00:03Z"), Some("2026-10-02T12:00:07Z")),
+        (Some("2026-10-01T00:00:00Z"), Some("2026-10-02T00:00:00Z")),
+        (Some("2026-10-02T12:00:00Z"), Some("2026-10-02T12:00:07Z")),
+    ];
     // References over the public views, with and without a program selection.
-    for program in [None, Some("rg")] {
+    for ((since, until), program) in windows
+        .into_iter()
+        .flat_map(|w| [(w, None), (w, Some("rg"))])
+    {
+        let filters = Filters {
+            since: since.map(|t| t.parse().unwrap()),
+            until: until.map(|t| t.parse().unwrap()),
+            ..Filters::default()
+        };
+        let window = [(">=", since), ("<", until)]
+            .iter()
+            .filter_map(|(op, t)| {
+                t.map(|t| {
+                    let t: chrono::DateTime<chrono::Utc> = t.parse().unwrap();
+                    format!(
+                        " AND e.ts{op}'{}'",
+                        t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    )
+                })
+            })
+            .collect::<String>();
         let call = "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program='rg')";
-        let result = "EXISTS(SELECT 1 FROM commands cp JOIN canonical_events ce ON ce.id=cp.event_id WHERE ce.agent=e.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND cp.program='rg')";
+        // A result's call is any copy of it in the result's session.
+        let result = "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id WHERE ce.agent=e.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND ce.kind IN ('tool_call','server_tool_call') AND cp.program='rg')";
         let unresolved_call =
             format!("EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND {unresolved})");
         let unresolved_result = format!(
-            "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id WHERE ce.agent=e.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND ce.kind!='tool_result' AND {unresolved})"
+            "EXISTS(SELECT 1 FROM commands cp JOIN events ce ON ce.id=cp.event_id WHERE ce.agent=e.agent AND ce.session_id=e.session_id AND ce.call_id=e.call_id AND ce.kind IN ('tool_call','server_tool_call') AND {unresolved})"
         );
         let (call, result) = match program {
             None => ("1", "1"),
@@ -355,7 +390,10 @@ fn counts_equal_the_public_views_over_copied_history() {
             if let Metric::Commands = metric {
                 fields.insert(2, "unparsed_calls");
             }
-            let sql = format!("SELECT {keys},{} {source} GROUP BY {keys}", sums.join(","));
+            let sql = format!(
+                "SELECT {keys},{} {source}{window} GROUP BY {keys}",
+                sums.join(",")
+            );
             let width = names.len() + fields.len();
             let mut expected: Vec<Vec<String>> = store
                 .db
@@ -378,7 +416,7 @@ fn counts_equal_the_public_views_over_copied_history() {
                 .collect();
             expected.sort();
             let mut counted: Vec<Vec<String>> =
-                counting::count(&store.db, metric, &by, program, &Filters::default())
+                counting::count(&store.db, metric, &by, program, &filters)
                     .unwrap()
                     .iter()
                     .map(|row| {
@@ -390,11 +428,16 @@ fn counts_equal_the_public_views_over_copied_history() {
                     })
                     .collect();
             counted.sort();
-            assert!(
-                expected.iter().any(|row| row[names.len()] != "0"),
-                "{metric:?} {program:?} selects nothing"
+            if since.is_none() && until.is_none() {
+                assert!(
+                    expected.iter().any(|row| row[names.len()] != "0"),
+                    "{metric:?} {program:?} selects nothing"
+                );
+            }
+            assert_eq!(
+                counted, expected,
+                "{metric:?} {program:?} from {since:?} to {until:?}"
             );
-            assert_eq!(counted, expected, "{metric:?} {program:?}");
         }
     }
 }
@@ -429,7 +472,7 @@ fn failure_count_work_follows_the_selected_calls() {
             None,
         )
         .unwrap();
-    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model_source,ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,'2020-01-01T00:00:00.000Z',r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source FROM n JOIN event_rows r ON r.id=1;").unwrap();
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,'2020-01-01T00:00:00.000Z',r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source,1,1,CASE WHEN r.kind='tool_call' THEN 'none' END FROM n JOIN event_rows r ON r.id=1;").unwrap();
     let steps = Arc::new(AtomicUsize::new(0));
     let counter = steps.clone();
     store
@@ -465,26 +508,9 @@ fn failure_count_work_follows_the_selected_calls() {
             (&calls.into(), &calls.into())
         );
     });
-    let probed = work(&|| {
-        let n: i64 = store
-            .db
-            .query_row(
-                "SELECT count(ok) FROM call_outcomes WHERE ts>=?",
-                [since],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(n, calls);
-    });
-    // One callback per 100 virtual machine instructions. A pass over the
-    // 200,000 earlier events, or a probe of every transcript for each call,
-    // costs thousands; probing each call once per reference to its outcome
-    // costs about two and a half times the single probe.
+    // One callback per 100 virtual machine instructions; a pass over the
+    // 200,000 earlier events costs thousands.
     assert!(counted < 1000, "{counted} hundred instructions");
-    assert!(
-        counted < 2 * probed,
-        "{counted} against {probed} for one probe"
-    );
 }
 
 #[test]
@@ -540,4 +566,83 @@ fn count_rows_partition_their_population() {
             );
         }
     }
+}
+
+#[test]
+fn whole_days_are_counted_from_daily_counts_not_events() {
+    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let calls = |program: Option<&str>, filters: &Filters| {
+        counting::count(&store.db, Metric::Failures, &[], program, filters).unwrap()[0]["calls"]
+            .as_i64()
+            .unwrap()
+    };
+    let indexed_calls = [None, Some("rg")].map(|p| calls(p, &Filters::default()));
+    // 200,000 canonical `rg` calls on one earlier day, with their daily rows.
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,'2020-01-01T12:00:00.000Z',r.role,r.role_source,r.kind,r.kind_source,r.model,r.model_source,r.ok_source,1,1,'none' FROM n JOIN event_rows r ON r.id=(SELECT min(id) FROM event_rows WHERE kind='tool_call');
+     INSERT INTO daily_counts SELECT file_id,'2020-01-01',kind,role,model,1,200000,0,0,0,0,0,0,200000,0,200000,0,0 FROM event_rows WHERE id=(SELECT min(id) FROM event_rows WHERE kind='tool_call');
+     INSERT INTO daily_program_counts SELECT file_id,'2020-01-01',kind,role,model,'rg',200000,0,0,0,0,0,200000 FROM event_rows WHERE id=(SELECT min(id) FROM event_rows WHERE kind='tool_call');").unwrap();
+    let steps = Arc::new(AtomicUsize::new(0));
+    let counter = steps.clone();
+    store
+        .db
+        .progress_handler(
+            100,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
+    // The window's edges are parts of days without those calls.
+    for ((program, filters), expected) in [None, Some("rg")]
+        .into_iter()
+        .zip(indexed_calls)
+        .flat_map(|(program, indexed)| {
+            [
+                ((program, Filters::default()), indexed + 200_000),
+                (
+                    (
+                        program,
+                        Filters {
+                            since: Some("2019-12-31T06:00:00Z".parse().unwrap()),
+                            until: Some("2020-01-02T06:00:00Z".parse().unwrap()),
+                            ..Filters::default()
+                        },
+                    ),
+                    200_000,
+                ),
+            ]
+        })
+    {
+        steps.store(0, Ordering::Relaxed);
+        assert_eq!(calls(program, &filters), expected, "{program:?}");
+        let work = steps.load(Ordering::Relaxed);
+        // One callback per 100 virtual machine instructions; a pass over the
+        // 200,000 calls costs thousands.
+        assert!(work < 1000, "{work} hundred instructions");
+    }
+    // The other metrics read the same rollups and edges for their own kinds.
+    let window = Filters {
+        since: Some("2019-12-31T06:00:00Z".parse().unwrap()),
+        until: Some("2020-01-02T06:00:00Z".parse().unwrap()),
+        ..Filters::default()
+    };
+    for metric in [Metric::Commands, Metric::Denials] {
+        for program in [None, Some("rg")] {
+            for filters in [&Filters::default(), &window] {
+                steps.store(0, Ordering::Relaxed);
+                counting::count(&store.db, metric, &[], program, filters).unwrap();
+                let work = steps.load(Ordering::Relaxed);
+                assert!(
+                    work < 1000,
+                    "{metric:?} {program:?}: {work} hundred instructions"
+                );
+            }
+        }
+    }
+    steps.store(0, Ordering::Relaxed);
+    let doctor = counting::doctor(&store.db).unwrap();
+    assert!(doctor["events"].as_i64().unwrap() > 200_000);
+    let work = steps.load(Ordering::Relaxed);
+    assert!(work < 1000, "{work} hundred instructions");
 }

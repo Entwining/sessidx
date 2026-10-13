@@ -135,13 +135,14 @@ pub fn search_hits(
     query: &str,
     filters: &Filters,
     limit: usize,
-    offset: usize,
 ) -> anyhow::Result<Vec<query::Hit>> {
-    Ok(query::search(db, query, filters, limit, offset)?
-        .sessions
-        .into_iter()
-        .flat_map(|s| s.hits)
-        .collect())
+    Ok(
+        query::search(db, query, filters, limit, std::time::Duration::from_secs(2))?
+            .sessions
+            .into_iter()
+            .flat_map(|s| s.hits)
+            .collect(),
+    )
 }
 
 pub fn snapshot(store: &Store) -> Vec<String> {

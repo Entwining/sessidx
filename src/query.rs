@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use clap::{Args, ValueEnum};
 use regex::Regex;
-use rusqlite::{Connection, params_from_iter, types::Value};
+use rusqlite::{Connection, OptionalExtension, params_from_iter, types::Value};
 use serde::Serialize;
 use serde_json::Value as Json;
 use sha2::{Digest, Sha256};
@@ -55,7 +55,8 @@ pub struct Filters {
     #[arg(skip)]
     #[serde(skip)]
     pub high_water: Option<i64>,
-    /// Anchors of the frozen search ranking, from the first page's cursor.
+    /// The transcripts of the frozen search ranking that a later page shows,
+    /// in ranked order.
     #[arg(skip)]
     #[serde(skip)]
     pub search_order: Option<Vec<i64>>,
@@ -70,13 +71,51 @@ impl Filters {
             || self.session.is_some()
     }
 
+    /// Every filter, over events `e` joined to their sessions `s`.
     pub fn sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
+        let (sessions, mut args) = self.session_sql(db)?;
+        let (events, event_args) = self.event_sql();
+        args.extend(event_args);
+        Ok((format!("{sessions} AND {events}"), args))
+    }
+
+    /// The filters on events `e` themselves: role, time, and high-water mark.
+    pub fn event_sql(&self) -> (String, Vec<Value>) {
         let mut conditions = vec!["1=1".to_owned()];
         let mut args = Vec::new();
         if let Some(high_water) = self.high_water {
             conditions.push("e.id<=?".into());
             args.push(Value::Integer(high_water));
         }
+        if let Some(role) = self.role {
+            conditions.push("e.role=?".into());
+            args.push(Value::Text(name(role)));
+        }
+        for (op, value) in [(">=", self.since()), ("<", self.until())] {
+            if let Some(value) = value {
+                conditions.push(format!("e.ts{op}?"));
+                args.push(Value::Text(value));
+            }
+        }
+        (conditions.join(" AND "), args)
+    }
+
+    /// `--since` in the stored timestamp format.
+    pub fn since(&self) -> Option<String> {
+        self.since
+            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true))
+    }
+
+    /// `--until` in the stored timestamp format.
+    pub fn until(&self) -> Option<String> {
+        self.until
+            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true))
+    }
+
+    /// The filters on sessions `s`: agent, kind, selector, and directory.
+    pub fn session_sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
+        let mut conditions = vec!["1=1".to_owned()];
+        let mut args = Vec::new();
         if !self.agent.is_empty() {
             conditions.push(format!(
                 "s.agent IN ({})",
@@ -84,14 +123,9 @@ impl Filters {
             ));
             args.extend(self.agent.iter().map(|h| Value::Text(name(*h))));
         }
-        for (field, value) in [
-            ("e.role", self.role.map(name)),
-            ("s.session_kind", self.session_kind.map(name)),
-        ] {
-            if let Some(value) = value {
-                conditions.push(format!("{field}=?"));
-                args.push(Value::Text(value));
-            }
+        if let Some(kind) = self.session_kind {
+            conditions.push("s.session_kind=?".into());
+            args.push(Value::Text(name(kind)));
         }
         if let Some(session) = &self.session {
             match session_file(db, session)? {
@@ -100,14 +134,6 @@ impl Filters {
                     args.push(Value::Integer(file_id));
                 }
                 None => conditions.push("0".into()),
-            }
-        }
-        for (op, value) in [(">=", &self.since), ("<", &self.until)] {
-            if let Some(value) = value {
-                conditions.push(format!("e.ts{op}?"));
-                args.push(Value::Text(
-                    value.to_rfc3339_opts(SecondsFormat::Millis, true),
-                ));
             }
         }
         if let Some(cwd) = &self.cwd {
@@ -180,7 +206,15 @@ pub struct Hit {
     pub byte_len: u64,
     #[serde(skip)]
     pub event_id: i64,
+    #[serde(skip)]
+    pub position: Position,
 }
+
+/// Where a grep or show page stopped: the file ID, line, and ordinal of the
+/// last event it examined, or `i64::MAX` line and ordinal for a file read to
+/// its end. Files are read in ID order and each file in line order, so a later
+/// page resumes after this position.
+pub type Position = (i64, i64, i64);
 
 /// What a hit carries of its event: the indexed text for ranked lookup, the
 /// whole source record, parsed and redacted, for grep and show, or part of
@@ -220,8 +254,9 @@ impl Hit {
 #[derive(Debug, Default, Serialize)]
 pub struct Coverage {
     pub incomplete: bool,
-    pub continuation: Option<i64>,
-    /// Where `show` resumes in the JSON text of the record after `continuation`.
+    pub continuation: Option<Position>,
+    /// Where `show` resumes in the JSON text of the record at `continuation`,
+    /// which the next page shows again from there.
     pub within: Option<usize>,
     pub unavailable_ranges: usize,
     pub records: usize,
@@ -295,10 +330,8 @@ fn fit(line: usize, slots: Vec<(String, &mut String, usize)>) -> Vec<Cut> {
     cuts
 }
 
-const COLUMNS: &str = "e.agent,e.session_id,e.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.text_truncated";
-const FROM: &str = "FROM events e JOIN sessions s ON s.file_id=e.file_id";
-// Rule: docs/formats.md `line_role_record`.
-const FIRST_OF_LINE_ROLE: &str = "e.ordinal=(SELECT min(r.ordinal) FROM event_rows r WHERE r.file_id=e.file_id AND r.line_no=e.line_no AND r.role=e.role)";
+/// A hit's columns, from `event_rows e` and `sessions s`.
+const COLUMNS: &str = "s.agent,s.session_id,s.path,e.line_no,e.ts,e.role,e.model,e.byte_off,e.byte_len,e.id,e.file_id,e.ordinal";
 
 fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
     let agent: String = row.get(0)?;
@@ -316,13 +349,14 @@ fn hit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Hit> {
         model: row.get(6)?,
         body: Body::Text {
             text: String::new(),
-            truncated: row.get(10)?,
+            truncated: false,
         },
         reference,
         cut: Vec::new(),
         byte_off: row.get(7)?,
         byte_len: row.get(8)?,
         event_id: row.get(9)?,
+        position: (row.get(10)?, row.get(3)?, row.get(11)?),
     })
 }
 
@@ -363,7 +397,7 @@ pub struct Session {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cut: Vec<Cut>,
     #[serde(skip)]
-    file_id: i64,
+    pub file_id: i64,
 }
 
 impl Session {
@@ -385,55 +419,88 @@ impl Session {
 
 pub struct SearchPage {
     pub sessions: Vec<Session>,
-    /// Matching sessions at or below the high-water mark, ranked or not.
+    /// Matching sessions at or below the high-water mark, ranked or not, among
+    /// all sessions or those a frozen order lists.
     pub matched_sessions: usize,
-    /// Each session is anchored by its lowest matching event ID, which stays
-    /// fixed below the high-water mark. Set only when no order was supplied.
+    /// The file IDs of the first ranked sessions, which never name another
+    /// transcript, when no order was supplied.
     pub order: Option<Vec<i64>>,
 }
 
+/// Ranks matching sessions and returns the first `limit` of them; with a
+/// frozen order in `filters.search_order`, ranks only the transcripts it
+/// lists, in that order. The query stops at `budget`.
 pub fn search(
     db: &Connection,
     query: &str,
     filters: &Filters,
     limit: usize,
-    offset: usize,
+    budget: Duration,
 ) -> Result<SearchPage> {
+    let deadline = Instant::now() + budget;
+    db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
+    let result = rank(db, query, filters, limit);
+    db.progress_handler(0, None::<fn() -> bool>)?;
+    result.map_err(|e| match e.downcast_ref::<rusqlite::Error>() {
+        Some(rusqlite::Error::SqliteFailure(f, _))
+            if f.code == rusqlite::ErrorCode::OperationInterrupted =>
+        {
+            anyhow::anyhow!(
+                "search exceeded {} seconds; add distinctive terms or narrow it with --since, --agent, or --cwd",
+                budget.as_secs()
+            )
+        }
+        _ => e,
+    })
+}
+
+fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result<SearchPage> {
     let (clause, mut args) = filters.sql(db)?;
+    let frozen = filters
+        .search_order
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
+    let (listed, order) = match &frozen {
+        Some(order) => {
+            args.push(Value::Text(order.clone()));
+            (
+                "AND e.file_id IN (SELECT value FROM json_each(?))",
+                "(SELECT key FROM json_each(?) WHERE value=file_id)",
+            )
+        }
+        None => ("", "0"),
+    };
     args.push(Value::Text(fts_query(query)?));
-    args.push(match &filters.search_order {
-        Some(order) => Value::Text(serde_json::to_string(order)?),
-        None => Value::Null,
-    });
+    if let Some(order) = &frozen {
+        args.push(Value::Text(order.clone()));
+    }
     args.push(Value::Integer(limit as i64));
-    args.push(Value::Integer(offset as i64));
     args.push(Value::Integer(SEARCH_PAGE_SESSIONS as i64));
     // Materialize FTS scores before grouping: bm25 requires the original FTS cursor.
-    // The final join starts from the ranked hits. Rule: docs/formats.md `search_hit_lookup`.
+    // The final join starts from the ranked hits. Rules: docs/formats.md
+    // `search_hit_lookup` and `cursor_search_order`.
     let sql = format!(
         "WITH matches AS MATERIALIZED (
-          SELECT e.file_id,e.id,e.ts,bm25(fts) AS score {FROM}
-          JOIN fts ON fts.rowid=e.id WHERE {clause} AND fts MATCH ?
-        ), ordering AS MATERIALIZED (SELECT ? AS ranks), all_heads AS MATERIALIZED (
-          SELECT file_id,min(score) AS score,max(ts) AS ts,count(*) AS n,min(id) AS anchor
+          SELECT e.file_id,e.id,e.ts,bm25(fts) AS score
+          FROM event_rows e JOIN sessions s ON s.file_id=e.file_id
+          JOIN fts ON fts.rowid=e.id WHERE {clause} {listed} AND fts MATCH ?
+        ), all_heads AS MATERIALIZED (
+          SELECT file_id,min(score) AS score,max(ts) AS ts,count(*) AS n,{order} AS position
           FROM matches GROUP BY file_id
-        ), ordered_heads AS MATERIALIZED (
-          SELECT h.*,j.key AS position FROM ordering CROSS JOIN json_each(ordering.ranks) j
-          JOIN all_heads h ON j.value=h.anchor
-          UNION ALL SELECT h.*,0 AS position FROM all_heads h CROSS JOIN ordering WHERE ordering.ranks IS NULL
         ), heads AS MATERIALIZED (
-          SELECT * FROM ordered_heads ORDER BY position,score,ts DESC,file_id LIMIT ? OFFSET ?
+          SELECT * FROM all_heads ORDER BY position,score,ts DESC,file_id LIMIT ?
         ), ranked AS (
           SELECT m.id,row_number() OVER (
             PARTITION BY m.file_id ORDER BY m.score,m.ts DESC,m.id DESC
           ) AS n FROM matches m JOIN heads h USING(file_id)
         )
         SELECT {COLUMNS},h.n,(SELECT count(*) FROM all_heads),
-          CASE WHEN ordering.ranks IS NULL THEN (SELECT json_group_array(anchor)
-            FROM (SELECT anchor FROM all_heads ORDER BY score,ts DESC,file_id LIMIT ?)) END,
-          coalesce(e.text,''),s.file_id,s.session_kind,s.parent_id,s.cwd,s.started_at
-        FROM ranked r CROSS JOIN events e ON e.id=r.id JOIN sessions s ON s.file_id=e.file_id
-        CROSS JOIN ordering JOIN heads h ON h.file_id=e.file_id
+          (SELECT json_group_array(file_id)
+            FROM (SELECT file_id FROM all_heads ORDER BY score,ts DESC,file_id LIMIT ?)),
+          coalesce(t.text,''),coalesce(t.truncated,0),s.session_kind,s.parent_id,s.cwd,s.started_at
+        FROM ranked r CROSS JOIN event_rows e ON e.id=r.id CROSS JOIN sessions s ON s.file_id=e.file_id
+        LEFT JOIN event_texts t ON t.event_id=e.id JOIN heads h ON h.file_id=e.file_id
         WHERE r.n<=3 ORDER BY h.position,h.score,h.ts DESC,h.file_id,r.n"
     );
     let mut stmt = db.prepare(&sql)?;
@@ -442,26 +509,27 @@ pub fn search(
     let mut sessions: Vec<Session> = Vec::new();
     let mut rows = stmt.query(params_from_iter(args))?;
     while let Some(r) = rows.next()? {
-        matched_sessions = r.get(12)?;
+        matched_sessions = r.get(13)?;
         if order.is_none() {
-            order = r.get::<_, Option<String>>(13)?;
+            order = Some(r.get::<_, String>(14)?);
         }
         let mut hit = hit(r)?;
-        if let Body::Text { text, .. } = &mut hit.body {
-            *text = r.get(14)?;
-        }
-        let file_id: i64 = r.get(15)?;
+        hit.body = Body::Text {
+            text: r.get(15)?,
+            truncated: r.get(16)?,
+        };
+        let file_id = hit.position.0;
         match sessions.last_mut() {
             Some(s) if s.file_id == file_id => s.hits.push(hit),
             _ => sessions.push(Session {
                 agent: hit.agent.clone(),
                 session_id: hit.session_id.clone(),
-                session_kind: r.get(16)?,
-                parent_id: r.get(17)?,
+                session_kind: r.get(17)?,
+                parent_id: r.get(18)?,
                 path: hit.path.clone(),
-                cwd: r.get(18)?,
-                started_at: r.get(19)?,
-                matched_hits: r.get(11)?,
+                cwd: r.get(19)?,
+                started_at: r.get(20)?,
+                matched_hits: r.get(12)?,
                 hits: vec![hit],
                 cut: Vec::new(),
                 file_id,
@@ -484,7 +552,10 @@ pub fn search(
     Ok(SearchPage {
         sessions,
         matched_sessions,
-        order: order.map(|o| serde_json::from_str(&o)).transpose()?,
+        order: match order {
+            Some(order) if frozen.is_none() => Some(serde_json::from_str(&order)?),
+            _ => None,
+        },
     })
 }
 
@@ -539,12 +610,15 @@ fn display_range(bytes: &[u8]) -> Result<Json> {
     Ok(value)
 }
 
+/// Matches `pattern` against the source ranges of the selected sessions'
+/// events after `after`, a transcript at a time in file ID order, until `limit`
+/// hits or `budget`. Rule: docs/formats.md `grep_traversal`.
 pub fn scan(
     db: &Connection,
     pattern: &str,
     filters: &Filters,
     limit: usize,
-    after: i64,
+    after: Option<Position>,
     budget: Duration,
 ) -> Result<(Vec<Hit>, Coverage)> {
     anyhow::ensure!(
@@ -553,74 +627,111 @@ pub fn scan(
     );
     let deadline = Instant::now() + budget;
     db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
-    let result: Result<(Vec<Hit>, Coverage)> = (|| {
+    let mut hits = Vec::new();
+    let mut coverage = Coverage::default();
+    let mut cursor = after.unwrap_or((0, 0, 0));
+    // Whether the page stopped before the end of the selection.
+    let stopped = (|| -> Result<bool> {
         let pattern = Regex::new(pattern).context("invalid grep regex")?;
-        let (clause, mut args) = filters.sql(db)?;
-        args.push(Value::Integer(after));
-        let sql = format!(
-            "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND {FIRST_OF_LINE_ROLE} ORDER BY e.id"
-        );
-        let mut stmt = db.prepare(&sql)?;
-        let mut rows = stmt.query(params_from_iter(args))?;
-        let mut hits = Vec::new();
-        let mut coverage = Coverage::default();
-        let mut cursor = after;
+        let (sessions, mut args) = filters.session_sql(db)?;
+        let mut conditions = vec![sessions, "s.file_id>=?".to_owned()];
+        args.push(Value::Integer(cursor.0));
+        // A transcript outside the window holds no event the time filter keeps.
+        if let Some(since) = filters.since() {
+            conditions.push("s.max_ts>=?".into());
+            args.push(Value::Text(since));
+        }
+        if let Some(until) = filters.until() {
+            conditions.push("s.min_ts<?".into());
+            args.push(Value::Text(until));
+        }
+        let files = db
+            .prepare(&format!(
+                "SELECT s.file_id FROM sessions s WHERE {} ORDER BY s.file_id",
+                conditions.join(" AND ")
+            ))?
+            .query_map(params_from_iter(args), |r| r.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let (events, event_args) = filters.event_sql();
+        // Rule: docs/formats.md `line_role_record`.
+        let mut stmt = db.prepare(&format!(
+            "SELECT {COLUMNS} FROM event_rows e JOIN sessions s ON s.file_id=e.file_id
+             WHERE e.file_id=? AND (e.line_no,e.ordinal)>(?,?) AND e.line_role_first=1 AND {events}
+             ORDER BY e.line_no,e.ordinal"
+        ))?;
         let mut source = None;
         let mut used = 0;
-        loop {
-            if Instant::now() >= deadline || hits.len() >= limit {
-                coverage.incomplete = true;
-                coverage.continuation = Some(cursor);
-                break;
-            }
-            let row = match rows.next() {
-                Ok(Some(row)) => row,
-                Ok(None) => break,
-                Err(rusqlite::Error::SqliteFailure(e, _))
-                    if e.code == rusqlite::ErrorCode::OperationInterrupted
-                        && Instant::now() >= deadline =>
-                {
-                    coverage.incomplete = true;
-                    coverage.continuation = Some(cursor);
-                    break;
-                }
-                Err(e) => return Err(e.into()),
+        for file in files {
+            let (line, ordinal) = if file == cursor.0 {
+                (cursor.1, cursor.2)
+            } else {
+                (0, 0)
             };
-            let mut item = hit(row)?;
-            cursor = item.event_id;
-            coverage.records += 1;
-            match read_range(db, &item, &mut source) {
-                Ok(bytes) => {
-                    coverage.bytes += bytes.len() as u64;
-                    if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
-                        item.body = Body::Record {
-                            record: display_range(&bytes)?,
-                        };
-                        if used + line_len(&item, "hit") > PAGE_BYTES {
-                            // The next page starts with this hit.
-                            if !hits.is_empty() {
-                                coverage.records -= 1;
-                                coverage.bytes -= bytes.len() as u64;
-                                coverage.incomplete = true;
-                                coverage.continuation = Some(item.event_id - 1);
-                                break;
+            let mut rows = stmt.query(params_from_iter(
+                [file, line, ordinal]
+                    .map(Value::Integer)
+                    .into_iter()
+                    .chain(event_args.iter().cloned()),
+            ))?;
+            loop {
+                if Instant::now() >= deadline || hits.len() >= limit {
+                    return Ok(true);
+                }
+                let Some(row) = rows.next()? else { break };
+                let mut item = hit(row)?;
+                let previous = cursor;
+                cursor = item.position;
+                coverage.records += 1;
+                match read_range(db, &item, &mut source) {
+                    Ok(bytes) => {
+                        coverage.bytes += bytes.len() as u64;
+                        if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
+                            item.body = Body::Record {
+                                record: display_range(&bytes)?,
+                            };
+                            if used + line_len(&item, "hit") > PAGE_BYTES {
+                                // The next page starts with this hit.
+                                if !hits.is_empty() {
+                                    coverage.records -= 1;
+                                    coverage.bytes -= bytes.len() as u64;
+                                    cursor = previous;
+                                    return Ok(true);
+                                }
+                                item.fit("hit", 0)?;
                             }
-                            item.fit("hit", 0)?;
+                            used += line_len(&item, "hit");
+                            hits.push(item);
                         }
-                        used += line_len(&item, "hit");
-                        hits.push(item);
+                    }
+                    Err(_) => {
+                        coverage.unavailable_ranges += 1;
+                        coverage.incomplete = true;
                     }
                 }
-                Err(_) => {
-                    coverage.unavailable_ranges += 1;
-                    coverage.incomplete = true;
-                }
             }
+            cursor = (file, i64::MAX, i64::MAX);
         }
-        Ok((hits, coverage))
+        Ok(false)
     })();
     db.progress_handler(0, None::<fn() -> bool>)?;
-    result
+    let stopped = match stopped {
+        Ok(stopped) => stopped,
+        Err(e)
+            if matches!(
+                e.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::SqliteFailure(f, _))
+                    if f.code == rusqlite::ErrorCode::OperationInterrupted
+            ) && Instant::now() >= deadline =>
+        {
+            true
+        }
+        Err(e) => return Err(e),
+    };
+    if stopped {
+        coverage.incomplete = true;
+        coverage.continuation = Some(cursor);
+    }
+    Ok((hits, coverage))
 }
 
 pub fn show(
@@ -628,45 +739,69 @@ pub fn show(
     target: &str,
     around: usize,
     limit: usize,
-    after: i64,
+    after: Option<Position>,
 ) -> Result<(Vec<Hit>, Coverage)> {
     show_snapshot(db, target, around, limit, after, None, i64::MAX)
 }
 
+/// The records of one transcript, or of the lines around `path:line`, after
+/// `after`, among events up to `high_water`.
 pub fn show_snapshot(
     db: &Connection,
     target: &str,
     around: usize,
     limit: usize,
-    after: i64,
+    after: Option<Position>,
     mut within: Option<usize>,
     high_water: i64,
 ) -> Result<(Vec<Hit>, Coverage)> {
-    let mut args = Vec::new();
-    let clause = if let Some((path, line)) = target
+    let (file, lines) = match target
         .rsplit_once(':')
         .filter(|(_, l)| l.parse::<u64>().is_ok())
     {
-        let line = line.parse::<u64>()?;
-        args.push(Value::Text(path.into()));
-        args.push(Value::Integer(
-            line.saturating_sub(around as u64).max(1) as i64
-        ));
-        args.push(Value::Integer(line.saturating_add(around as u64) as i64));
-        "e.path=? AND e.line_no BETWEEN ? AND ?"
-    } else {
-        args.push(Value::Integer(session_file(db, target)?.unwrap_or(0)));
-        "e.file_id=?"
+        Some((path, line)) => {
+            let line = line.parse::<u64>()?;
+            let file = db
+                .prepare_cached("SELECT file_id FROM sessions WHERE path=?")?
+                .query_row([path], |r| r.get::<_, i64>(0))
+                .optional()?;
+            let first = line.saturating_sub(around as u64).max(1);
+            let last = line.saturating_add(around as u64).min(i64::MAX as u64);
+            (file, (first as i64, last as i64))
+        }
+        None => (session_file(db, target)?, (1, i64::MAX)),
     };
-    args.push(Value::Integer(after));
-    args.push(Value::Integer(high_water));
-    args.push(Value::Integer((limit + 1) as i64));
-    let sql = format!(
-        "SELECT {COLUMNS} {FROM} WHERE {clause} AND e.id>? AND e.id<=? AND {FIRST_OF_LINE_ROLE} ORDER BY e.id LIMIT ?"
-    );
+    let Some(file) = file else {
+        anyhow::ensure!(after.is_none(), CURSOR_MISMATCH);
+        return Ok((Vec::new(), Coverage::default()));
+    };
+    let (line, ordinal) = match after {
+        Some((after_file, line, ordinal)) => {
+            anyhow::ensure!(after_file == file, CURSOR_MISMATCH);
+            (line, ordinal)
+        }
+        None => (0, 0),
+    };
+    // A record continued inside its JSON text is shown again from `within`.
+    let resume = if within.is_some() { ">=" } else { ">" };
     let rows = db
-        .prepare(&sql)?
-        .query_map(params_from_iter(args), hit)?
+        .prepare_cached(&format!(
+            "SELECT {COLUMNS} FROM event_rows e JOIN sessions s ON s.file_id=e.file_id
+             WHERE e.file_id=? AND e.line_no BETWEEN ? AND ? AND (e.line_no,e.ordinal){resume}(?,?)
+             AND e.id<=? AND e.line_role_first=1 ORDER BY e.line_no,e.ordinal LIMIT ?"
+        ))?
+        .query_map(
+            params_from_iter([
+                file,
+                lines.0,
+                lines.1,
+                line,
+                ordinal,
+                high_water,
+                (limit + 1) as i64,
+            ]),
+            hit,
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut hits: Vec<Hit> = Vec::new();
     let mut coverage = Coverage::default();
@@ -675,7 +810,7 @@ pub fn show_snapshot(
     for mut item in rows {
         if hits.len() == limit {
             coverage.incomplete = true;
-            coverage.continuation = hits.last().map(|h| h.event_id);
+            coverage.continuation = hits.last().map(|h| h.position);
             break;
         }
         let mut read = 0;
@@ -700,7 +835,7 @@ pub fn show_snapshot(
             // one that fills a page alone continues inside it.
             if !hits.is_empty() {
                 coverage.incomplete = true;
-                coverage.continuation = hits.last().map(|h| h.event_id);
+                coverage.continuation = hits.last().map(|h| h.position);
                 break;
             }
             coverage.within = item.fit("record", offset.unwrap_or(0))?;
@@ -712,11 +847,11 @@ pub fn show_snapshot(
             coverage.incomplete = true;
         }
         used += line_len(&item, "record");
-        let id = item.event_id;
+        let position = item.position;
         hits.push(item);
         if coverage.within.is_some() {
             coverage.incomplete = true;
-            coverage.continuation = Some(id - 1);
+            coverage.continuation = Some(position);
             break;
         }
     }

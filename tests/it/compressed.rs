@@ -76,7 +76,7 @@ fn grepped(store: &Store, pattern: &str) -> Vec<String> {
         pattern,
         &filters,
         20,
-        0,
+        None,
         std::time::Duration::from_secs(5),
     )
     .unwrap();
@@ -85,7 +85,7 @@ fn grepped(store: &Store, pattern: &str) -> Vec<String> {
 }
 
 fn shown(store: &Store, target: &str) -> Vec<String> {
-    let (hits, coverage) = query::show(&store.db, target, 0, 100, 0).unwrap();
+    let (hits, coverage) = query::show(&store.db, target, 0, 100, None).unwrap();
     assert_eq!(coverage.unavailable_ranges, 0);
     hits.into_iter().map(|h| body(&h)).collect()
 }

@@ -1,4 +1,4 @@
-use crate::common::{indexed, serial, sessidx, snapshot, stream};
+use crate::common::{indexed, indexed_files, serial, sessidx, snapshot, stream};
 use sessidx::{
     discovery::Root,
     model::Agent,
@@ -65,7 +65,7 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
             "太长",
             &sessidx::query::Filters::default(),
             20,
-            0,
+            std::time::Duration::from_secs(2),
         )
         .unwrap()
         .sessions;
@@ -213,7 +213,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
         agent: vec![Agent::Codex],
         ..Filters::default()
     };
-    let (hits, c) = query::scan(&store.db, ".", &filters, 1, 0, Duration::from_secs(2)).unwrap();
+    let (hits, c) = query::scan(&store.db, ".", &filters, 1, None, Duration::from_secs(2)).unwrap();
     assert_eq!(hits.len(), 1);
     assert!(c.incomplete && c.continuation.is_some());
     let (next, _) = query::scan(
@@ -221,7 +221,7 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
         ".",
         &filters,
         20,
-        c.continuation.unwrap(),
+        c.continuation,
         Duration::from_secs(2),
     )
     .unwrap();
@@ -308,4 +308,71 @@ fn a_path_reindexed_under_another_agent_is_parsed_again() {
         )
         .unwrap();
     assert_eq!((files.as_str(), sessions.as_str()), ("pi", "pi/pi-fixture"));
+}
+
+#[test]
+fn vanished_files_are_deleted_within_the_refresh_budget() {
+    let line = r#"{"type":"user","uuid":"u1","sessionId":"a","message":{"role":"user","content":"hello"}}"#;
+    let (_dir, mut store, roots) = indexed_files(Agent::Claude, &[("a", line), ("b", line)]);
+    for session in ["a", "b"] {
+        fs::remove_file(roots[0].path.join(format!("{session}.jsonl"))).unwrap();
+    }
+    let sessions = |store: &Store| -> i64 {
+        store
+            .db
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .unwrap()
+    };
+    let budget = store.refresh(&roots, false, Some(Duration::ZERO)).unwrap();
+    assert!(budget.stale);
+    assert_eq!(
+        budget.continuation.as_deref(),
+        roots[0].path.join("a.jsonl").to_str()
+    );
+    assert_eq!(sessions(&store), 2);
+    assert!(!store.refresh(&roots, false, None).unwrap().stale);
+    assert_eq!(sessions(&store), 0);
+}
+
+#[test]
+fn a_full_rebuild_stores_each_table_contiguously() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("logs");
+    fs::create_dir(&root).unwrap();
+    for file in 0..20 {
+        let lines: String = (0..100)
+            .map(|i| {
+                format!(
+                    "{}\n",
+                    serde_json::json!({"type":"user","uuid":format!("u{file}-{i}"),"sessionId":format!("s{file}"),"message":{"role":"user","content":format!("message {i} of transcript {file} with some words to index")}})
+                )
+            })
+            .collect();
+        fs::write(root.join(format!("s{file}.jsonl")), lines).unwrap();
+    }
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    store
+        .refresh(
+            &[Root {
+                agent: Agent::Claude,
+                path: root,
+            }],
+            true,
+            None,
+        )
+        .unwrap();
+    // Each b-tree's root page is allocated when its schema is created, before
+    // any data; its other pages follow one another.
+    for table in ["event_rows", "event_texts"] {
+        let (pages, span): (i64, i64) = store
+            .db
+            .query_row(
+                "SELECT count(*),max(pageno)-min(pageno)+1 FROM dbstat WHERE name=?1 AND pageno<>(SELECT rootpage FROM sqlite_schema WHERE name=?1)",
+                [table],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(pages > 10, "{table}: {pages} pages");
+        assert_eq!(pages, span, "{table}");
+    }
 }

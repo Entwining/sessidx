@@ -1,4 +1,4 @@
-use crate::common::{serial, sessidx, stream, three_agents};
+use crate::common::{indexed_files, serial, sessidx, stream, three_agents};
 use serde_json::json;
 use sessidx::{
     discovery::Root,
@@ -242,8 +242,13 @@ fn search_pagination_is_bounded_by_a_frozen_session_prefix() {
     let half = (reachable / 2).to_string();
     let mut sessions = std::collections::HashSet::new();
     let mut cursor: Option<String> = None;
+    let mut pages = 0;
     let end = loop {
-        assert!(sessions.len() <= reachable, "search does not stop");
+        pages += 1;
+        assert!(
+            sessions.len() <= reachable && pages <= reachable,
+            "search does not stop"
+        );
         let mut args = vec!["search", "boundneedle", "--limit", &half];
         args.extend(cursor.iter().flat_map(|c| ["--cursor", c.as_str()]));
         let page = stream(
@@ -393,8 +398,10 @@ fn garbage_and_edited_cursor_fields_are_rejected() {
     search(&original.to_string(), 0);
     let revision = original["revision"].as_i64().unwrap();
     for (field, value) in [
-        ("version", json!(2)),
-        ("position", json!(-1)),
+        ("version", json!(3)),
+        ("offset", json!(-1)),
+        ("after", json!([-1, 0, 0])),
+        ("position", json!(0)),
         ("high_water", json!(-1)),
         ("revision", json!(-1)),
         ("revision", json!(revision + 1)),
@@ -407,8 +414,137 @@ fn garbage_and_edited_cursor_fields_are_rejected() {
             rows[0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("restart without --cursor"),
+                .contains("without --cursor"),
             "{label}"
         );
     }
+}
+
+#[test]
+fn cursors_survive_changes_to_files_they_already_read() {
+    let serial = serial();
+    let line = |session: &str| {
+        format!(
+            "{}\n",
+            json!({"type":"user","uuid":format!("{session}-1"),"sessionId":session,"timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"pageneedle"}})
+        )
+    };
+    let (_dir, store, roots) = indexed_files(
+        Agent::Claude,
+        &[("a", &line("a")), ("b", &line("b")), ("c", &line("c"))],
+    );
+    let root = roots[0].path.clone();
+    let run = |args: &[&str], exit| {
+        stream(
+            &sessidx(&serial, &store.path, &roots, args)
+                .output()
+                .unwrap(),
+            exit,
+        )
+    };
+    let refused = |rows: &[serde_json::Value]| {
+        rows[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("restart without --cursor")
+    };
+    // grep reads transcripts in file ID order, here a, b, then c.
+    let grep = ["grep", "pageneedle", "--agent", "claude", "--limit"];
+    let first = run(&[&grep[..], &["2"]].concat(), 0);
+    let cursor = first.last().unwrap()["next"].as_str().unwrap().to_owned();
+    fs::remove_file(root.join("a.jsonl")).unwrap();
+    let rest = run(&[&grep[..], &["2", "--cursor", &cursor]].concat(), 0);
+    assert_eq!(rest.len(), 2);
+    assert!(rest[0]["ref"].as_str().unwrap().contains("/c.jsonl:"));
+    assert_eq!(rest[1]["complete"], true);
+    let first = run(&[&grep[..], &["1"]].concat(), 0);
+    let cursor = first.last().unwrap()["next"].as_str().unwrap().to_owned();
+    fs::remove_file(root.join("c.jsonl")).unwrap();
+    assert!(refused(&run(
+        &[&grep[..], &["1", "--cursor", &cursor]].concat(),
+        2
+    )));
+
+    // A search cursor names the transcripts of its frozen ranking.
+    for session in ["a", "c"] {
+        fs::write(root.join(format!("{session}.jsonl")), line(session)).unwrap();
+    }
+    let search = ["search", "pageneedle", "--limit", "1"];
+    let first = run(&search, 0);
+    let cursor = first.last().unwrap()["next"].as_str().unwrap().to_owned();
+    let shown = first[0]["path"].as_str().unwrap().to_owned();
+    fs::remove_file(&shown).unwrap();
+    let second = run(&[&search[..], &["--cursor", &cursor]].concat(), 0);
+    let cursor = second.last().unwrap()["next"].as_str().unwrap().to_owned();
+    let unread = ["a", "b", "c"]
+        .map(|s| root.join(format!("{s}.jsonl")))
+        .into_iter()
+        .find(|p| p.to_str() != Some(&shown) && p.to_str() != second[0]["path"].as_str())
+        .unwrap();
+    fs::remove_file(unread).unwrap();
+    assert!(refused(&run(
+        &[&search[..], &["--cursor", &cursor]].concat(),
+        2
+    )));
+}
+
+#[test]
+fn search_pages_pass_over_frozen_sessions_that_stopped_matching() {
+    let serial = serial();
+    let line = |session: &str, day: u32| {
+        format!(
+            "{}\n",
+            json!({"type":"user","uuid":format!("{session}-1"),"sessionId":session,"timestamp":format!("2026-10-0{day}T00:00:00Z"),"message":{"role":"user","content":"pageneedle"}})
+        )
+    };
+    let sessions: Vec<(String, String)> = (1..=5)
+        .map(|day| (format!("s{day}"), line(&format!("s{day}"), day)))
+        .collect();
+    let named: Vec<(&str, &str)> = sessions
+        .iter()
+        .map(|(s, l)| (s.as_str(), l.as_str()))
+        .collect();
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &named);
+    let page = |cursor: Option<&str>| {
+        let mut args = vec![
+            "search",
+            "pageneedle",
+            "--session-kind",
+            "unknown",
+            "--limit",
+            "1",
+        ];
+        args.extend(cursor.iter().flat_map(|c| ["--cursor", c]));
+        let rows = stream(
+            &sessidx(&serial, &store.path, &roots, &args)
+                .output()
+                .unwrap(),
+            0,
+        );
+        let ids: Vec<String> = rows
+            .iter()
+            .filter(|r| r["type"] == "session")
+            .map(|r| r["session_id"].as_str().unwrap().to_owned())
+            .collect();
+        (ids, rows.last().unwrap().clone())
+    };
+    let (first, mut end) = page(None);
+    let mut pages = vec![first];
+    // s4, next in the frozen order, and s1, the last, become main sessions.
+    for (session, day) in [("s4", 4), ("s1", 1)] {
+        let path = roots[0].path.join(format!("{session}.jsonl"));
+        let mut text = fs::read_to_string(&path).unwrap();
+        text.push_str(&format!("{}\n", json!({"type":"user","uuid":format!("{session}-2"),"sessionId":session,"isSidechain":false,"timestamp":format!("2026-10-0{day}T00:00:01Z"),"message":{"role":"user","content":"later"}})));
+        fs::write(&path, text).unwrap();
+    }
+    while let Some(cursor) = end["next"].as_str().map(str::to_owned) {
+        assert!(pages.len() < 6, "search does not advance: {pages:?}");
+        let (ids, next) = page(Some(&cursor));
+        pages.push(ids);
+        end = next;
+    }
+    // A partial page resumes after the session it returned; a page that
+    // returns every remaining match is the last.
+    assert_eq!(pages, [["s5"], ["s3"], ["s2"]]);
+    assert_eq!(end["complete"], true);
 }

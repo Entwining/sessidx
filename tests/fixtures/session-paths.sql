@@ -6,11 +6,11 @@ VALUES
 INSERT INTO sessions(file_id,agent,session_id,session_kind,session_kind_source,path,cwd,started_at)
 SELECT id,agent,CASE WHEN id<=2 THEN 'shared-thread' ELSE 'other-thread' END,
  'main','synthetic',path,'/synthetic','2026-10-01' FROM files;
-INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model_source,ok_source)
+INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model_source,ok_source,line_role_first,canonical,call_ok_source)
 VALUES
- (1,1,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none'),
- (1,2,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none'),
- (2,1,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none'),
- (2,2,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none'),
- (2,3,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none'),
- (3,1,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none');
+ (1,1,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none',1,1,'none'),
+ (1,2,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none',1,1,'none'),
+ (2,1,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none',1,1,'none'),
+ (2,2,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none',1,1,'none'),
+ (2,3,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none',1,1,'none'),
+ (3,1,0,0,0,zeroblob(32),'2026-10-01','assistant','synthetic','tool_call','synthetic','none','none',1,1,'none');

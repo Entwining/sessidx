@@ -83,6 +83,7 @@ fn previous_compact_schema_rebuilds_without_reading_new_columns() {
         include_str!("../fixtures/schema-v7.sql"),
         include_str!("../fixtures/schema-v8.sql"),
         include_str!("../fixtures/schema-v9.sql"),
+        include_str!("../fixtures/schema-v10.sql"),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("old-compact.db");

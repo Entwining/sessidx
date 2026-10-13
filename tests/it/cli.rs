@@ -414,3 +414,29 @@ fn provenance_labels_are_unredacted_and_none_when_absent() {
         0
     );
 }
+
+#[test]
+fn sql_reads_without_holding_the_writer_lock() {
+    let serial = serial();
+    let (_dir, store, roots) = three_agents();
+    // Runs until the two-second limit stops it.
+    let mut child = sessidx(
+        &serial,
+        &store.path,
+        &roots,
+        &[
+            "sql",
+            "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n) SELECT count(*) AS n FROM n",
+        ],
+    )
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let lock = store.lock().unwrap();
+    assert!(child.try_wait().unwrap().is_none(), "sql ended early");
+    assert!(lock.is_some(), "sql held the lock while reading");
+    drop(lock);
+    stream(&child.wait_with_output().unwrap(), 2);
+}

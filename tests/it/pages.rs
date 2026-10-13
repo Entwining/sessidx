@@ -166,6 +166,7 @@ fn grep_and_search_move_a_record_that_does_not_fit_to_the_next_page() {
         let mut pages: Vec<Vec<Value>> = Vec::new();
         let mut cursor = None;
         loop {
+            assert!(pages.len() < 50, "paging does not advance");
             let mut args = args.to_vec();
             args.extend(
                 cursor

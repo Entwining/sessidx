@@ -159,7 +159,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
     );
     for v in fixture["identifiers"].as_array().unwrap() {
         let value = v.as_str().unwrap();
-        let hits = search_hits(&store.db, value, &Filters::default(), 20, 0).unwrap();
+        let hits = search_hits(&store.db, value, &Filters::default(), 20).unwrap();
         assert!(
             hits.iter().any(|h| body(h).contains(value)),
             "public identifier lost"
@@ -226,7 +226,7 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
     );
     let data=serde_json::json!({"type":"user","uuid":"privacy-user","sessionId":"privacy","message":{"role":"user","content":text}}).to_string()+"\n"+&serde_json::json!({"type":"assistant","uuid":"privacy-input","sessionId":"privacy","message":{"role":"assistant","content":[{"type":"tool_use","id":"privacy-call","name":"Bash","input":{"command":"printf needle","part_one":values["part_one"],"part_two":values["part_two"]}}]}}).to_string()+"\n";
     let (dir, store, _) = indexed_files(Agent::Claude, &[("privacy", &data)]);
-    let output = query::show(&store.db, "privacy", 0, 20, 0)
+    let output = query::show(&store.db, "privacy", 0, 20, None)
         .unwrap()
         .0
         .into_iter()
@@ -313,7 +313,6 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
             &format!("identifierneedle {value}"),
             &Filters::default(),
             20,
-            0,
         )
         .unwrap();
         assert_eq!(hits.len(), 1);
@@ -329,7 +328,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         rows,
         [serde_json::json!({"ts": "2026-10-08T15:23:34.928Z"})]
     );
-    let context = search_hits(&store.db, "contextneedle", &Filters::default(), 20, 0).unwrap();
+    let context = search_hits(&store.db, "contextneedle", &Filters::default(), 20).unwrap();
     assert_eq!(context.len(), 1);
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
@@ -361,7 +360,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
             "synthetic context control survived: {value}"
         );
     }
-    let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20, 0).unwrap();
+    let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20).unwrap();
     assert_eq!(input.len(), 1);
     assert!(body(&input[0]).contains("tools.exec_command"));
     assert!(!body(&input[0]).contains("std::fs::File::try_lock"));
@@ -385,8 +384,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
             &store.db,
             "identifierinput 0xabcdef0123456789abcdef0123456789abcdef01",
             &Filters::default(),
-            20,
-            0
+            20
         )
         .unwrap()
         .is_empty()
@@ -438,7 +436,7 @@ fn path_and_version_structure_never_exempts_random_pieces() {
 fn pi_sections_share_the_native_message_and_are_redacted() {
     let (dir, store, _) = indexed(Agent::Pi, include_str!("../fixtures/pi-sections.jsonl"));
     for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
-        let hits = search_hits(&store.db, term, &Filters::default(), 20, 0).unwrap();
+        let hits = search_hits(&store.db, term, &Filters::default(), 20).unwrap();
         assert_eq!(hits.len(), 1, "{term}");
         assert_eq!(hits[0].role, "system");
     }
@@ -467,7 +465,7 @@ fn scan_matches_original_ranges_before_redacting_display() {
             ..Filters::default()
         },
         20,
-        0,
+        None,
         Duration::from_secs(2),
     )
     .unwrap();
@@ -624,7 +622,7 @@ fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
     let stored: serde_json::Value =
         serde_json::from_str(row["token=abc"].as_str().unwrap()).unwrap();
     assert_eq!(stored, expected);
-    let (shown, _) = query::show(&store.db, "session-q7Zx9Lm2Pw4Rt8Vb", 0, 20, 0).unwrap();
+    let (shown, _) = query::show(&store.db, "session-q7Zx9Lm2Pw4Rt8Vb", 0, 20, None).unwrap();
     let query::Body::Record { record } = &shown[0].body else {
         panic!("show returns source records");
     };
@@ -651,7 +649,6 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
             ..Filters::default()
         },
         20,
-        0,
     )
     .unwrap();
     assert_eq!(hits.len(), 1);

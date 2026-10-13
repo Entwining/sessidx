@@ -22,13 +22,13 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         };
         *record.pointer_mut(field).unwrap() = serde_json::json!(text);
         let (_dir, store, _) = indexed(h, &(record.to_string() + "\n"));
-        let hits = search_hits(&store.db, "outputneedle", &Filters::default(), 20, 0).unwrap();
+        let hits = search_hits(&store.db, "outputneedle", &Filters::default(), 20).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].role, "tool");
         assert!(truncated(&hits[0]));
         assert_eq!(body(&hits[0]), prefix);
         assert!(
-            search_hits(&store.db, "tailoutside", &Filters::default(), 20, 0)
+            search_hits(&store.db, "tailoutside", &Filters::default(), 20)
                 .unwrap()
                 .is_empty()
         );
@@ -40,14 +40,15 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
                 ..Filters::default()
             },
             20,
-            0,
+            None,
             Duration::from_secs(2),
         )
         .unwrap();
         assert_eq!(raw.len(), 1);
         assert!(!c.incomplete && !truncated(&raw[0]));
         assert!(body(&raw[0]).contains("tailoutside"));
-        let (shown, c) = query::show(&store.db, &format!("{}:1", hits[0].path), 0, 20, 0).unwrap();
+        let (shown, c) =
+            query::show(&store.db, &format!("{}:1", hits[0].path), 0, 20, None).unwrap();
         assert_eq!(shown.len(), 1);
         assert!(!c.incomplete && !truncated(&shown[0]));
         assert!(body(&shown[0]).contains("tailoutside"));
@@ -78,10 +79,10 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
         serde_json::from_str(include_str!("../fixtures/output-prefix.json")).unwrap();
     let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
     let (_dir, store, _) = indexed(Agent::Claude, &data);
-    let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20, 0).unwrap();
+    let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(
-        search_hits(&store.db, "cSpell", &Filters::default(), 20, 0)
+        search_hits(&store.db, "cSpell", &Filters::default(), 20)
             .unwrap()
             .len(),
         1

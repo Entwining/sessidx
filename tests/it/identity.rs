@@ -259,7 +259,7 @@ fn a_session_id_shared_by_transcripts_is_refused_with_their_paths() {
             path: claude,
         }],
     );
-    let error = query::show(&store.db, "a3", 0, 20, 0)
+    let error = query::show(&store.db, "a3", 0, 20, None)
         .unwrap_err()
         .to_string();
     assert!(error.contains("names 2 transcripts"), "{error}");
@@ -270,7 +270,7 @@ fn a_session_id_shared_by_transcripts_is_refused_with_their_paths() {
     assert!(filters.sql(&store.db).is_err());
     for path in &paths {
         assert!(error.contains(path.as_str()), "{error}");
-        let (shown, _) = query::show(&store.db, path, 0, 20, 0).unwrap();
+        let (shown, _) = query::show(&store.db, path, 0, 20, None).unwrap();
         assert_eq!(shown.len(), 1);
         assert_eq!(&shown[0].path, path);
     }
