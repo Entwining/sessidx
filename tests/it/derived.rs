@@ -381,7 +381,10 @@ fn deriving_a_new_file_reads_only_the_keys_it_touches() {
             r#"{"type":"assistant","uuid":"u9","sessionId":"a-orig","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
         ],
     );
-    store.refresh(&roots, false, None).unwrap();
+    // A refresh before a query, which never compacts the history.
+    store
+        .refresh(&roots, false, Some(std::time::Duration::from_secs(60)))
+        .unwrap();
     let work = steps.load(Ordering::Relaxed);
     assert_eq!(
         store

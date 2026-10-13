@@ -26,7 +26,7 @@ Then build the index once:
 sessidx index
 ```
 
-It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes, and an interrupted build resumes from the files it finished. From then on, each query first indexes new and changed logs within a two-second budget, so nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete.
+It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes, and an interrupted build resumes from the files it finished. From then on, each query first indexes new and changed logs within a two-second budget, so nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete. The same holds after an upgrade that changes how logs are read or indexed until `sessidx index` runs; an upgrade that changes the index's tables says in its release notes to run `sessidx index --full`.
 
 ### Keep history searchable
 

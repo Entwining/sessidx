@@ -13,7 +13,7 @@ use rusqlite::{
 };
 use serde::Serialize;
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{self, BufRead, Read},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -23,6 +23,11 @@ use std::{
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
 pub const SCHEMA_VERSION: i64 = 11;
+/// The version of how records become rows: adapters, normalization,
+/// redaction, outcomes, denials and shell sites. A file indexed by another
+/// version is reindexed like a changed file, so that a parser change reaches
+/// every row without a rebuild. Rule: docs/formats.md `parser_version`.
+pub const PARSER_VERSION: i64 = 1;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -97,6 +102,7 @@ struct FileRow {
     parse_errors: u64,
     index_status: FileCoverage,
     agent: String,
+    parser: i64,
 }
 struct IndexedFile {
     changed: bool,
@@ -139,7 +145,45 @@ impl Store {
             version == SCHEMA_VERSION,
             "database schema changed; run sessidx index --full"
         );
+        anyhow::ensure!(
+            definitions(db, "view")? == definitions(&expected_schema()?, "view")?,
+            "database views changed; run sessidx index"
+        );
         Ok(())
+    }
+
+    /// Brings views and indexes to the definitions in `schema.sql`, which
+    /// change without a schema version. Views are recreated at once, because
+    /// the query that follows reads them; indexes only when `build_indexes`,
+    /// because building one reads a whole table and cannot stop at a deadline.
+    /// Returns whether indexes remain to be built. Rule: docs/formats.md
+    /// `schema_definitions`.
+    fn reconcile_definitions(&mut self, build_indexes: bool) -> Result<bool> {
+        let expected = expected_schema()?;
+        let tx = self.db.transaction()?;
+        if definitions(&tx, "view")? != definitions(&expected, "view")? {
+            for name in definitions(&tx, "view")?.keys() {
+                tx.execute_batch(&format!("DROP VIEW \"{name}\";"))?;
+            }
+            for sql in creation_order(&expected, "view")? {
+                tx.execute_batch(&sql)?;
+            }
+        }
+        let (have, want) = (definitions(&tx, "index")?, definitions(&expected, "index")?);
+        if build_indexes {
+            for (name, sql) in &have {
+                if want.get(name) != Some(sql) {
+                    tx.execute_batch(&format!("DROP INDEX \"{name}\";"))?;
+                }
+            }
+            for (name, sql) in &want {
+                if have.get(name) != Some(sql) {
+                    tx.execute_batch(sql)?;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(!build_indexes && have != want)
     }
 
     fn open_mode(path: &Path, rebuilding: bool) -> Result<Self> {
@@ -275,6 +319,15 @@ impl Store {
             );
         }
         self.initialize(&_lock, full)?;
+        // A refresh that cannot build a changed index writes nothing, because
+        // the writer's upserts name unique indexes as their conflict targets;
+        // it reports the work left like a spent budget, and `index` builds
+        // the indexes.
+        let deadline = if self.reconcile_definitions(budget.is_none())? {
+            Some(Instant::now())
+        } else {
+            deadline
+        };
         let mut report = Refresh {
             missing_roots,
             stale: unverified.is_some(),
@@ -294,24 +347,24 @@ impl Store {
                     && !discovered.contains(Path::new(path))
             })
             .collect();
-        for (agent, path) in files {
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                report.stale = true;
-                report.continuation = Some(path.to_string_lossy().into_owned());
-                break;
-            }
-            let result = self.index_file(agent, &path, deadline)?;
-            report.files_changed += usize::from(result.changed);
-            report.records += result.records;
-            if result.coverage == FileCoverage::DeferredTail {
-                report.deferred_tails += 1;
-            }
-            if result.coverage == FileCoverage::BudgetExhausted {
-                report.stale = true;
-                report.continuation = Some(path.to_string_lossy().into_owned());
-                break;
-            }
-        }
+        // Files another parser indexed are reindexed after new records and
+        // deletions, the most recently changed first. Rule: docs/formats.md
+        // `parser_version`.
+        let reparse: Vec<String> = self
+            .db
+            .prepare("SELECT path FROM files WHERE parser<>? ORDER BY CAST(substr(mtime,1,instr(mtime,':')-1) AS INTEGER) DESC,path")?
+            .query_map([PARSER_VERSION], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let rank: HashMap<&Path, usize> = reparse
+            .iter()
+            .enumerate()
+            .map(|(i, path)| (Path::new(path), i))
+            .collect();
+        let (mut stale_files, files): (Vec<_>, Vec<_>) = files
+            .into_iter()
+            .partition(|(_, path)| rank.contains_key(path.as_path()));
+        stale_files.sort_by_key(|(_, path)| rank[path.as_path()]);
+        self.index_files(files, deadline, &mut report)?;
         // Rows of vanished files go after new records, which lookups need
         // first, and within the same budget, because each deletion is a
         // transaction that cannot be interrupted. Rule: docs/formats.md
@@ -330,13 +383,20 @@ impl Store {
             settle(&tx, None)?;
             tx.commit()?;
         }
-        if full {
-            // A build interleaves the pages of every table, one transaction per
-            // file, so whole-table reads on a cold cache are bound by scattered
-            // page reads; VACUUM rewrites each table into a run of its own.
-            // Rule: docs/formats.md `rebuild_compaction`.
+        if report.continuation.is_none() {
+            self.index_files(stale_files, deadline, &mut report)?;
+        }
+        // Indexing interleaves the pages of every table, one transaction per
+        // file, so cold reads are bound by scattered pages once most of the
+        // index was written since it was last compacted, as after a first
+        // index, a rebuild, or a parser change; VACUUM rewrites each table into
+        // a run of its own. Only an unbudgeted `index` takes that time. Rule:
+        // docs/formats.md `index_compaction`.
+        if budget.is_none() && compaction_due(&self.db)? {
             self.db
-                .execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")?;
+                .execute_batch("VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+                .context("the index is built and answers queries, but compacting it failed; compaction needs free disk space up to twice the database size, and `sessidx index` runs it again")?;
+            self.db.execute("UPDATE index_identity SET written=0", [])?;
         }
         report.parse_errors =
             self.db
@@ -349,6 +409,34 @@ impl Store {
             |r| r.get(0),
         )?;
         Ok(report)
+    }
+
+    /// Indexes `files` in order until the deadline, recording where it stopped.
+    fn index_files(
+        &mut self,
+        files: Vec<(Agent, PathBuf)>,
+        deadline: Option<Instant>,
+        report: &mut Refresh,
+    ) -> Result<()> {
+        for (agent, path) in files {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                report.stale = true;
+                report.continuation = Some(path.to_string_lossy().into_owned());
+                break;
+            }
+            let result = self.index_file(agent, &path, deadline)?;
+            report.files_changed += usize::from(result.changed);
+            report.records += result.records;
+            if result.coverage == FileCoverage::DeferredTail {
+                report.deferred_tails += 1;
+            }
+            if result.coverage == FileCoverage::BudgetExhausted {
+                report.stale = true;
+                report.continuation = Some(path.to_string_lossy().into_owned());
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn index_file(
@@ -377,6 +465,7 @@ impl Store {
                     parse_errors: r.get("parse_errors")?,
                     index_status: r.get("index_status")?,
                     agent: r.get("agent")?,
+                    parser: r.get("parser")?,
                 })
             })
             .optional()?;
@@ -386,6 +475,7 @@ impl Store {
         // files a refresh visits are unchanged, so a stat decides before opening.
         if let Some(ref o) = old
             && o.agent == agent_name
+            && o.parser == PARSER_VERSION
             && o.index_status != FileCoverage::BudgetExhausted
             && let Ok(meta) = source::metadata(path)
             && o.dev == meta.dev()
@@ -426,6 +516,7 @@ impl Store {
         let prefix_hash = hash(&prefix);
         let appended = old.as_ref().filter(|o| {
             o.agent == agent_name
+                && o.parser == PARSER_VERSION
                 && o.dev == meta.dev()
                 && o.inode == meta.ino()
                 && source_size >= o.size
@@ -458,7 +549,7 @@ impl Store {
         {
             delete_file(&tx, o.id)?;
         }
-        tx.execute("INSERT INTO files(path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, agent_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?])?;
+        tx.execute("INSERT INTO files(path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json,parser) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, agent_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?, PARSER_VERSION])?;
         let file_id: i64 = tx.query_row(
             "SELECT id FROM files WHERE path=?",
             [path_text.as_ref()],
@@ -595,6 +686,10 @@ impl Store {
             tx.execute(MARK_CALLS_FROM, [first])?;
         }
         tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage,file_id])?;
+        tx.execute(
+            "UPDATE index_identity SET written=written+?",
+            [records as i64],
+        )?;
         settle(&tx, first_event)?;
         // This transaction's rows count once, with the values `settle` gave them.
         if let Some(first) = first_event {
@@ -607,6 +702,16 @@ impl Store {
             coverage,
         })
     }
+}
+
+/// Whether more than half of the indexed records were written since the index
+/// was last compacted. Rule: docs/formats.md `index_compaction`.
+pub fn compaction_due(db: &Connection) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT written*2>(SELECT coalesce(sum(lines_indexed),0) FROM files) FROM index_identity",
+        [],
+        |r| r.get(0),
+    )?)
 }
 
 /// The `files.mtime` value: modification and status-change times, so a rewrite
@@ -693,6 +798,30 @@ pub const PROGRAM_COUNTS: Rollup = Rollup {
     ],
     events: program_counts,
 };
+
+/// The views and indexes this binary's `schema.sql` creates.
+fn expected_schema() -> Result<Connection> {
+    let db = Connection::open_in_memory()?;
+    db.execute_batch(include_str!("schema.sql"))?;
+    Ok(db)
+}
+
+/// The definition of each view or index, as SQLite stored its statement.
+fn definitions(db: &Connection, kind: &str) -> Result<BTreeMap<String, String>> {
+    Ok(db
+        .prepare("SELECT name,sql FROM sqlite_master WHERE type=? AND sql IS NOT NULL")?
+        .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
+/// The statements that create each view or index, in the order `schema.sql`
+/// creates them, since a view can read another.
+fn creation_order(db: &Connection, kind: &str) -> Result<Vec<String>> {
+    Ok(db
+        .prepare("SELECT sql FROM sqlite_master WHERE type=? AND sql IS NOT NULL ORDER BY rowid")?
+        .query_map([kind], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
 
 /// The event whose shell sites hold a tool call's or tool result's program.
 const SITES_OF: &str =

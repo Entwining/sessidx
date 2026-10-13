@@ -1,7 +1,7 @@
 use crate::{
     model::{Agent, SessionKind, name},
     redaction::{redact, spaced_cjk},
-    store::MAX_RECORD,
+    store::{MAX_RECORD, compaction_due},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
@@ -441,17 +441,25 @@ pub fn search(
     db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
     let result = rank(db, query, filters, limit);
     db.progress_handler(0, None::<fn() -> bool>)?;
-    result.map_err(|e| match e.downcast_ref::<rusqlite::Error>() {
-        Some(rusqlite::Error::SqliteFailure(f, _))
-            if f.code == rusqlite::ErrorCode::OperationInterrupted =>
-        {
-            anyhow::anyhow!(
-                "search exceeded {} seconds; add distinctive terms or narrow it with --since, --agent, or --cwd",
-                budget.as_secs()
-            )
-        }
-        _ => e,
-    })
+    let error = match result {
+        Ok(page) => return Ok(page),
+        Err(e) => e,
+    };
+    if !matches!(
+        error.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(f, _)) if f.code == rusqlite::ErrorCode::OperationInterrupted
+    ) {
+        return Err(error);
+    }
+    // Filters apply after each match is read, so they do not shorten the
+    // search; fewer matches, a warm page cache, or a compacted index do. Rule:
+    // docs/formats.md `search_deadline`.
+    let recovery = if compaction_due(db)? {
+        "most of the index was written since it was last compacted, which slows reads that are not cached; run `sessidx index` to compact it, then search again"
+    } else {
+        "search again, since a first read that is not cached is slower; if it exceeds the limit again, add distinctive terms"
+    };
+    anyhow::bail!("search exceeded {} seconds; {recovery}", budget.as_secs())
 }
 
 fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result<SearchPage> {

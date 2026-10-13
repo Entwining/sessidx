@@ -92,8 +92,8 @@ fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
         .db
         .execute_batch(
             "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<50000)
-             INSERT INTO files(id,path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json)
-             SELECT 1000+i,'/synthetic/bulk-'||i||'.jsonl','codex',0,i,0,'0','',0,'{}' FROM n;
+             INSERT INTO files(id,path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json,parser)
+             SELECT 1000+i,'/synthetic/bulk-'||i||'.jsonl','codex',0,i,0,'0','',0,'{}',1 FROM n;
              INSERT INTO sessions(file_id,agent,session_id,session_kind,session_kind_source,path,cwd,started_at)
              SELECT id,agent,'bulk-'||id,'main','synthetic',path,'/synthetic','2020-01-01' FROM files WHERE id>1000;",
         )
@@ -714,18 +714,37 @@ fn grep_reads_only_the_selected_transcripts() {
 fn search_stops_at_its_budget_with_a_recovery_instruction() {
     let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000) INSERT INTO fts(rowid,text) SELECT (SELECT max(id) FROM event_rows)+i,'busyword' FROM n;").unwrap();
-    let error = query::search(
-        &store.db,
-        "busyword",
-        &Filters::default(),
-        20,
-        Duration::ZERO,
-    )
-    .err()
-    .unwrap();
+    let interrupted = || {
+        let error = query::search(
+            &store.db,
+            "busyword",
+            &Filters::default(),
+            20,
+            Duration::ZERO,
+        )
+        .err()
+        .unwrap();
+        format!("{error:#}")
+    };
+    // The unbudgeted refresh compacted the index, so only a cold read or the
+    // number of matches can explain the overrun.
+    let error = interrupted();
     assert!(
-        format!("{error:#}").contains("search exceeded 0 seconds; add distinctive terms"),
-        "{error:#}"
+        error.starts_with("search exceeded 0 seconds; search again")
+            && error.ends_with("add distinctive terms"),
+        "{error}"
+    );
+    // Once most records were written since the last compaction, compacting
+    // is the recovery.
+    store
+        .db
+        .execute_batch("UPDATE index_identity SET written=(SELECT sum(lines_indexed) FROM files)")
+        .unwrap();
+    let error = interrupted();
+    assert!(
+        error.starts_with("search exceeded 0 seconds; most of the index")
+            && error.contains("run `sessidx index`"),
+        "{error}"
     );
     // Only an interrupt gets the deadline instruction; other failures keep theirs.
     store.db.execute_batch("DROP TABLE fts").unwrap();

@@ -1,8 +1,10 @@
 -- Source files are the authority; byte ranges include the complete JSONL newline.
+-- `written` counts the records indexed since the database was last compacted. Rule:
+-- docs/formats.md `index_compaction`.
 CREATE TABLE IF NOT EXISTS index_identity (
- id INTEGER PRIMARY KEY CHECK(id=1), instance TEXT NOT NULL
+ id INTEGER PRIMARY KEY CHECK(id=1), instance TEXT NOT NULL, written INTEGER NOT NULL DEFAULT 0
 );
-INSERT INTO index_identity SELECT 1,lower(hex(randomblob(16))) WHERE NOT EXISTS(SELECT 1 FROM index_identity);
+INSERT INTO index_identity(id,instance) SELECT 1,lower(hex(randomblob(16))) WHERE NOT EXISTS(SELECT 1 FROM index_identity);
 -- A replaced or deleted file invalidates only the cursors that have yet to read it.
 -- Rule: docs/formats.md `cursor_invalidation`.
 CREATE TABLE IF NOT EXISTS index_changes (
@@ -16,9 +18,11 @@ CREATE TABLE IF NOT EXISTS files (
  prefix_hash TEXT NOT NULL, prefix_len INTEGER NOT NULL,
  bytes_indexed INTEGER NOT NULL DEFAULT 0, lines_indexed INTEGER NOT NULL DEFAULT 0,
  state_json TEXT NOT NULL, parse_errors INTEGER NOT NULL DEFAULT 0,
- index_status TEXT NOT NULL DEFAULT 'ready'
+ index_status TEXT NOT NULL DEFAULT 'ready', parser INTEGER NOT NULL
 );
 -- ready, deferred_tail, and budget_exhausted distinguish expected live tails from staleness.
+-- `parser` is the PARSER_VERSION that produced the file's rows. Rule: docs/formats.md
+-- `parser_version`.
 -- Each transcript file is one session, identified by its own header or name rather than
 -- by history copied into it. Rule: docs/formats.md `transcript_identity`.
 CREATE TABLE IF NOT EXISTS sessions (

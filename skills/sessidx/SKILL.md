@@ -17,10 +17,13 @@ Every command writes JSON Lines to stdout: data records with a `type` field, the
 - `end.error` carries the failure and any recovery instruction. Exit codes: 0 data, 1 no data, 2 error.
 - A `search`, `grep`, or `show` page stays within 24 KiB so that you see its `end`; never shorten the output yourself with `head`, `cut`, or a slice, which drops `end`. A `grep` or `show` record too large for a page carries `part`, a piece of the record's JSON text, instead of `record`, and its `cut` entry gives the whole text's `bytes` and the `kept` bytes shown from `offset`; `show` continues the same record through `next`, and the joined `part` values parse as the record. A `search` session's `cut` names each hit text it shortened by JSON Pointer `field`. Read a cut `search` or `grep` hit with `sessidx show REF --around 0`. A `grep` match can lie in the part that was cut.
 
-Run an explicit index once (several minutes for a full history), then retry, when:
+Run an explicit index once, then retry, when:
 
 - The error says the schema changed: run `sessidx index --full`.
-- `end.refresh` has a `continuation`, meaning the two-second refresh stopped before indexing everything, as on first use: run `sessidx index`.
+- The error says the views changed, or `end.refresh` has a `continuation`, meaning the two-second refresh stopped before indexing everything, as on first use or after an upgrade: run `sessidx index`.
+- A search error says the index needs compacting: run `sessidx index`.
+
+A full history takes several minutes, longer than many agents' default shell timeout, so give the command a timeout of at least ten minutes or run it in the background and wait for it to exit. An interrupted run keeps what it committed: queries then report `complete=false` with a `continuation`, and `sessidx index` finishes the rest.
 
 A `writer_busy` refresh means another process holds the index lock; the query still answers from committed data and reports `stale`. Your own commands contend for that lock too, so run `sessidx` commands one at a time: overlapping ones can come back stale and incomplete.
 

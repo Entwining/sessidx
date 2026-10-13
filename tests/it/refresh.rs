@@ -335,44 +335,117 @@ fn vanished_files_are_deleted_within_the_refresh_budget() {
 }
 
 #[test]
-fn a_full_rebuild_stores_each_table_contiguously() {
+fn an_index_that_wrote_most_records_stores_each_table_contiguously() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("logs");
     fs::create_dir(&root).unwrap();
-    for file in 0..20 {
-        let lines: String = (0..100)
-            .map(|i| {
-                format!(
-                    "{}\n",
-                    serde_json::json!({"type":"user","uuid":format!("u{file}-{i}"),"sessionId":format!("s{file}"),"message":{"role":"user","content":format!("message {i} of transcript {file} with some words to index")}})
-                )
-            })
-            .collect();
-        fs::write(root.join(format!("s{file}.jsonl")), lines).unwrap();
-    }
-    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
-    store
-        .refresh(
-            &[Root {
-                agent: Agent::Claude,
-                path: root,
-            }],
-            true,
-            None,
-        )
-        .unwrap();
+    let write = |files: std::ops::Range<usize>| {
+        for file in files {
+            let lines: String = (0..100)
+                .map(|i| {
+                    format!(
+                        "{}\n",
+                        serde_json::json!({"type":"user","uuid":format!("u{file}-{i}"),"sessionId":format!("s{file}"),"message":{"role":"user","content":format!("message {i} of transcript {file} with some words to index")}})
+                    )
+                })
+                .collect();
+            fs::write(root.join(format!("s{file}.jsonl")), lines).unwrap();
+        }
+    };
+    let roots = [Root {
+        agent: Agent::Claude,
+        path: root.clone(),
+    }];
     // Each b-tree's root page is allocated when its schema is created, before
     // any data; its other pages follow one another.
-    for table in ["event_rows", "event_texts"] {
-        let (pages, span): (i64, i64) = store
+    let compacted = |store: &Store| {
+        ["event_rows", "event_texts"].map(|table| {
+            let (pages, span): (i64, i64) = store
+                .db
+                .query_row(
+                    "SELECT count(*),max(pageno)-min(pageno)+1 FROM dbstat WHERE name=?1 AND pageno<>(SELECT rootpage FROM sqlite_schema WHERE name=?1)",
+                    [table],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert!(pages > 10, "{table}: {pages} pages");
+            pages == span
+        }) == [true, true]
+    };
+    write(0..20);
+    for (step, full) in [("rebuild", true), ("first index", false)] {
+        let mut store = Store::open(&dir.path().join(format!("{step}.db"))).unwrap();
+        store.refresh(&roots, full, None).unwrap();
+        assert!(compacted(&store), "{step}");
+    }
+    let mut store = Store::open(&dir.path().join("first index.db")).unwrap();
+    // New transcripts holding half the index leave the rest as it was.
+    write(20..40);
+    store.refresh(&roots, false, None).unwrap();
+    assert!(!compacted(&store));
+    // Once most of the index is new since the last compaction, it compacts.
+    write(40..60);
+    store.refresh(&roots, false, None).unwrap();
+    assert!(compacted(&store));
+}
+
+#[test]
+fn files_another_parser_indexed_are_reindexed_after_new_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("logs");
+    fs::create_dir(&root).unwrap();
+    let fixture = include_str!("../fixtures/codex.jsonl");
+    fs::write(root.join("a.jsonl"), fixture).unwrap();
+    // Unchanged and indexed by this parser, so never reindexed.
+    fs::write(root.join("d.jsonl"), fixture).unwrap();
+    let roots = [Root {
+        agent: Agent::Codex,
+        path: root.clone(),
+    }];
+    let mut store = Store::open(&dir.path().join("index.db")).unwrap();
+    store.refresh(&roots, false, None).unwrap();
+    // Rows of `a.jsonl` as an earlier parser wrote them.
+    store
+        .db
+        .execute_batch(
+            "UPDATE files SET parser=parser-1 WHERE path LIKE '%/a.jsonl';
+             UPDATE event_texts SET text='earlier parse' WHERE event_id IN
+              (SELECT e.id FROM event_rows e JOIN files f ON f.id=e.file_id WHERE f.path LIKE '%/a.jsonl');",
+        )
+        .unwrap();
+    let file_id = |store: &Store, name: &str| -> i64 {
+        store
             .db
             .query_row(
-                "SELECT count(*),max(pageno)-min(pageno)+1 FROM dbstat WHERE name=?1 AND pageno<>(SELECT rootpage FROM sqlite_schema WHERE name=?1)",
-                [table],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                "SELECT id FROM files WHERE path LIKE '%/' || ?",
+                [name],
+                |r| r.get(0),
             )
-            .unwrap();
-        assert!(pages > 10, "{table}: {pages} pages");
-        assert_eq!(pages, span, "{table}");
-    }
+            .unwrap()
+    };
+    let earlier = file_id(&store, "a.jsonl");
+    fs::write(root.join("c.jsonl"), fixture).unwrap();
+    // A spent budget stops at the first file it would index: the new
+    // transcript, though the earlier parse sorts first.
+    let spent = store.refresh(&roots, false, Some(Duration::ZERO)).unwrap();
+    assert_eq!(
+        spent.continuation,
+        Some(root.join("c.jsonl").to_string_lossy().into_owned())
+    );
+    let report = store.refresh(&roots, false, None).unwrap();
+    assert_eq!((report.files_changed, report.continuation), (2, None));
+    assert!(file_id(&store, "a.jsonl") > earlier);
+    let rows = |sql: &str| -> i64 { store.db.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(
+        rows("SELECT count(*) FROM event_texts WHERE text='earlier parse'"),
+        0
+    );
+    assert_eq!(
+        rows(&format!(
+            "SELECT count(*) FROM files WHERE parser<>{}",
+            sessidx::store::PARSER_VERSION
+        )),
+        0
+    );
+    assert_eq!(store.refresh(&roots, false, None).unwrap().files_changed, 0);
 }

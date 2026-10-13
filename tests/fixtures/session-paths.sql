@@ -1,8 +1,8 @@
-INSERT INTO files(id,path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json)
+INSERT INTO files(id,path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json,parser)
 VALUES
- (1,'/synthetic/transcript-1.jsonl','codex',0,1,0,'0','',0,'{}'),
- (2,'/synthetic/transcript-2.jsonl','codex',0,2,0,'0','',0,'{}'),
- (3,'/synthetic/transcript-3.jsonl','codex',0,3,0,'0','',0,'{}');
+ (1,'/synthetic/transcript-1.jsonl','codex',0,1,0,'0','',0,'{}',1),
+ (2,'/synthetic/transcript-2.jsonl','codex',0,2,0,'0','',0,'{}',1),
+ (3,'/synthetic/transcript-3.jsonl','codex',0,3,0,'0','',0,'{}',1);
 INSERT INTO sessions(file_id,agent,session_id,session_kind,session_kind_source,path,cwd,started_at)
 SELECT id,agent,CASE WHEN id<=2 THEN 'shared-thread' ELSE 'other-thread' END,
  'main','synthetic',path,'/synthetic','2026-10-01' FROM files;
