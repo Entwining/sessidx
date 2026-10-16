@@ -1,41 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended",
-    "helpers:pinGitHubActionDigests",
-    "schedule:weekly",
-    "security:minimumReleaseAgeCrate"
-  ],
-  "timezone": "Asia/Singapore",
-  "description": [
-    "main has no required status checks, so platformAutomerge stays false and Renovate waits for PR checks before merging.",
-    "Non-breaking updates merge once PR checks pass, except brush-parser. A breaking update merges on its own only when the PR's checks run what it changes; the rest wait for review."
-  ],
-  "updateNotScheduled": false,
-  "platformAutomerge": false,
-  "lockFileMaintenance": {
-    "enabled": true,
-    "automerge": true
-  },
+  "extends": ["github>Entwining/renovate-config"],
   "packageRules": [
-    {
-      "description": "Group and automerge non-major dependency updates after checks pass.",
-      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
-      "groupName": "Routine dependencies",
-      "automerge": true
-    },
-    {
-      "description": "Renovate calls a cargo 0.x minor bump minor, but cargo versioning marks it breaking; review breaking updates in their own PR. Pin and digest updates carry no breaking flag, so they stay routine.",
-      "matchIsBreaking": true,
-      "groupName": null,
-      "automerge": false
-    },
-    {
-      "description": "A 0.x crate's compatible patch and breaking minor share one update bucket, so a pending breaking minor would hide the patch. This must not match on update type, because the bucket is chosen before the update type exists.",
-      "matchManagers": ["cargo"],
-      "matchCurrentVersion": "/^0\\./",
-      "separateMinorPatch": true
-    },
     {
       "description": "CI runs every action, runner, and CI tool on the PR itself, so their majors merge once checks pass. cargo-mutants only gets a smoke run, because a workflow-only diff has no mutants. create-github-app-token runs only on a tag push, which no PR exercises.",
       "matchManagers": ["github-actions", "custom.regex"],
@@ -45,7 +11,7 @@
       "automerge": true
     },
     {
-      "description": "With warnings denied, a new Clippy, linter, or cargo-about release can fail CI. Keep these updates out of the routine group so a failure blocks only them.",
+      "description": "With warnings denied, a new Clippy, linter, or cargo-about release can fail CI. Keep these updates out of the routine group so a failure blocks only them; CI runs these tools on the pull request, so their majors and breaking updates also merge once checks pass.",
       "matchPackageNames": ["rust", "cargo-deny", "cargo-about", "github.com/rhysd/actionlint"],
       "groupName": "Rust toolchain and linters",
       "automerge": true
