@@ -3,9 +3,9 @@
   "extends": ["github>Entwining/renovate-config"],
   "packageRules": [
     {
-      "description": "CI runs every action, runner, and CI tool on the PR itself, so their majors merge once checks pass. cargo-mutants only gets a smoke run, because a workflow-only diff has no mutants. create-github-app-token runs only on a tag push, which no PR exercises.",
+      "description": "CI runs every action, runner, and CI tool on the PR itself, so their majors merge once checks pass. cargo-mutants only gets a smoke run, because a workflow-only diff has no mutants, and cargo-nextest, which runs only the mutants' tests, does not run at all. create-github-app-token runs only on a tag push, which no PR exercises.",
       "matchManagers": ["github-actions", "custom.regex"],
-      "matchPackageNames": ["!actions/create-github-app-token"],
+      "matchPackageNames": ["!actions/create-github-app-token", "!cargo-nextest"],
       "matchUpdateTypes": ["major"],
       "groupName": "CI major updates",
       "automerge": true

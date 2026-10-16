@@ -1,3 +1,8 @@
+profile = "mutants"
+# Most mutants are caught by a test failure, after which nextest starts no
+# further tests while cargo test runs the rest of the test binary.
+test_tool = "nextest"
+
 # Mutants that cannot change behavior on any input sessidx can receive, with
 # the reason for each. A pattern also hides every future mutant it matches, so
 # keep each one as narrow as the mutant names allow.

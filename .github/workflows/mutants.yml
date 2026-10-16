@@ -2,12 +2,22 @@ name: Mutants
 
 on:
   pull_request:
+  # A pull request restores its own caches and main's but not another pull
+  # request's, so a merge that changes the cargo-mutants version saves its
+  # build on main, without testing mutants.
+  push:
+    branches: [main]
+    paths: [.github/workflows/mutants.yml]
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   mutants:
@@ -21,6 +31,17 @@ jobs:
         run: rustup show active-toolchain
       - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
         with:
+          tool: cargo-nextest@${{ env.CARGO_NEXTEST_VERSION }}
+        env:
+          # renovate: datasource=crate depName=cargo-nextest
+          CARGO_NEXTEST_VERSION: 0.9.148
+      # cargo-mutants releases only an x86_64 macOS binary, and under Rosetta
+      # the universal tools its builds start, such as the linker, run as x86_64
+      # too, adding minutes to every run. Build it for arm64 until a release
+      # ships the arm64 binary sourcefrog/cargo-mutants#657 adds, then install
+      # it with install-action again.
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
         env:
           # renovate: datasource=crate depName=cargo-mutants
@@ -31,10 +52,10 @@ jobs:
           git diff "origin/$GITHUB_BASE_REF..." > git.diff
           cargo mutants --no-shuffle -j 2 --in-diff git.diff
       - name: Test every mutant
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: cargo mutants --no-shuffle -j 2
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        if: always() && github.event_name != 'push'
         with:
           name: mutants.out
           path: mutants.out
