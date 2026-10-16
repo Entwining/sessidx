@@ -84,3 +84,7 @@ The consumer is usually an agent with a shell, so the ordinary path must be one 
 - Agent sandboxes break measurement tools: inside the Codex sandbox, nested `sandbox-exec` exits 71 and `/usr/bin/time -l` fails, and inside the Claude Code sandbox `samply` fails with `Unknown(1100)`. Run memory, timing, and profiling measurements from an ordinary shell.
 - Do not measure a database made by rewriting an APFS clone (`cp -c`) in place: copy-on-write scatters the rewritten blocks, and a cold search on one ran 1.7 s against 0.9 s for a byte copy of the same file. A clone that is only read is a fair cold copy.
 - A read-only sandbox cannot open the live WAL database normally; `sqlite3 "file:$HOME/.cache/sessidx/index.db?immutable=1"` reads it, possibly as a stale snapshot.
+
+## Dependency updates
+
+Before changing `.github/renovate.json`, or deciding how a dependency's updates are grouped, delayed, or merged, read the shared Renovate policy in full: `gh repo read-file skills/renovate/SKILL.md -R Entwining/renovate-config`.
