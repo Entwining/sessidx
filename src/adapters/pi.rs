@@ -1,5 +1,5 @@
 use crate::{
-    model::{Agent, Event, EventKind, Record, SessionKind, State},
+    model::{Agent, Compaction, Event, EventKind, Record, Request, SessionKind, State, Usage},
     normalize::{arguments, message_text, shell, string, text, timestamp},
     redaction::Redacted,
 };
@@ -80,6 +80,14 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 e.native_id = string(v, "id");
                 e.ts = ts.clone();
                 e.model = string(m, "model");
+                // Pi request usage: tests/fixtures/usage-pi.jsonl.
+                if role == "assistant" {
+                    e.request = usage(&m["usage"]).map(|usage| Request {
+                        finished: true,
+                        usage,
+                        passes: Vec::new(),
+                    });
+                }
                 events.push(e);
             }
             if let Some(blocks) = m["content"].as_array() {
@@ -112,8 +120,23 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 known: matches!(role, "assistant" | "user" | "system" | "bashExecution"),
             }
         }
+        "compaction" => {
+            let mut e = Event::context(v);
+            e.compaction = Some(Compaction {
+                trigger: "unknown",
+                pre_tokens: v["tokensBefore"].as_i64(),
+                post_tokens: None,
+                summary: usage(&v["usage"]),
+            });
+            Record {
+                events: vec![e],
+                known: true,
+            }
+        }
+        // A cache warm-up's usage stays outside requests: docs/formats.md
+        // `pi_request_usage`.
         "thinking_level_change"
-        | "compaction"
+        | "usage"
         | "branch_summary"
         | "context_edit"
         | "session_info"
@@ -127,4 +150,17 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             known: false,
         },
     }
+}
+
+fn usage(u: &Value) -> Option<Usage> {
+    let n = |key: &str| u.get(key).and_then(Value::as_i64);
+    Some(Usage {
+        input: n("input")?,
+        output: n("output")?,
+        cache_read: n("cacheRead"),
+        cache_write: n("cacheWrite"),
+        cache_write_5m: None,
+        cache_write_1h: n("cacheWrite1h"),
+        reasoning: n("reasoning"),
+    })
 }

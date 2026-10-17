@@ -68,6 +68,15 @@ const PROGRAM_COUNTS: &str =
   ON p.event_id=CASE e.kind WHEN 'tool_call' THEN e.id WHEN 'tool_result' THEN e.call_event_id END
  WHERE e.canonical=1 GROUP BY 1,2,3,4,5,6";
 
+/// `selected` as the usage row of each request that `requests` reports: of the
+/// records of a native request, a finished one before one that is not, then
+/// the first by its session's start and path, then the last in its transcript.
+const SELECTED: &str = "SELECT u.event_id FROM usage_rows u JOIN event_rows r ON r.id=u.event_id JOIN sessions s ON s.file_id=r.file_id
+ WHERE r.native_id IS NULL OR NOT EXISTS (
+  SELECT 1 FROM usage_rows u2 JOIN event_rows r2 ON r2.id=u2.event_id JOIN sessions s2 ON s2.file_id=r2.file_id
+  WHERE r2.native_id=r.native_id AND r2.kind=r.kind AND r2.id<>r.id AND s2.agent=s.agent
+  AND (-u2.finished,coalesce(s2.started_at,'9999'),s2.path,-r2.line_no,-r2.ordinal) < (-u.finished,coalesce(s.started_at,'9999'),s.path,-r.line_no,-r.ordinal))";
+
 /// Each session's timestamp bounds as the range of its events' timestamps.
 const BOUNDS: &str = "SELECT s.file_id,(SELECT min(ts) FROM event_rows WHERE file_id=s.file_id),
  (SELECT max(ts) FROM event_rows WHERE file_id=s.file_id) FROM sessions s";
@@ -117,6 +126,19 @@ fn assert_derived(store: &Store, step: &str) {
         "daily program counts after {step}"
     );
     assert_eq!(
+        differ("SELECT event_id FROM usage_rows WHERE selected=1", SELECTED),
+        0,
+        "selected usage after {step}"
+    );
+    assert_eq!(
+        differ(
+            "SELECT event_id,file_id,ts,model FROM usage_rows",
+            "SELECT r.id,r.file_id,r.ts,r.model FROM usage_rows u JOIN event_rows r ON r.id=u.event_id"
+        ),
+        0,
+        "usage event fields after {step}"
+    );
+    assert_eq!(
         differ("SELECT file_id,min_ts,max_ts FROM sessions", BOUNDS),
         0,
         "session bounds after {step}"
@@ -138,9 +160,10 @@ fn append(path: &Path, lines: &[&str]) {
 }
 
 /// What the steps move: the file holding the first copy of Claude call `t1`,
-/// the outcome of Codex call `c1`, and the outcomes of the calls in the two
-/// Claude transcripts named `agent-x`.
-type Seen = (String, Option<i64>, Option<i64>, Option<i64>);
+/// the outcome of Codex call `c1`, the outcomes of the calls in the two
+/// Claude transcripts named `agent-x`, and the file of the record that
+/// request `msg_1` reports.
+type Seen = (String, Option<i64>, Option<i64>, Option<i64>, String);
 
 /// Refreshes and checks the derived columns.
 fn refresh(store: &mut Store, roots: &[Root], step: &str) -> Seen {
@@ -153,18 +176,28 @@ fn refresh(store: &mut Store, roots: &[Root], step: &str) -> Seen {
             .optional()
             .unwrap()
     };
-    let winner: String = store.db.query_row("SELECT s.path FROM event_rows r JOIN sessions s ON s.file_id=r.file_id WHERE r.tool='Bash' AND r.canonical=1 AND s.agent='claude'", [], |r| r.get(0)).unwrap();
+    let file = |sql: &str| -> String {
+        let path: String = store.db.query_row(sql, [], |r| r.get(0)).unwrap();
+        Path::new(&path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    };
     (
-        Path::new(&winner).file_name().unwrap().to_string_lossy().into_owned(),
+        file("SELECT s.path FROM event_rows r JOIN sessions s ON s.file_id=r.file_id WHERE r.tool='Bash' AND r.canonical=1 AND s.agent='claude'"),
         one("SELECT call_ok FROM event_rows r JOIN sessions s ON s.file_id=r.file_id WHERE s.agent='codex' AND r.kind='tool_call'").flatten(),
         one("SELECT call_ok FROM event_rows r JOIN sessions s ON s.file_id=r.file_id WHERE s.path LIKE '%/claude/agent-x.jsonl' AND r.tool='Bash'").flatten(),
         one("SELECT call_ok FROM event_rows r JOIN sessions s ON s.file_id=r.file_id WHERE s.path LIKE '%/other/agent-x.jsonl' AND r.tool='Read'").flatten(),
+        file("SELECT path FROM requests WHERE agent='claude'"),
     )
 }
 
 const ORIG_CALL: &str = r#"{"type":"assistant","uuid":"u2","sessionId":"a-orig","timestamp":"2026-10-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
 const UNTIMED_COPY: &str = r#"{"type":"assistant","uuid":"u2","sessionId":"a-orig","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}"#;
 const ORIG_FAILURE: &str = r#"{"type":"user","uuid":"u3","sessionId":"a-orig","timestamp":"2026-10-01T00:00:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"failed"}]}}"#;
+const PARTIAL_REQUEST: &str = r#"{"type":"assistant","uuid":"m1","sessionId":"a-orig","timestamp":"2026-10-01T00:00:03Z","message":{"id":"msg_1","role":"assistant","model":"claude-model","content":[{"type":"thinking","thinking":"","signature":"x"}],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}"#;
+const FINISHED_REQUEST: &str = r#"{"type":"assistant","uuid":"m2","sessionId":"a-orig","timestamp":"2026-10-01T00:00:04Z","message":{"id":"msg_1","role":"assistant","model":"claude-model","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":2}}}"#;
 const CODEX_META: &str = r#"{"type":"session_meta","timestamp":"2026-10-02T00:00:00Z","payload":{"id":"thread","source":"cli"}}"#;
 const CODEX_CALL: &str = r#"{"type":"response_item","timestamp":"2026-10-02T00:00:00Z","payload":{"type":"function_call","call_id":"c1","name":"exec_command","arguments":"{\"cmd\":\"rg word\"}"}}"#;
 const CODEX_RESULT: &str = r#"{"type":"response_item","timestamp":"2026-10-02T00:00:01Z","payload":{"type":"function_call_output","call_id":"c1","output":"Process exited with code 0"}}"#;
@@ -190,6 +223,7 @@ fn derived_columns_equal_their_definitions_after_every_commit() {
             r#"{"type":"session","id":"a-orig","cwd":"/synthetic"}"#,
             r#"{"type":"message","id":"u2","timestamp":"2026-09-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}]}}"#,
             r#"{"type":"message","id":"u3","timestamp":"2026-09-01T00:00:01Z","message":{"role":"toolResult","toolCallId":"t1","isError":false,"content":"fine"}}"#,
+            r#"{"type":"message","id":"message:msg_1","timestamp":"2026-09-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input":1,"output":2}}}"#,
         ],
     );
     let roots = [
@@ -217,6 +251,7 @@ fn derived_columns_equal_their_definitions_after_every_commit() {
             ORIG_FAILURE,
             r#"{"type":"user","uuid":"u4","sessionId":"b-copy","timestamp":"2026-10-02T00:00:00Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"ok"}]}}"#,
             r#"{"type":"assistant","uuid":"u5","sessionId":"b-copy","timestamp":"2026-10-02T00:00:01Z","message":{"role":"assistant","content":[{"type":"server_tool_use","id":"t1","name":"web_search","input":{"query":"q"}}]}}"#,
+            FINISHED_REQUEST,
         ],
     );
     // A Codex result recorded before its call, in another transcript of the
@@ -231,6 +266,7 @@ fn derived_columns_equal_their_definitions_after_every_commit() {
             r#"{"type":"user","uuid":"u1","sessionId":"a-orig","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"start"}}"#,
             ORIG_CALL,
             ORIG_FAILURE,
+            PARTIAL_REQUEST,
         ],
     );
     seen.push(refresh(
@@ -261,13 +297,22 @@ fn derived_columns_equal_their_definitions_after_every_commit() {
         ],
     );
     // A transcript named after its session, whose start alone arrives later.
+    let untimed =
+        |line: &str| line.replace(r#""sessionId":"a-orig""#, r#""sessionId":"c-untimed""#);
     write(
         &claude.join("c-untimed.jsonl"),
-        &[UNTIMED_COPY
-            .replace(r#""sessionId":"a-orig""#, r#""sessionId":"c-untimed""#)
-            .as_str()],
+        &[
+            &untimed(UNTIMED_COPY),
+            &untimed(&FINISHED_REQUEST.replace(r#""timestamp":"2026-10-01T00:00:04Z","#, "")),
+        ],
     );
-    seen.push(refresh(&mut store, &roots, "indexing an untimed copy"));
+    // The original finishes its request, which it ranks first for.
+    append(&claude.join("a-orig.jsonl"), &[FINISHED_REQUEST]);
+    seen.push(refresh(
+        &mut store,
+        &roots,
+        "indexing untimed copies and finishing the original's request",
+    ));
     append(
         &claude.join("agent-x.jsonl"),
         &[
@@ -325,21 +370,69 @@ fn derived_columns_equal_their_definitions_after_every_commit() {
     assert_eq!(
         seen,
         [
-            ("b-copy.jsonl".into(), None, None, None),
-            ("a-orig.jsonl".into(), None, None, None),
-            ("a-orig.jsonl".into(), None, Some(1), Some(0)),
-            ("c-untimed.jsonl".into(), Some(1), None, None),
-            ("c-untimed.jsonl".into(), Some(1), None, None),
-            ("agent-x.jsonl".into(), None, None, None),
-            ("agent-x.jsonl".into(), Some(1), None, None),
-            ("agent-x.jsonl".into(), None, None, None),
+            (
+                "b-copy.jsonl".into(),
+                None,
+                None,
+                None,
+                "b-copy.jsonl".into()
+            ),
+            (
+                "a-orig.jsonl".into(),
+                None,
+                None,
+                None,
+                "b-copy.jsonl".into()
+            ),
+            (
+                "a-orig.jsonl".into(),
+                None,
+                Some(1),
+                Some(0),
+                "a-orig.jsonl".into()
+            ),
+            (
+                "c-untimed.jsonl".into(),
+                Some(1),
+                None,
+                None,
+                "c-untimed.jsonl".into()
+            ),
+            (
+                "c-untimed.jsonl".into(),
+                Some(1),
+                None,
+                None,
+                "c-untimed.jsonl".into()
+            ),
+            (
+                "agent-x.jsonl".into(),
+                None,
+                None,
+                None,
+                "b-copy.jsonl".into()
+            ),
+            (
+                "agent-x.jsonl".into(),
+                Some(1),
+                None,
+                None,
+                "b-copy.jsonl".into()
+            ),
+            (
+                "agent-x.jsonl".into(),
+                None,
+                None,
+                None,
+                "b-copy.jsonl".into()
+            ),
         ]
     );
 
     let mut clean = Store::open(&dir.path().join("clean.db")).unwrap();
     clean.refresh(&roots, true, None).unwrap();
     let derived = |store: &Store| -> Vec<String> {
-        store.db.prepare("SELECT s.path||':'||r.line_no||':'||r.ordinal||':'||r.canonical||':'||coalesce(r.call_ok,'')||':'||coalesce(r.call_ok_source,'')||':'||coalesce((SELECT cs.path||':'||c.line_no||':'||c.ordinal FROM event_rows c JOIN sessions cs ON cs.file_id=c.file_id WHERE c.id=r.call_event_id),'') FROM event_rows r JOIN sessions s ON s.file_id=r.file_id ORDER BY 1").unwrap()
+        store.db.prepare("SELECT s.path||':'||r.line_no||':'||r.ordinal||':'||r.canonical||':'||coalesce(r.call_ok,'')||':'||coalesce(r.call_ok_source,'')||':'||coalesce((SELECT cs.path||':'||c.line_no||':'||c.ordinal FROM event_rows c JOIN sessions cs ON cs.file_id=c.file_id WHERE c.id=r.call_event_id),'')||':'||coalesce((SELECT selected FROM usage_rows WHERE event_id=r.id),'') FROM event_rows r JOIN sessions s ON s.file_id=r.file_id ORDER BY 1").unwrap()
             .query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
     };
     assert_eq!(derived(&store), derived(&clean));
@@ -350,7 +443,10 @@ fn deriving_a_new_file_reads_only_the_keys_it_touches() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("claude");
     fs::create_dir(&root).unwrap();
-    write(&root.join("a-orig.jsonl"), &[ORIG_CALL, ORIG_FAILURE]);
+    write(
+        &root.join("a-orig.jsonl"),
+        &[ORIG_CALL, ORIG_FAILURE, PARTIAL_REQUEST],
+    );
     let roots = [Root {
         agent: Agent::Claude,
         path: root.clone(),
@@ -358,7 +454,8 @@ fn deriving_a_new_file_reads_only_the_keys_it_touches() {
     let mut store = Store::open(&dir.path().join("index.db")).unwrap();
     store.refresh(&roots, false, None).unwrap();
     // Unrelated history, each row its own native event and call.
-    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,native_id,ts,role,role_source,kind,kind_source,tool,call_id,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,randomblob(32),r.ts,r.role,r.role_source,r.kind,r.kind_source,r.tool,randomblob(32),r.model_source,r.ok_source,1,1,r.call_ok_source FROM n JOIN event_rows r ON r.id=1;").unwrap();
+    store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,native_id,ts,role,role_source,kind,kind_source,tool,call_id,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,randomblob(32),r.ts,r.role,r.role_source,r.kind,r.kind_source,r.tool,randomblob(32),r.model_source,r.ok_source,1,1,r.call_ok_source FROM n JOIN event_rows r ON r.id=1;
+     INSERT INTO usage_rows(event_id,file_id,ts,model,finished,selected,input,output) SELECT id,file_id,ts,model,1,1,1,1 FROM event_rows WHERE line_no>100;").unwrap();
     let steps = Arc::new(AtomicUsize::new(0));
     let counter = steps.clone();
     store
@@ -371,13 +468,15 @@ fn deriving_a_new_file_reads_only_the_keys_it_touches() {
             }),
         )
         .unwrap();
-    // A copy of the call and its result, whose flags flip to second copy, and an
-    // event of its own: one native group per record and one call key.
+    // A copy of the call and its result, whose flags flip to second copy, a
+    // finished record of a request that the original records unfinished, and
+    // an event of its own: one native group per record and one call key.
     write(
         &root.join("b-copy.jsonl"),
         &[
             UNTIMED_COPY,
             ORIG_FAILURE,
+            FINISHED_REQUEST,
             r#"{"type":"assistant","uuid":"u9","sessionId":"a-orig","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
         ],
     );
@@ -407,6 +506,16 @@ fn deriving_a_new_file_reads_only_the_keys_it_touches() {
             )
             .unwrap(),
         1
+    );
+    assert!(
+        store
+            .db
+            .query_row(
+                "SELECT path LIKE '%/b-copy.jsonl' FROM requests WHERE line_no<100",
+                [],
+                |r| r.get::<_, bool>(0)
+            )
+            .unwrap()
     );
     assert!(work < 1000, "{work} progress steps");
 }

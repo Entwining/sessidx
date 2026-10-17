@@ -50,7 +50,7 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 
 ## Roadmap
 
-Next: index each model request's token usage and compaction events (#58), without prices, once real logs show whether the records of one Claude message carry the same usage.
+Next: nothing is scheduled. Codex rate-limit snapshots, route evidence with a `--by route` grouping, and request errors, left out of #58, wait for a count that needs them.
 
 Later: refresh work that grows with the number of transcripts instead of with the change (`docs/design.md`), about 0.16 s warm on 9,096 transcripts, of which the directory walk is 101 ms warm and 285–292 ms cold. FSEvents history would let discovery follow changes, but dropped events need the walk as a fallback, a second discovery path; one scan of `files` instead of a lookup per transcript saves only about 23 ms. Neither is taken while the cost stays far inside the refresh budget.
 

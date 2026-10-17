@@ -89,6 +89,37 @@ CREATE TABLE IF NOT EXISTS denials (
  source TEXT NOT NULL, class TEXT NOT NULL, producer TEXT, reason_id TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS denials_event ON denials(event_id);
+-- What each record states about the tokens of the model request its event belongs to: a
+-- Claude message written as several records, or copied into another transcript, has a row
+-- per record. `finished` is whether the record states that the response ended; `selected`
+-- (rule `derived_facts`) marks the one row per request that `requests` reports. `file_id`,
+-- `ts` and `model` are the event row's, so that counts do not read `event_rows`. Rules:
+-- docs/formats.md `usage_columns`, `usage_snapshot`.
+CREATE TABLE IF NOT EXISTS usage_rows (
+ event_id INTEGER PRIMARY KEY REFERENCES event_rows(id) ON DELETE CASCADE,
+ file_id INTEGER NOT NULL, ts TEXT, model TEXT,
+ finished INTEGER NOT NULL CHECK(finished IN (0,1)), selected INTEGER NOT NULL CHECK(selected IN (0,1)),
+ input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER, cache_write INTEGER,
+ cache_write_5m INTEGER, cache_write_1h INTEGER, reasoning INTEGER
+);
+-- Rule: docs/formats.md `usage_count_work`.
+CREATE INDEX IF NOT EXISTS usage_time ON usage_rows(ts);
+CREATE INDEX IF NOT EXISTS usage_file ON usage_rows(file_id);
+-- The model passes of a request whose record lists several, such as an advisor's. Rule:
+-- docs/formats.md `claude_usage_passes`.
+CREATE TABLE IF NOT EXISTS usage_passes (
+ event_id INTEGER NOT NULL REFERENCES usage_rows(event_id) ON DELETE CASCADE,
+ pass INTEGER NOT NULL, kind TEXT NOT NULL, model TEXT,
+ input INTEGER NOT NULL, output INTEGER NOT NULL, cache_read INTEGER, cache_write INTEGER,
+ cache_write_5m INTEGER, cache_write_1h INTEGER,
+ PRIMARY KEY(event_id,pass)
+) WITHOUT ROWID;
+-- Rule: docs/formats.md `compaction_records`.
+CREATE TABLE IF NOT EXISTS compaction_rows (
+ event_id INTEGER PRIMARY KEY REFERENCES event_rows(id) ON DELETE CASCADE,
+ trigger TEXT NOT NULL CHECK(trigger IN ('auto','manual','unknown')), pre_tokens INTEGER, post_tokens INTEGER,
+ summary_input INTEGER, summary_output INTEGER, summary_cache_read INTEGER, summary_cache_write INTEGER
+);
 -- Child FK indexes avoid scanning all commands/denials when a file is replaced.
 -- Only structural signatures are retained; raw unknown values are never stored.
 CREATE TABLE IF NOT EXISTS shapes (
@@ -125,6 +156,29 @@ CREATE VIEW IF NOT EXISTS call_outcomes AS
  CASE WHEN e.call_id IS NULL THEN NULL ELSE lower(hex(e.call_id)) END AS call_id,e.file_id,
  e.call_ok AS ok,e.call_ok_source AS ok_source
  FROM event_rows e JOIN sessions s ON s.file_id=e.file_id WHERE e.kind='tool_call' AND e.canonical=1;
+-- One row per model request, from its selected record.
+CREATE VIEW IF NOT EXISTS requests AS
+ SELECT u.event_id AS id,s.agent,s.session_id,s.path,(SELECT line_no FROM event_rows WHERE id=u.event_id) AS line_no,
+ u.ts,u.model,u.input,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.output,u.reasoning,u.finished,
+ (SELECT lower(hex(native_id)) FROM event_rows WHERE id=u.event_id AND native_id IS NOT NULL) AS native_id,u.file_id
+ FROM usage_rows u JOIN sessions s ON s.file_id=u.file_id WHERE u.selected=1;
+-- One row per model pass of a request: the passes its record lists, or the request itself
+-- as pass 0 of no kind when it lists none. Rule: docs/formats.md `claude_usage_passes`.
+CREATE VIEW IF NOT EXISTS request_passes AS
+ SELECT u.event_id AS request_id,p.pass,p.kind,p.model,s.agent,s.session_id,s.path,u.ts,
+ p.input,p.cache_read,p.cache_write,p.cache_write_5m,p.cache_write_1h,p.output,NULL AS reasoning,u.file_id
+ FROM usage_rows u JOIN usage_passes p ON p.event_id=u.event_id JOIN sessions s ON s.file_id=u.file_id WHERE u.selected=1
+ UNION ALL
+ SELECT u.event_id,0,NULL,u.model,s.agent,s.session_id,s.path,u.ts,
+ u.input,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.output,u.reasoning,u.file_id
+ FROM usage_rows u JOIN sessions s ON s.file_id=u.file_id
+ WHERE u.selected=1 AND NOT EXISTS (SELECT 1 FROM usage_passes p WHERE p.event_id=u.event_id);
+-- One row per compaction, from its first copy, read from the compactions outward. Rule:
+-- docs/formats.md `usage_count_work`.
+CREATE VIEW IF NOT EXISTS compactions AS
+ SELECT c.event_id AS id,s.agent,s.session_id,s.path,e.line_no,e.ts,e.model,c.trigger,c.pre_tokens,c.post_tokens,
+ c.summary_input,c.summary_output,c.summary_cache_read,c.summary_cache_write,e.file_id
+ FROM compaction_rows c CROSS JOIN event_rows e ON e.id=c.event_id CROSS JOIN sessions s ON s.file_id=e.file_id WHERE e.canonical=1;
 -- What `count` and `doctor` sum per transcript, UTC day, and the event fields counts group
 -- by, so that whole days are read here instead of event by event. The writer applies each
 -- transaction's changes as deltas. Rule: docs/formats.md `daily_counts`.
@@ -152,4 +206,4 @@ CREATE TABLE IF NOT EXISTS daily_program_counts (
 CREATE UNIQUE INDEX IF NOT EXISTS daily_program_counts_key ON daily_program_counts(file_id,ifnull(day,x''),kind,role,ifnull(model,x''),program);
 CREATE INDEX IF NOT EXISTS daily_program_counts_program ON daily_program_counts(program,kind,day);
 CREATE INDEX IF NOT EXISTS daily_program_counts_empty ON daily_program_counts(file_id) WHERE events=0;
-PRAGMA user_version=11;
+PRAGMA user_version=12;

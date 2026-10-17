@@ -1069,5 +1069,23 @@
       }
     },
     "known": true
+  },
+  {
+    "agent": "pi",
+    "shape": "usage / none",
+    "scope": "root",
+    "record": {
+      "type": "usage",
+      "id": "synthetic-id",
+      "kind": "cache_warm",
+      "model": "pi-model",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 10
+      }
+    },
+    "known": true
   }
 ]

@@ -80,13 +80,13 @@ enum Command {
         #[arg(long)]
         cursor: Option<String>,
     },
-    /// Aggregate static sites, native failures, or denial events
+    /// Aggregate static sites, native failures, denial events, model requests' token usage, or compactions
     Count {
         #[arg(value_enum)]
         metric: Metric,
-        /// Comma-separated grouping; with no value, one total row
-        #[arg(long, value_enum, value_delimiter = ',', num_args = 0..=1, action = clap::ArgAction::Set, default_value = "agent,model,role,week")]
-        by: Vec<By>,
+        /// Comma-separated grouping; with no value, one total row [default: agent,model,role,week; for usage and compactions agent,model,week]
+        #[arg(long, value_enum, value_delimiter = ',', num_args = 0..=1, action = clap::ArgAction::Set)]
+        by: Option<Vec<By>>,
         /// Count only shell calls that run this program
         #[arg(long, value_name = "NAME")]
         program: Option<String>,
@@ -263,7 +263,14 @@ fn run(cli: Cli) -> Result<i32> {
             by,
             program,
             filters,
-        } => count(&path, &roots, metric, &by, program.as_deref(), &filters),
+        } => count(
+            &path,
+            &roots,
+            metric,
+            &by.unwrap_or_else(|| metric.default_by()),
+            program.as_deref(),
+            &filters,
+        ),
         Command::Sql { query } => sql(&path, &query),
         Command::Index { full } => index(&path, &roots, full),
         Command::Doctor => doctor(&path, &roots),
@@ -451,13 +458,7 @@ fn count(
     program: Option<&str>,
     filters: &Filters,
 ) -> Result<i32> {
-    if let Some(repeated) = by
-        .iter()
-        .enumerate()
-        .find_map(|(i, key)| by[..i].contains(key).then_some(*key))
-    {
-        anyhow::bail!("--by repeats {}; name each grouping once", name(repeated));
-    }
+    counting::check(metric, by, program, filters)?;
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
     let rows = counting::count(&db, metric, by, program, filters)?;
@@ -567,7 +568,11 @@ fn main() {
         },
         Err(e) => {
             let code = e.exit_code();
-            let _ = if code == 0 {
+            // Help and version text are static; a bare `sessidx` gets the
+            // help as text too, though it still exits 2.
+            let _ = if code == 0
+                || e.kind() == clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            {
                 write!(io::stdout().lock(), "{e}")
             } else {
                 fail(&e.to_string())

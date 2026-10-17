@@ -156,7 +156,7 @@ fn inventory_variants_are_classified_with_future_shape_negative_control() {
         known += usize::from(r.known);
         unknown += usize::from(!r.known);
     }
-    assert_eq!(known, 77, "{mismatches:?}");
+    assert_eq!(known, 78, "{mismatches:?}");
     assert_eq!(unknown, 1);
     assert!(mismatches.is_empty(), "{mismatches:?}");
     let future =

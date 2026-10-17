@@ -1,4 +1,4 @@
-use crate::common::{serial, sessidx, stream, three_agents};
+use crate::common::{serial, sessidx, shell, stream, three_agents};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -17,6 +17,22 @@ fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
     assert!(help.stderr.is_empty());
     assert!(
         String::from_utf8_lossy(&help.stdout).contains("sessidx show /path/to/session.jsonl:42")
+    );
+    // With no arguments the same help is printed, exiting 2; a global option
+    // without a command is still an argument error.
+    let bare = shell(&serial, &format!("'{}'", env!("CARGO_BIN_EXE_sessidx")))
+        .env("HOME", dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(bare.status.code(), Some(2));
+    assert_eq!(bare.stdout, help.stdout);
+    assert!(bare.stderr.is_empty());
+    let no_command = stream(&invoke(&[]), 2);
+    assert!(
+        no_command[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("requires a subcommand")
     );
     let version = invoke(&["--version"]);
     assert_eq!(version.status.code(), Some(0));
@@ -280,6 +296,18 @@ fn cli_rejects_malformed_values_in_one_end_record_naming_the_flag() {
         (
             vec!["count", "commands", "--by", "model,role,model"],
             vec!["--by repeats model"],
+        ),
+        (
+            vec!["count", "usage", "--by", "agent,role"],
+            vec!["--by role applies to count commands, failures, and denials, not usage"],
+        ),
+        (
+            vec!["count", "compactions", "--role", "user"],
+            vec!["--role applies to", "not compactions"],
+        ),
+        (
+            vec!["count", "usage", "--program", "rg"],
+            vec!["--program applies to", "not usage"],
         ),
     ] {
         let out = sessidx(&serial, &db, &[], &args).output().unwrap();

@@ -14,14 +14,33 @@ use rusqlite::{
 use serde_json::{Value as Json, json};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub enum Metric {
     Commands,
     Failures,
     Denials,
+    Usage,
+    Compactions,
 }
 
-#[derive(Clone, Copy, PartialEq, ValueEnum)]
+impl Metric {
+    /// Model requests and compactions belong to no speaker and run no
+    /// program.
+    fn of_events(self) -> bool {
+        !matches!(self, Self::Usage | Self::Compactions)
+    }
+
+    /// The grouping `--by` takes when it is not given.
+    pub fn default_by(self) -> Vec<By> {
+        if self.of_events() {
+            vec![By::Agent, By::Model, By::Role, By::Week]
+        } else {
+            vec![By::Agent, By::Model, By::Week]
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub enum By {
     Agent,
     Model,
@@ -29,6 +48,35 @@ pub enum By {
     Week,
     #[value(name = "session_kind")]
     SessionKind,
+}
+
+/// Refuses options that do not apply to a metric, before any refresh.
+pub fn check(metric: Metric, by: &[By], program: Option<&str>, filters: &Filters) -> Result<()> {
+    if let Some(repeated) = by
+        .iter()
+        .enumerate()
+        .find_map(|(i, key)| by[..i].contains(key).then_some(*key))
+    {
+        anyhow::bail!("--by repeats {}; name each grouping once", name(repeated));
+    }
+    if !metric.of_events() {
+        let option = if by.contains(&By::Role) {
+            Some("--by role")
+        } else if filters.role.is_some() {
+            Some("--role")
+        } else if program.is_some() {
+            Some("--program")
+        } else {
+            None
+        };
+        if let Some(option) = option {
+            anyhow::bail!(
+                "{option} applies to count commands, failures, and denials, not {}",
+                name(metric)
+            );
+        }
+    }
+    Ok(())
 }
 
 /// One row per group. The counts of a metric partition its population, and
@@ -46,17 +94,7 @@ pub fn count(
     program: Option<&str>,
     filters: &Filters,
 ) -> Result<Vec<Json>> {
-    let keys: Vec<String> = by.iter().map(|&key| name(key)).collect();
-    let expressions: Vec<&str> = by
-        .iter()
-        .map(|key| match key {
-            By::Agent => "s.agent",
-            By::Model => "coalesce(x.model,'unknown')",
-            By::Role => "x.role",
-            By::Week => "coalesce(strftime('%G-W%V',x.day),'unknown')",
-            By::SessionKind => "s.session_kind",
-        })
-        .collect();
+    check(metric, by, program, filters)?;
     // Columns named `program_*` are the program's rows; the others, every
     // event's.
     let (kind, mut fields): (&str, Vec<(&str, &str)>) = match (metric, program.is_some()) {
@@ -108,6 +146,7 @@ pub fn count(
                 ),
             ],
         ),
+        (Metric::Usage | Metric::Compactions, _) => return count_records(db, metric, by, filters),
     };
     // Events whose program is unknown, less those that also name the program.
     let unresolved = "sum(x.unresolved_program-x.program_unresolved_program)";
@@ -116,6 +155,7 @@ pub fn count(
             Metric::Commands => ("matching_sites", "sum(x.program_matching_sites)"),
             Metric::Failures => ("calls_with_unresolved_program", unresolved),
             Metric::Denials => ("results_with_unresolved_program", unresolved),
+            Metric::Usage | Metric::Compactions => unreachable!("check refuses --program"),
         });
     }
     // Whole days run from the first midnight at or after --since to the last
@@ -223,6 +263,113 @@ pub fn count(
             "x.shell_calls>0".into()
         });
     }
+    let from = format!(
+        "({}) x JOIN sessions s ON s.file_id=x.file_id WHERE {}",
+        parts.join(" UNION ALL "),
+        conditions.join(" AND ")
+    );
+    grouped(db, metric, by, program, &fields, &from, args)
+}
+
+/// `count usage` and `count compactions`, summed over the public views. A
+/// request counts once, under its own model; its tokens count per pass, under
+/// the pass's model. Rule: docs/formats.md `count_usage`.
+fn count_records(
+    db: &Connection,
+    metric: Metric,
+    by: &[By],
+    filters: &Filters,
+) -> Result<Vec<Json>> {
+    let (window, window_args) = filters.event_sql();
+    let tokens = [
+        "input",
+        "cache_read",
+        "cache_write",
+        "cache_write_5m",
+        "cache_write_1h",
+        "output",
+        "reasoning",
+    ];
+    let (source, fields, mut args): (String, Vec<(String, String)>, Vec<Value>) = match metric {
+        Metric::Usage => {
+            // A request counts on the pass row that is the request itself, or
+            // on a row of its own when its record lists passes, so that the
+            // sort reads one row per pass rather than one more per request.
+            let nulls = tokens.map(|t| format!("NULL AS {t}")).join(",");
+            let source = format!(
+                "SELECT file_id,substr(ts,1,10) AS day,model,kind IS NULL AS requests,1 AS passes,{} FROM request_passes e WHERE {window}
+                 UNION ALL SELECT file_id,substr(ts,1,10),model,1,0,{nulls} FROM requests e WHERE {window}
+                  AND EXISTS(SELECT 1 FROM usage_passes p WHERE p.event_id=e.id)",
+                tokens.join(",")
+            );
+            let mut fields = vec![
+                ("requests".to_owned(), "sum(x.requests)".to_owned()),
+                ("passes".to_owned(), "sum(x.passes)".to_owned()),
+            ];
+            fields.extend(tokens.map(|t| (t.to_owned(), format!("sum(x.{t})"))));
+            // Input and output are recorded by every pass.
+            fields.extend(
+                tokens
+                    .iter()
+                    .filter(|t| !matches!(**t, "input" | "output"))
+                    .map(|t| (format!("{t}_recorded"), format!("count(x.{t})"))),
+            );
+            let args = window_args.iter().chain(&window_args).cloned().collect();
+            (source, fields, args)
+        }
+        Metric::Compactions => (
+            format!(
+                "SELECT file_id,substr(ts,1,10) AS day,model,trigger,pre_tokens,post_tokens FROM compactions e WHERE {window}"
+            ),
+            [
+                ("compactions", "count(*)"),
+                ("auto", "sum(x.trigger='auto')"),
+                ("manual", "sum(x.trigger='manual')"),
+                ("trigger_unknown", "sum(x.trigger='unknown')"),
+                ("pre_tokens", "sum(x.pre_tokens)"),
+                ("pre_tokens_recorded", "count(x.pre_tokens)"),
+                ("post_tokens", "sum(x.post_tokens)"),
+                ("post_tokens_recorded", "count(x.post_tokens)"),
+            ]
+            .map(|(field, sql)| (field.to_owned(), sql.to_owned()))
+            .into(),
+            window_args,
+        ),
+        Metric::Commands | Metric::Failures | Metric::Denials => {
+            unreachable!("counted from the rollups")
+        }
+    };
+    let (sessions, session_args) = filters.session_sql(db)?;
+    args.extend(session_args);
+    // The records drive the join: joined freely, SQLite indexed the whole
+    // union to probe it per session. Rule: docs/formats.md `usage_count_work`.
+    let from =
+        format!("({source}) x CROSS JOIN sessions s ON s.file_id=x.file_id WHERE {sessions}");
+    grouped(db, metric, by, None, &fields, &from, args)
+}
+
+/// One record per group of the rows `x` and their sessions `s` that `from`
+/// selects, with each field summed over the group.
+fn grouped<F: AsRef<str>, S: AsRef<str>>(
+    db: &Connection,
+    metric: Metric,
+    by: &[By],
+    program: Option<&str>,
+    fields: &[(F, S)],
+    from: &str,
+    args: Vec<Value>,
+) -> Result<Vec<Json>> {
+    let keys: Vec<String> = by.iter().map(|&key| name(key)).collect();
+    let expressions: Vec<&str> = by
+        .iter()
+        .map(|key| match key {
+            By::Agent => "s.agent",
+            By::Model => "coalesce(x.model,'unknown')",
+            By::Role => "x.role",
+            By::Week => "coalesce(strftime('%G-W%V',x.day),'unknown')",
+            By::SessionKind => "s.session_kind",
+        })
+        .collect();
     let group = if expressions.is_empty() {
         String::new()
     } else {
@@ -235,16 +382,15 @@ pub fn count(
     let columns = expressions
         .iter()
         .map(|e| (*e).to_owned())
-        .chain(fields.iter().map(|(_, sql)| format!("coalesce({sql},0)")))
+        .chain(
+            fields
+                .iter()
+                .map(|(_, sql)| format!("coalesce({},0)", sql.as_ref())),
+        )
         .collect::<Vec<_>>()
         .join(",");
-    let sql = format!(
-        "SELECT {columns} FROM ({}) x JOIN sessions s ON s.file_id=x.file_id WHERE {}{group}",
-        parts.join(" UNION ALL "),
-        conditions.join(" AND ")
-    );
     let values = db
-        .prepare(&sql)?
+        .prepare(&format!("SELECT {columns} FROM {from}{group}"))?
         .query_map(rusqlite::params_from_iter(args), |r| {
             let mut obj = serde_json::Map::new();
             for (i, key) in keys.iter().enumerate() {
@@ -255,7 +401,10 @@ pub fn count(
                 obj.insert("program".into(), json!(program));
             }
             for (i, (field, _)) in fields.iter().enumerate() {
-                obj.insert((*field).into(), json!(r.get::<_, i64>(keys.len() + i)?));
+                obj.insert(
+                    field.as_ref().into(),
+                    json!(r.get::<_, i64>(keys.len() + i)?),
+                );
             }
             Ok(Json::Object(obj))
         })?

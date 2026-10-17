@@ -20,12 +20,7 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
         Agent::Pi => pi::parse(v, state),
     };
     if r.events.is_empty() {
-        let mut e = crate::model::Event::new("unknown", EventKind::Context, "root.type");
-        e.role_source = "none";
-        e.ts = crate::normalize::timestamp(v);
-        e.native_id =
-            crate::normalize::string(v, "uuid").or_else(|| crate::normalize::string(v, "id"));
-        r.events.push(e);
+        r.events.push(crate::model::Event::context(v));
     }
     state.session_id = redact_metadata(&state.session_id);
     state.cwd = redact_metadata(&state.cwd);
@@ -37,6 +32,10 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
             .as_deref()
             .map(|id| crate::normalize::hash(id.as_bytes()));
         e.model = e.model.as_deref().map(redact_metadata);
+        for pass in e.request.iter_mut().flat_map(|r| &mut r.passes) {
+            pass.kind = redact_metadata(&pass.kind);
+            pass.model = pass.model.as_deref().map(redact_metadata);
+        }
         e.tool = e.tool.as_deref().map(redact_metadata);
         e.call_id = e
             .call_id

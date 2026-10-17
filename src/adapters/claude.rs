@@ -1,5 +1,8 @@
 use crate::{
-    model::{Agent, Denial, Event, EventKind, Record, SessionKind, State},
+    model::{
+        Agent, Compaction, Denial, Event, EventKind, Pass, Record, Request, SessionKind, State,
+        Usage,
+    },
     normalize::{arguments, message_text, shell, string, timestamp},
     redaction::Redacted,
 };
@@ -86,6 +89,25 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             };
         }
     }
+    // Claude compaction boundaries: tests/fixtures/usage-claude.jsonl.
+    if typ == "system" && v["subtype"] == "compact_boundary" {
+        let metadata = &v["compactMetadata"];
+        let mut e = Event::context(v);
+        e.compaction = Some(Compaction {
+            trigger: match metadata["trigger"].as_str() {
+                Some("auto") => "auto",
+                Some("manual") => "manual",
+                _ => "unknown",
+            },
+            pre_tokens: metadata["preTokens"].as_i64(),
+            post_tokens: metadata["postTokens"].as_i64(),
+            summary: None,
+        });
+        return Record {
+            events: vec![e],
+            known: true,
+        };
+    }
     if !matches!(typ, "user" | "assistant") {
         return Record {
             events: Vec::new(),
@@ -156,6 +178,32 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
         .or_else(|| string(v, "uuid"));
         e.model = string(m, "model");
         e.ts = timestamp(v);
+        // Claude request usage: tests/fixtures/usage-claude.jsonl.
+        if e.model.as_deref() != Some("<synthetic>") {
+            e.request = usage(&m["usage"]).map(|top| Request {
+                finished: !m["stop_reason"].is_null(),
+                usage: top,
+                // One pass is the request itself; a pass list that does not
+                // parse whole is not partly counted.
+                passes: m
+                    .pointer("/usage/iterations")
+                    .and_then(Value::as_array)
+                    .filter(|passes| passes.len() > 1)
+                    .and_then(|passes| {
+                        passes
+                            .iter()
+                            .map(|p| {
+                                Some(Pass {
+                                    kind: string(p, "type")?,
+                                    model: string(p, "model").or_else(|| string(m, "model")),
+                                    usage: usage(p)?,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            });
+        }
         events.push(e);
     }
     if let Some(blocks) = content.as_array() {
@@ -239,4 +287,19 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
         events,
         known: true,
     }
+}
+
+/// The tokens a Claude `usage` object or one of its iterations states. Rule:
+/// docs/formats.md `usage_columns`.
+fn usage(u: &Value) -> Option<Usage> {
+    let n = |pointer: &str| u.pointer(pointer).and_then(Value::as_i64);
+    Some(Usage {
+        input: n("/input_tokens")?,
+        output: n("/output_tokens")?,
+        cache_read: n("/cache_read_input_tokens"),
+        cache_write: n("/cache_creation_input_tokens"),
+        cache_write_5m: n("/cache_creation/ephemeral_5m_input_tokens"),
+        cache_write_1h: n("/cache_creation/ephemeral_1h_input_tokens"),
+        reasoning: n("/output_tokens_details/thinking_tokens"),
+    })
 }

@@ -71,8 +71,13 @@ fn cli_contract_lists_every_count_field() {
     let serial = serial();
     let contract = include_str!("../../docs/cli.md");
     let (_dir, store, roots) = three_agents();
-    for metric in ["commands", "failures", "denials"] {
-        for program in [&[][..], &["--program", "rg"]] {
+    for metric in ["commands", "failures", "denials", "usage", "compactions"] {
+        // Requests and compactions run no program.
+        let programs: &[&[&str]] = match metric {
+            "usage" | "compactions" => &[&[]],
+            _ => &[&[], &["--program", "rg"]],
+        };
+        for &program in programs {
             let mut args = vec!["count", metric, "--by"];
             args.extend(program);
             let rows = stream(

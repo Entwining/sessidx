@@ -1,0 +1,7 @@
+{"type":"session","id":"pi-usage","cwd":"/synthetic/project","timestamp":"2026-10-05T00:00:00Z"}
+{"type":"model_change","modelId":"pi-model","provider":"synthetic"}
+{"type":"message","id":"pa1","timestamp":"2026-10-05T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"synthetic reply"}],"stopReason":"toolUse","usage":{"input":10,"output":4,"cacheRead":100,"cacheWrite":20,"cacheWrite1h":20,"reasoning":3,"totalTokens":134}}}
+{"type":"message","id":"pa2","timestamp":"2026-10-05T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"synthetic reply"}],"stopReason":"error","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0}}}
+{"type":"message","id":"pa3","timestamp":"2026-10-05T00:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"synthetic reply"}],"stopReason":"stop","usage":{"input":1,"output":3,"cacheRead":0,"cacheWrite":0,"reasoning":9,"totalTokens":4}}}
+{"type":"compaction","id":"pc1","parentId":"pa3","timestamp":"2026-10-05T00:00:04Z","summary":"synthetic summary","firstKeptEntryId":"pa3","tokensBefore":120000,"usage":{"input":500,"output":50,"cacheRead":7,"cacheWrite":3,"totalTokens":560}}
+{"type":"usage","id":"pu1","timestamp":"2026-10-05T00:00:05Z","kind":"cache_warm","model":"pi-model","provider":"synthetic","usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":10}}

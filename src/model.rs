@@ -75,6 +75,54 @@ pub struct State {
     pub model: Option<String>,
     pub model_source: String,
     pub instruction_hash: Option<String>,
+    /// Whether this Codex rollout has written a `token_usage_record`, and the
+    /// running total of its last `token_count`. Rule: docs/formats.md
+    /// `codex_token_count_request`.
+    pub codex_usage_records: bool,
+    pub codex_total_tokens: Option<i64>,
+}
+
+/// The tokens one model request or pass used, as its record states them.
+/// `input` excludes cached and cache-written tokens, and `output` includes
+/// `reasoning`. Rule: docs/formats.md `usage_columns`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Usage {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: Option<i64>,
+    pub cache_write: Option<i64>,
+    pub cache_write_5m: Option<i64>,
+    pub cache_write_1h: Option<i64>,
+    pub reasoning: Option<i64>,
+}
+
+/// One model pass of a request that lists several, such as an advisor's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pass {
+    pub kind: String,
+    pub model: Option<String>,
+    pub usage: Usage,
+}
+
+/// What one record states about the token usage of the model request its
+/// event belongs to. `finished` is whether the record states that the
+/// response ended. Rule: docs/formats.md `usage_snapshot`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub finished: bool,
+    pub usage: Usage,
+    pub passes: Vec<Pass>,
+}
+
+/// A compaction of a session's context, the context sizes its record states,
+/// and the usage of the calls that wrote its summary. Rule: docs/formats.md
+/// `compaction_records`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Compaction {
+    pub trigger: &'static str,
+    pub pre_tokens: Option<i64>,
+    pub post_tokens: Option<i64>,
+    pub summary: Option<Usage>,
 }
 
 /// One recognized denial of a tool call: the channel that recorded it, and
@@ -147,9 +195,22 @@ pub struct Event {
     pub ok_source: &'static str,
     pub exit_code: Option<i64>,
     pub denials: Vec<Denial>,
+    pub request: Option<Request>,
+    pub compaction: Option<Compaction>,
 }
 
 impl Event {
+    /// The event of a record that holds no message or tool, which keeps its
+    /// location and native ID.
+    pub fn context(v: &serde_json::Value) -> Self {
+        let mut e = Self::new("unknown", EventKind::Context, "root.type");
+        e.role_source = "none";
+        e.ts = crate::normalize::timestamp(v);
+        e.native_id =
+            crate::normalize::string(v, "uuid").or_else(|| crate::normalize::string(v, "id"));
+        e
+    }
+
     pub fn new(role: &str, kind: EventKind, source: &'static str) -> Self {
         Self {
             native_id: None,
@@ -169,6 +230,8 @@ impl Event {
             ok_source: "none",
             exit_code: None,
             denials: Vec::new(),
+            request: None,
+            compaction: None,
         }
     }
 }

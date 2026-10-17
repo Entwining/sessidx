@@ -1,5 +1,5 @@
 use crate::{
-    model::{Agent, Event, EventKind, Record, SessionKind, State},
+    model::{Agent, Compaction, Event, EventKind, Record, Request, SessionKind, State, Usage},
     normalize::{arguments, hash, shell, string, text, timestamp},
     redaction::Redacted,
 };
@@ -146,11 +146,58 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 known: true,
             }
         }
-        "event_msg"
-        | "compacted"
-        | "inter_agent_communication_metadata"
-        | "token_usage_record"
-        | "world_state" => Record {
+        // Codex request usage: tests/fixtures/usage-codex.jsonl.
+        "token_usage_record" => {
+            s.codex_usage_records = true;
+            let mut e = Event::context(v);
+            e.native_id = string(p, "response_id");
+            e.request = usage(&p["usage"]).map(|usage| Request {
+                finished: true,
+                usage,
+                passes: Vec::new(),
+            });
+            Record {
+                events: vec![e],
+                known: true,
+            }
+        }
+        // A running total that moved is a request, until the rollout writes a
+        // record per request. Rule: docs/formats.md `codex_token_count_request`.
+        "event_msg" if p["type"] == "token_count" && !s.codex_usage_records => {
+            let mut e = Event::context(v);
+            let info = &p["info"];
+            let total = info
+                .pointer("/total_token_usage/total_tokens")
+                .and_then(Value::as_i64);
+            if total.is_some() && total != s.codex_total_tokens {
+                s.codex_total_tokens = total;
+                e.request = usage(&info["last_token_usage"]).map(|usage| Request {
+                    finished: true,
+                    usage,
+                    passes: Vec::new(),
+                });
+            }
+            Record {
+                events: vec![e],
+                known: true,
+            }
+        }
+        // A window ID that repeats in another rollout is a copy.
+        "compacted" => {
+            let mut e = Event::context(v);
+            e.native_id = string(p, "window_id").map(|id| format!("compaction:{id}"));
+            e.compaction = Some(Compaction {
+                trigger: "unknown",
+                pre_tokens: None,
+                post_tokens: None,
+                summary: None,
+            });
+            Record {
+                events: vec![e],
+                known: true,
+            }
+        }
+        "event_msg" | "inter_agent_communication_metadata" | "world_state" => Record {
             events: vec![],
             known: true,
         },
@@ -159,4 +206,22 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             known: false,
         },
     }
+}
+
+/// The tokens a Codex `usage` or `last_token_usage` object states, whose
+/// `input_tokens` include the cached and cache-written ones. Rule:
+/// docs/formats.md `usage_columns`.
+fn usage(u: &Value) -> Option<Usage> {
+    let n = |key: &str| u.get(key).and_then(Value::as_i64);
+    let cache_read = n("cached_input_tokens");
+    let cache_write = n("cache_write_input_tokens");
+    Some(Usage {
+        input: n("input_tokens")? - cache_read.unwrap_or(0) - cache_write.unwrap_or(0),
+        output: n("output_tokens")?,
+        cache_read,
+        cache_write,
+        cache_write_5m: None,
+        cache_write_1h: None,
+        reasoning: n("reasoning_output_tokens"),
+    })
 }

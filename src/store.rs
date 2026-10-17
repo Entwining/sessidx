@@ -22,12 +22,12 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 12;
 /// The version of how records become rows: adapters, normalization,
 /// redaction, outcomes, denials and shell sites. A file indexed by another
 /// version is reindexed like a changed file, so that a parser change reaches
 /// every row without a rebuild. Rule: docs/formats.md `parser_version`.
-pub const PARSER_VERSION: i64 = 1;
+pub const PARSER_VERSION: i64 = 2;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -630,11 +630,24 @@ impl Store {
                         "none"
                     };
                     // Derived columns start as if the event had no copy and no
-                    // result; `settle` corrects every key these rows touch.
+                    // result, and its usage as its request's only record;
+                    // `settle` corrects every key these rows touch.
                     let call_ok_source = (event.kind == EventKind::ToolCall).then_some("none");
                     tx.prepare_cached("INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,native_id,ts,role,role_source,kind,kind_source,model,model_source,tool,call_id,ok,ok_source,exit_code,line_role_first,canonical,call_ok_source) VALUES (?,?,?,?,?,unhex(?),unhex(?),?,?,?,?,?,?,?,?,unhex(?),?,?,?,?,?,?)")?.execute(params![file_id,line,offset,length,ordinal,&raw_hash,event.native_id,event.ts,event.role,event.role_source,event.kind.as_str(),event.kind_source,model,model_source,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code,line_role_first,true,call_ok_source])?;
                     let event_id = tx.last_insert_rowid();
                     first_event.get_or_insert(event_id);
+                    if let Some(request) = event.request {
+                        let u = &request.usage;
+                        tx.prepare_cached("INSERT INTO usage_rows(event_id,file_id,ts,model,finished,selected,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h,reasoning) VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?)")?.execute(params![event_id,file_id,event.ts,model,request.finished,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.reasoning])?;
+                        for (pass, p) in request.passes.iter().enumerate() {
+                            let u = &p.usage;
+                            tx.prepare_cached("INSERT INTO usage_passes(event_id,pass,kind,model,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h) VALUES (?,?,?,?,?,?,?,?,?,?)")?.execute(params![event_id,pass,p.kind,p.model,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h])?;
+                        }
+                    }
+                    if let Some(c) = event.compaction {
+                        let s = c.summary.as_ref();
+                        tx.prepare_cached("INSERT INTO compaction_rows(event_id,trigger,pre_tokens,post_tokens,summary_input,summary_output,summary_cache_read,summary_cache_write) VALUES (?,?,?,?,?,?,?,?)")?.execute(params![event_id,c.trigger,c.pre_tokens,c.post_tokens,s.map(|s| s.input),s.map(|s| s.output),s.and_then(|s| s.cache_read),s.and_then(|s| s.cache_write)])?;
+                    }
                     for (site, command) in event.sites.into_iter().enumerate() {
                         tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
                     }
@@ -934,8 +947,9 @@ fn add_counts<P: rusqlite::Params + Copy>(
 /// Recomputes the derived columns of every key a transaction marked from the
 /// rows it is about to commit, and moves the rollup contribution of each row
 /// before `first`, the transaction's first inserted event, whose values
-/// change; the transaction adds its own rows afterwards. Rules: docs/formats.md `canonical_first_copy`,
-/// `call_outcome_evidence`, `call_pairing`, `derived_facts`, and `daily_counts`.
+/// change; the transaction adds its own rows afterwards. Which usage record a
+/// request reports contributes to no rollup. Rules: docs/formats.md `canonical_first_copy`,
+/// `call_outcome_evidence`, `call_pairing`, `usage_snapshot`, `derived_facts`, and `daily_counts`.
 fn settle(tx: &Transaction<'_>, first: Option<i64>) -> Result<()> {
     // Each statement starts at the marked keys and reaches rows by ID. Rule:
     // docs/formats.md `derived_work`.
@@ -974,7 +988,16 @@ fn settle(tx: &Transaction<'_>, first: Option<i64>) -> Result<()> {
           SELECT r.id,r.canonical,r.call_ok,r.call_ok_source,p.call FROM p CROSS JOIN event_rows r CROSS JOIN sessions s
           WHERE r.call_id=p.call_id AND r.kind='tool_result' AND s.file_id=r.file_id
            AND s.agent=p.agent AND s.session_id=p.session_id AND r.call_event_id IS NOT p.call
-          ON CONFLICT(id) DO UPDATE SET call_event_id=excluded.call_event_id;",
+          ON CONFLICT(id) DO UPDATE SET call_event_id=excluded.call_event_id;
+         WITH u AS MATERIALIZED (SELECT d.agent,d.native_id,d.kind,(
+           SELECT r2.id FROM event_rows r2 JOIN sessions s2 ON s2.file_id=r2.file_id JOIN usage_rows u2 ON u2.event_id=r2.id
+           WHERE r2.native_id=d.native_id AND r2.kind=d.kind AND s2.agent=d.agent
+           ORDER BY u2.finished DESC,coalesce(s2.started_at,'9999'),s2.path,r2.line_no DESC,r2.ordinal DESC LIMIT 1) AS winner
+          FROM temp.dirty_groups d)
+         UPDATE usage_rows SET selected=NOT selected WHERE event_id IN (
+          SELECT r.id FROM u CROSS JOIN event_rows r CROSS JOIN usage_rows x CROSS JOIN sessions s
+          WHERE u.winner IS NOT NULL AND r.native_id=u.native_id AND r.kind=u.kind AND x.event_id=r.id
+           AND s.file_id=r.file_id AND s.agent=u.agent AND x.selected IS NOT (r.id=u.winner));",
     )?;
     apply_changes(tx, first)?;
     tx.execute_batch("DELETE FROM temp.dirty_groups; DELETE FROM temp.dirty_calls;")?;
