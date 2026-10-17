@@ -3,7 +3,7 @@ use crate::{
     discovery::{self, Root},
     model::{Agent, EventKind, State, name},
     normalize::hash,
-    redaction::{redact_metadata, spaced_cjk},
+    redaction::spaced_cjk,
     source,
 };
 use anyhow::{Context, Result};
@@ -22,18 +22,17 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 /// The version of how records become rows: adapters, normalization,
 /// redaction, outcomes, denials and shell sites. A file indexed by another
 /// version is reindexed like a changed file, so that a parser change reaches
 /// every row without a rebuild. Rule: docs/formats.md `parser_version`.
-pub const PARSER_VERSION: i64 = 2;
+pub const PARSER_VERSION: i64 = 3;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
     pub deferred_tails: usize,
     pub parse_errors: u64,
-    pub unknown_records: u64,
     pub files_changed: usize,
     pub records: usize,
     pub stale: bool,
@@ -403,11 +402,6 @@ impl Store {
                 .query_row("SELECT coalesce(sum(parse_errors),0) FROM files", [], |r| {
                     r.get(0)
                 })?;
-        report.unknown_records = self.db.query_row(
-            "SELECT coalesce(sum(n),0) FROM shapes WHERE known=0",
-            [],
-            |r| r.get(0),
-        )?;
         Ok(report)
     }
 
@@ -586,7 +580,6 @@ impl Store {
                         return Err(e.into());
                     }
                     errors += 1;
-                    tx.prepare_cached("INSERT INTO shapes VALUES (?,'invalid_zstd',0,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute([file_id])?;
                     break;
                 }
                 Err(e) => return Err(e.into()),
@@ -605,12 +598,10 @@ impl Store {
                 crate::normalize::record_for_index(&buffer, agent).ok()
             };
             if let Some(v) = parsed {
-                let normalized = adapters::parse(agent, &v, &mut state);
-                let signature = shape(&v);
+                let events = adapters::parse(agent, &v, &mut state);
                 let raw_hash = hash(&buffer);
-                tx.prepare_cached("INSERT INTO shapes VALUES (?,?,?,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,signature,normalized.known])?;
                 let mut line_roles: Vec<String> = Vec::new();
-                for (ordinal, event) in normalized.events.into_iter().enumerate() {
+                for (ordinal, event) in events.into_iter().enumerate() {
                     let line_role_first = !line_roles.contains(&event.role);
                     if line_role_first {
                         line_roles.push(event.role.clone());
@@ -678,7 +669,6 @@ impl Store {
                 }
             } else {
                 errors += 1;
-                tx.prepare_cached("INSERT INTO shapes VALUES (?,?,0,1) ON CONFLICT(file_id,signature,known) DO UPDATE SET n=n+1")?.execute(params![file_id,if oversized { "oversized_record" } else { "invalid_json" }])?;
             }
             offset += length;
         }
@@ -1047,23 +1037,4 @@ fn read_record(reader: &mut impl BufRead, buffer: &mut Vec<u8>) -> io::Result<(u
             return Ok((length, true, oversized));
         }
     }
-}
-
-fn shape(v: &serde_json::Value) -> String {
-    let mut keys: Vec<_> = v
-        .as_object()
-        .into_iter()
-        .flat_map(|o| o.keys())
-        .map(|k| redact_metadata(k))
-        .collect();
-    keys.sort();
-    let typ = redact_metadata(v.get("type").and_then(|s| s.as_str()).unwrap_or("unknown"));
-    let subtype = v
-        .pointer("/payload/type")
-        .or_else(|| v.get("subtype"))
-        .or_else(|| v.pointer("/message/role"))
-        .and_then(|s| s.as_str())
-        .unwrap_or("");
-    let subtype = redact_metadata(subtype);
-    format!("{typ}/{subtype}:{}", keys.join(", "))
 }

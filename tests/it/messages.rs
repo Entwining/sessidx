@@ -159,7 +159,7 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             .as_array()
             .unwrap()
             .iter()
-            .flat_map(|v| adapters::parse(h, v, &mut s).events)
+            .flat_map(|v| adapters::parse(h, v, &mut s))
             .collect();
         if h == Agent::Claude {
             assert_eq!(s.session_kind, SessionKind::Subagent);

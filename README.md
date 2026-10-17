@@ -92,7 +92,7 @@ The last line of every command is an `end` record. Check its `complete` field be
 | `show REF` | Open a hit's `path:line`, a session ID, or a `codex://threads/ID` link |
 | `count commands --program rg` | Count shell commands, tool failures, or denials by agent, model, role, week, or session kind |
 | `sql 'SELECT ...'` | Run one read-only query over the [schema](src/schema.sql), without refreshing |
-| `doctor` | Report parser and log-shape coverage |
+| `doctor` | Report parse errors and the unknown part of each counted population |
 | `index --full` | Rebuild the index, as a schema change requires |
 
 [docs/cli.md](docs/cli.md) is the full contract, and `sessidx COMMAND --help` lists each command's options.
@@ -101,7 +101,7 @@ The last line of every command is an `end` record. Check its `complete` field be
 
 - [docs/cli.md](docs/cli.md): commands, output records, exit codes, and refresh behavior.
 - [docs/design.md](docs/design.md): storage, refresh, privacy, counting units, and known limits.
-- [docs/formats.md](docs/formats.md): each normalization rule and observed log variant with its synthetic fixture and regression test.
+- [docs/formats.md](docs/formats.md): each normalization rule with its synthetic fixture and regression test.
 - [skills/sessidx/SKILL.md](skills/sessidx/SKILL.md): how an agent uses sessidx and reads its results.
 - [AGENTS.md](AGENTS.md): goals, decisions to keep, the roadmap, and how to change and validate the code.
 

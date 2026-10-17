@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS commands (
  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES event_rows(id) ON DELETE CASCADE,
  site INTEGER NOT NULL, program TEXT, argv_json TEXT, parsed INTEGER NOT NULL
 );
+-- Child FK indexes avoid scanning all commands/denials when a file is replaced.
 CREATE INDEX IF NOT EXISTS commands_event ON commands(event_id);
 CREATE TABLE IF NOT EXISTS denials (
  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES event_rows(id) ON DELETE CASCADE,
@@ -119,13 +120,6 @@ CREATE TABLE IF NOT EXISTS compaction_rows (
  event_id INTEGER PRIMARY KEY REFERENCES event_rows(id) ON DELETE CASCADE,
  trigger TEXT NOT NULL CHECK(trigger IN ('auto','manual','unknown')), pre_tokens INTEGER, post_tokens INTEGER,
  summary_input INTEGER, summary_output INTEGER, summary_cache_read INTEGER, summary_cache_write INTEGER
-);
--- Child FK indexes avoid scanning all commands/denials when a file is replaced.
--- Only structural signatures are retained; raw unknown values are never stored.
-CREATE TABLE IF NOT EXISTS shapes (
- file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
- signature TEXT NOT NULL, known INTEGER NOT NULL, n INTEGER NOT NULL,
- PRIMARY KEY(file_id,signature,known)
 );
 -- Message/input text already lives in event_texts; FTS retains tokens and positions only.
 CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(text, content='', contentless_delete=1, tokenize='unicode61');
@@ -206,4 +200,4 @@ CREATE TABLE IF NOT EXISTS daily_program_counts (
 CREATE UNIQUE INDEX IF NOT EXISTS daily_program_counts_key ON daily_program_counts(file_id,ifnull(day,x''),kind,role,ifnull(model,x''),program);
 CREATE INDEX IF NOT EXISTS daily_program_counts_program ON daily_program_counts(program,kind,day);
 CREATE INDEX IF NOT EXISTS daily_program_counts_empty ON daily_program_counts(file_id) WHERE events=0;
-PRAGMA user_version=12;
+PRAGMA user_version=13;

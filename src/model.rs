@@ -235,8 +235,3 @@ impl Event {
         }
     }
 }
-
-pub struct Record {
-    pub events: Vec<Event>,
-    pub known: bool,
-}

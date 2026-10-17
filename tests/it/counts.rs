@@ -138,7 +138,6 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         ("tool_events", 2),
         ("tool_events_without_model", 2),
         ("records", 4),
-        ("records_with_unknown_shape", 2),
         ("shell_calls", 1),
         ("shell_calls_unparsed", 1),
         ("denials", 1),
@@ -146,7 +145,6 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
     ] {
         assert_eq!(d[key], expected, "{key}");
     }
-    assert_eq!(d["unknown_shape_signatures"].as_array().unwrap().len(), 2);
     let excess = counting::sql(
         &store.db,
         "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n",

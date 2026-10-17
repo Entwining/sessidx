@@ -56,9 +56,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
     let mut s = sessidx::model::State::default();
     let mut record = fixture[0]["record"].clone();
     record["message"]["content"][0]["content"] = serde_json::json!("key=a ".repeat(341));
-    let event = sessidx::adapters::parse(Agent::Claude, &record, &mut s)
-        .events
-        .remove(0);
+    let event = sessidx::adapters::parse(Agent::Claude, &record, &mut s).remove(0);
     assert!(event.text.as_ref().unwrap().len() <= 2048);
     assert!(event.text_truncated);
     record["message"]["content"][0]["content"] = serde_json::json!([
@@ -66,9 +64,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         {"type":"text","text":""},
         {"type":"text","text":"second"}
     ]);
-    let event = sessidx::adapters::parse(Agent::Claude, &record, &mut s)
-        .events
-        .remove(0);
+    let event = sessidx::adapters::parse(Agent::Claude, &record, &mut s).remove(0);
     assert_eq!(event.text.as_deref(), Some("first\nsecond"));
     assert!(!event.text_truncated);
 }
@@ -139,9 +135,8 @@ fn a_value_cut_by_the_prefix_limit_leaves_no_fragment() {
         let mut record = fixture[0]["record"].clone();
         record["message"]["content"][0]["content"] =
             serde_json::json!(format!("{pad} {head}{canary}\"}}"));
-        let event = sessidx::adapters::parse(Agent::Claude, &record, &mut Default::default())
-            .events
-            .remove(0);
+        let event =
+            sessidx::adapters::parse(Agent::Claude, &record, &mut Default::default()).remove(0);
         let text = event.text.unwrap();
         assert!(event.text_truncated);
         assert!(text.starts_with(&pad), "{into}");

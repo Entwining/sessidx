@@ -154,7 +154,7 @@ pub fn events(h: Agent, fixture: &str) -> (State, Vec<Event>) {
     let mut s = State::default();
     let es = fixture
         .lines()
-        .flat_map(|l| adapters::parse(h, &serde_json::from_str(l).unwrap(), &mut s).events)
+        .flat_map(|l| adapters::parse(h, &serde_json::from_str(l).unwrap(), &mut s))
         .collect();
     (s, es)
 }

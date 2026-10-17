@@ -22,12 +22,12 @@ fn suffix_assignments_stay_in_argv_and_prefix_assignments_do_not() {
         ),
         ("FOO=1 env", vec!["env"]),
     ] {
-        let r = adapters::parse(
+        let events = adapters::parse(
             Agent::Claude,
             &serde_json::json!({"type":"assistant","uuid":"assign","sessionId":"claude-assign","message":{"role":"assistant","content":[{"type":"tool_use","id":"call-assign","name":"Bash","input":{"command":command}}]}}),
             &mut State::default(),
         );
-        let sites: Vec<_> = r.events.iter().flat_map(|e| &e.sites).collect();
+        let sites: Vec<_> = events.iter().flat_map(|e| &e.sites).collect();
         assert_eq!(sites.len(), 1, "{command}");
         assert_eq!(sites[0].argv, expected, "{command}");
     }
@@ -65,12 +65,12 @@ fn codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed() {
     // Longer than any fixture literal: size caps must not make ordinary commands opaque.
     let long = serde_json::json!({"name":"long","source":format!("tools.exec_command({{cmd: \"rg {}\"}});", "a".repeat(2000)),"programs":["rg"],"unparsed":0});
     for f in fixtures.as_array().unwrap().iter().chain([&long]) {
-        let r = adapters::parse(
+        let events = adapters::parse(
             Agent::Codex,
             &serde_json::json!({"type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"wrapper","input":f["source"]}}),
             &mut State::default(),
         );
-        let sites = &r.events[0].sites;
+        let sites = &events[0].sites;
         let mut programs: Vec<_> = sites.iter().filter_map(|s| s.program.as_deref()).collect();
         let mut expected: Vec<_> = f["programs"]
             .as_array()

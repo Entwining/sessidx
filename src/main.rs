@@ -104,7 +104,7 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Report index and parser coverage
+    /// Report parse errors and the unknown part of each counted population
     Doctor,
 }
 

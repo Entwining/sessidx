@@ -417,19 +417,11 @@ fn grouped<F: AsRef<str>, S: AsRef<str>>(
 /// `daily_counts`.
 pub fn doctor(db: &Connection) -> Result<Json> {
     let scalar = |sql: &str| -> Result<i64> { Ok(db.query_row(sql, [], |r| r.get(0))?) };
-    let signatures: Vec<Json> = db
-        .prepare("SELECT signature,sum(n) FROM shapes WHERE known=0 GROUP BY signature ORDER BY sum(n) DESC LIMIT 100")?
-        .query_map([], |r| {
-            Ok(json!({"signature": r.get::<_, String>(0)?, "records": r.get::<_, i64>(1)?}))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
     Ok(json!({
         "files": scalar("SELECT count(*) FROM files")?,
         "incomplete_files": scalar("SELECT count(*) FROM files WHERE index_status!='ready'")?,
         "parse_errors": scalar("SELECT coalesce(sum(parse_errors),0) FROM files")?,
-        "records": scalar("SELECT coalesce(sum(n),0) FROM shapes")?,
-        "records_with_unknown_shape": scalar("SELECT coalesce(sum(n),0) FROM shapes WHERE known=0")?,
-        "unknown_shape_signatures": signatures,
+        "records": scalar("SELECT coalesce(sum(lines_indexed),0) FROM files")?,
         "sessions": scalar("SELECT count(*) FROM sessions")?,
         "sessions_with_unknown_kind": scalar("SELECT count(*) FROM sessions WHERE session_kind='unknown'")?,
         "events": scalar("SELECT coalesce(sum(events),0) FROM daily_counts")?,

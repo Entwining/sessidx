@@ -1,11 +1,11 @@
 use crate::{
-    model::{Agent, Compaction, Event, EventKind, Record, Request, SessionKind, State, Usage},
+    model::{Agent, Compaction, Event, EventKind, Request, SessionKind, State, Usage},
     normalize::{arguments, message_text, shell, string, text, timestamp},
     redaction::Redacted,
 };
 use serde_json::Value;
 
-pub fn parse(v: &Value, s: &mut State) -> Record {
+pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
     match v["type"].as_str().unwrap_or("") {
         "session" => {
             if !s.identified {
@@ -23,19 +23,13 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 s.session_kind_source = "session".into();
                 s.identified = true;
             }
-            Record {
-                events: vec![],
-                known: true,
-            }
+            Vec::new()
         }
         "model_change" => {
             // Pi model changes precede messages: tests/fixtures/pi.jsonl.
             s.model = string(v, "modelId");
             s.model_source = "model_change.modelId".into();
-            Record {
-                events: vec![],
-                known: true,
-            }
+            Vec::new()
         }
         "message" => {
             let m = &v["message"];
@@ -57,10 +51,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 crate::normalize::output_prefix(&mut e, &m["content"]);
                 e.native_id = string(v, "id");
                 e.ts = ts;
-                return Record {
-                    events: vec![e],
-                    known: true,
-                };
+                return vec![e];
             }
             let mut events = Vec::new();
             // Pi empty replies: tests/it/messages.rs::pi_empty_response_and_explicit_message_model_override.
@@ -115,10 +106,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     events.push(e);
                 }
             }
-            Record {
-                events,
-                known: matches!(role, "assistant" | "user" | "system" | "bashExecution"),
-            }
+            events
         }
         "compaction" => {
             let mut e = Event::context(v);
@@ -128,27 +116,11 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 post_tokens: None,
                 summary: usage(&v["usage"]),
             });
-            Record {
-                events: vec![e],
-                known: true,
-            }
+            vec![e]
         }
-        // A cache warm-up's usage stays outside requests: docs/formats.md
+        // A `usage` entry is a cache warm-up's, not a request's: docs/formats.md
         // `pi_request_usage`.
-        "thinking_level_change"
-        | "usage"
-        | "branch_summary"
-        | "context_edit"
-        | "session_info"
-        | "custom_message"
-        | "label" => Record {
-            events: vec![],
-            known: true,
-        },
-        _ => Record {
-            events: vec![],
-            known: false,
-        },
+        _ => Vec::new(),
     }
 }
 

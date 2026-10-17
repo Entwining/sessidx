@@ -3,30 +3,32 @@ mod codex;
 mod pi;
 
 use crate::{
-    model::{Agent, EventKind, Record, State},
+    model::{Agent, Event, EventKind, State},
     redaction::{redact, redact_argv, redact_metadata},
 };
 use serde_json::Value;
 
-pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
+pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Vec<Event> {
     if let Some(ts) = crate::normalize::timestamp(v)
         && state.first_ts.is_none()
     {
         state.first_ts = Some(ts);
     }
-    let mut r = match agent {
+    let mut events = match agent {
         Agent::Claude => claude::parse(v, state),
         Agent::Codex => codex::parse(v, state),
         Agent::Pi => pi::parse(v, state),
     };
-    if r.events.is_empty() {
-        r.events.push(crate::model::Event::context(v));
+    // A record no rule reads keeps only its location: docs/formats.md
+    // `context_pointers`.
+    if events.is_empty() {
+        events.push(Event::context(v));
     }
     state.session_id = redact_metadata(&state.session_id);
     state.cwd = redact_metadata(&state.cwd);
     state.model = state.model.as_deref().map(redact_metadata);
     state.parent_id = state.parent_id.as_deref().map(redact_metadata);
-    for e in &mut r.events {
+    for e in &mut events {
         e.native_id = e
             .native_id
             .as_deref()
@@ -60,5 +62,5 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Record {
         }
         e.role = redact(&e.role);
     }
-    r
+    events
 }

@@ -109,9 +109,9 @@ fn successful_stdout_guard_examples_are_not_denials() {
             serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","content":"Permission to use Bash has been denied.\nPreToolUse:Bash hook error: quoted log line"}]}}),
         ),
     ] {
-        let r = adapters::parse(agent, &value, &mut State::default());
+        let events = adapters::parse(agent, &value, &mut State::default());
         assert_eq!(
-            r.events.iter().flat_map(|e| &e.denials).count(),
+            events.iter().flat_map(|e| &e.denials).count(),
             0,
             "{agent:?}"
         );
@@ -296,7 +296,7 @@ fn codex_mcp_transport_error_flag_is_text_evidence_with_content_control() {
         serde_json::json!({"status":"fulfilled","value":{"isError":false,"content":[{"type":"text","text":"=== refusal.txt ===\nScript error: Command blocked by PreToolUse hook: rg has no --include flag."}]}}),
         serde_json::json!({"opaque":"synthetic result"}),
         serde_json::json!([{ "isError":true },{ "isError":false }]),
-    ].iter().flat_map(|v|adapters::parse(Agent::Codex,&serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":v.to_string()}}),&mut state).events).collect();
+    ].iter().flat_map(|v|adapters::parse(Agent::Codex,&serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":v.to_string()}}),&mut state)).collect();
     assert_eq!(
         es.iter()
             .filter(|e| e.ok == Some(false) && e.ok_source == "text")
@@ -363,9 +363,9 @@ fn claude_denial_kinds_map_channels_and_interruptions_record_no_denial() {
         if let Some(d) = decision {
             record["permissionDecision"] = d.clone();
         }
-        let r = adapters::parse(Agent::Claude, &record, &mut State::default());
+        let events = adapters::parse(Agent::Claude, &record, &mut State::default());
         assert_eq!(
-            r.events[0].denials,
+            events[0].denials,
             [sessidx::model::Denial::channel(source)],
             "{kind} {decision:?}"
         );
@@ -374,16 +374,16 @@ fn claude_denial_kinds_map_channels_and_interruptions_record_no_denial() {
     // not a denial; the result still counts as failed from is_error.
     for kind in ["interrupted", "cancelled"] {
         let record = serde_json::json!({"type":"user","toolDenialKind":kind,"message":{"content":[{"type":"tool_result","is_error":true,"content":"synthetic interruption"}]}});
-        let r = adapters::parse(Agent::Claude, &record, &mut State::default());
-        assert!(r.events[0].denials.is_empty(), "{kind}");
-        assert_eq!(r.events[0].ok, Some(false), "{kind}");
+        let events = adapters::parse(Agent::Claude, &record, &mut State::default());
+        assert!(events[0].denials.is_empty(), "{kind}");
+        assert_eq!(events[0].ok, Some(false), "{kind}");
     }
     // A text-derived denial row is kept, with its reason, and the
     // structured channel is pushed only when no text-derived row remains.
     let record = serde_json::json!({"type":"user","toolDenialKind":"permission-rule","permissionDecision":{"decision":"reject","source":"hook","reasonType":"hook"},"message":{"content":[{"type":"tool_result","is_error":true,"content":"PreToolUse:Bash hook error: rg has no --include flag."}]}});
-    let r = adapters::parse(Agent::Claude, &record, &mut State::default());
+    let events = adapters::parse(Agent::Claude, &record, &mut State::default());
     assert_eq!(
-        r.events[0].denials,
+        events[0].denials,
         [sessidx::model::Denial::legacy(
             "hook",
             "policy",

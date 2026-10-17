@@ -185,7 +185,6 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         vec!["doctor"],
         vec!["sql", "SELECT * FROM events"],
         vec!["sql", "SELECT * FROM commands"],
-        vec!["sql", "SELECT * FROM shapes"],
     ] {
         let output = sessidx(&serial, &store.path, &roots, &args)
             .output()

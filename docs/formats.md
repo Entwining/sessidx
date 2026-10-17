@@ -1,10 +1,10 @@
 # Format normalization
 
-All records in `tests/fixtures` are synthetic. This document maps every root/content variant that the source inventory found under the Claude Code, Codex, and Pi session roots to an array entry in `tests/fixtures/inventory.json`. The inventory's census selected files by mtime since 2026-08-01, so it is not a universal schema or a runtime guarantee. Each rule's reason lives only in its row below. Extra fields, ancestry, guardian overlays, and retries are exercised in `tests/fixtures/attribution.json`.
+All records in `tests/fixtures` are synthetic. Each rule below names the records it reads; every other record keeps only a context pointer (`context_pointers`). Each rule's reason lives only in its row below. Extra fields, ancestry, guardian overlays, and retries are exercised in `tests/fixtures/attribution.json`.
 
 ## Rules and regression tests
 
-Each row names the regression test that fails when its rule is removed. Fixtures prefixed with tests/ are inline synthetic records. Coverage-only auxiliary rules change the known/unknown record count, not the message count.
+Each row names the regression test that fails when its rule is removed. Fixtures prefixed with tests/ are inline synthetic records.
 
 ### Messages, models, and attribution
 
@@ -17,7 +17,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `claude_compaction` | `tests/fixtures/structure.jsonl` | isCompactSummary is context, not a new user interaction. | `native_message_fragments_empty_replies_summary_and_history_dedup` |
 | `transcript_identity` | Synthetic transcripts in `tests/it/identity.rs::transcript_identity_comes_from_its_own_header_not_copied_history` | A transcript can open with another session's identity: a spawned Codex thread repeats its parent's session_meta after its own, and a resumed Claude session's first record can carry the session it resumed. The first header that states an identity fixes it, and copied records never change it, so events inherit their transcript's session. A Claude transcript's own records are those carrying its agentId (a subagent) or the session ID its file is named after (a main transcript); the first of them fixes the identity, and only they supply its kind and starting directory, so neither a copied first record nor a later record naming an agent can change them. A Claude subagent is keyed by its agentId, and its parent is the first sessionId in the transcript, because its first record can name only the agent. | `transcript_identity_comes_from_its_own_header_not_copied_history` |
 | `session_kind` | Synthetic transcripts in `tests/it/identity.rs::session_kind_comes_only_from_native_evidence` | Only native evidence sets a session kind. Claude: agentId or isSidechain true on the transcript's own records is a subagent, isSidechain false is main. Codex: session_meta.source names a client (cli, exec, vscode) for a main thread and holds a subagent object for a spawned one. Pi: every session is main, because Pi ships without subagents (README of pi-coding-agent 1.1.0); a package that adds subagents could write sessions this cannot tell apart. Anything else stays unknown. | `session_kind_comes_only_from_native_evidence` |
-| `claude_workflow_journal` | Synthetic workflow run in `tests/it/identity.rs::claude_workflow_journal_is_not_a_session` | Claude writes a workflow run's journal.jsonl of agent starts and results beside its agents' transcripts under subagents/workflows/; it is not a session, and indexed as one, every run's journal shared the session ID `journal`. Its `started` and `result` records appear in no other transcript, so they are not known Claude record types. | `claude_workflow_journal_is_not_a_session` |
+| `claude_workflow_journal` | Synthetic workflow run in `tests/it/identity.rs::claude_workflow_journal_is_not_a_session` | Claude writes a workflow run's journal.jsonl of agent starts and results beside its agents' transcripts under subagents/workflows/; it is not a session, and indexed as one, every run's journal shared the session ID `journal`. | `claude_workflow_journal_is_not_a_session` |
 | `codex_model` | `tests/fixtures/codex.jsonl` | turn_context defines the active model; startup metadata does not. | `inherited_models_change_retrospective_group_counts` |
 | `json_arguments` | `tests/fixtures/codex.jsonl` | Function arguments can be a JSON string, and decoding is needed to reach cmd. | `codex_context_arguments_and_telemetry` |
 | `codex_base_instructions` | `tests/fixtures/codex.jsonl` | Hash the recorded base text without retaining another instruction body. | `codex_context_arguments_and_telemetry` |
@@ -40,14 +40,11 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 
 | Rule | Fixture | Reason | Regression test |
 | --- | --- | --- | --- |
-| `auxiliary_coverage` | `tests/fixtures/inventory.json` | Known auxiliary roots remain context pointers and known-record coverage, not additional logical messages. | `inventory_variants_are_classified_with_future_shape_negative_control` |
-| `codex_telemetry_coverage` | `tests/fixtures/inventory.json` | event_msg aliases affect known/unknown record coverage. Removing the alias does not create a logical message and is not claimed to do so. | `inventory_variants_are_classified_with_future_shape_negative_control` |
-| `codex_tool_search` | `tests/fixtures/inventory.json` | The tool_search_call discriminator is a native attempt, separate from inter-agent communication. | `inventory_variants_are_classified_with_future_shape_negative_control` |
-| `server_call_kind` | `tests/fixtures/inventory.json` | server_tool_use is not a local native tool-call attempt. | `raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind` |
-| `server_result_kind` | `tests/fixtures/inventory.json` | advisor_tool_result is a server result and must not inflate local native result counts. | `raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind` |
-| `structural_signature` | `tests/fixtures/structure.jsonl` | Redacting the composed discriminator/key list as body entropy destroys structural count keys; sanitize its pieces instead, and `doctor` prints the stored signature. | `raw_shape_counts_survive_redaction_and_server_tools_keep_their_own_kind` |
-| `context_pointers` | `tests/fixtures/codex.jsonl` | Metadata and telemetry lines need exact show pointers while staying out of logical-message counts. | `lookup_cjk_latin_filters_and_show_references` |
-| `inventory_mapping` | `tests/fixtures/inventory.json` | Every variant must retain its own classification even when compensating mistakes preserve the total known count. | `inventory_variants_are_classified_with_future_shape_negative_control` |
+| `codex_agent_message` | `tests/it/adapters.rs` | A response_item agent_message is a message one Codex thread sent another; it is a communication event with its text, so search reaches it, not a message event. | `codex_context_arguments_and_telemetry` |
+| `codex_tool_search` | `tests/it/adapters.rs` | The tool_search_call discriminator is a native attempt, separate from inter-agent communication. | `codex_context_arguments_and_telemetry` |
+| `server_call_kind` | `tests/it/adapters.rs` | server_tool_use is not a local native tool-call attempt. | `content_blocks_become_their_event_kinds` |
+| `server_result_kind` | `tests/it/adapters.rs` | advisor_tool_result is a server result and must not inflate local native result counts. | `content_blocks_become_their_event_kinds` |
+| `context_pointers` | `tests/it/adapters.rs::records_no_rule_reads_keep_only_a_context_pointer` | A record no rule reads, whatever its type, keeps one context event with its location, range digest and native ID, so `show path:line` and native deduplication reach it; it has no text, tool, usage or compaction, so no search or `count` metric includes it. Agents add record types often: 19 top-level Claude Code types first appeared in the maintainer's logs between February and October 2026. Listing the types read as metadata made each new one a parser change that changed no answer, and never pointed at the one a count later needed, Claude's `compact_boundary`, because the list accepted every `system` subtype. This is the tolerant reader ([Fowler](https://martinfowler.com/bliki/TolerantReader.html)): read what lookup and counting need and pass over the rest; a record type becomes a rule when a lookup or count fails without it. Pi `bashExecution` messages are commands the user ran, not agent calls, and are passed over the same way. | `records_no_rule_reads_keep_only_a_context_pointer` |
 | `opaque_payload` | `tests/fixtures/opaque.jsonl` | Pi thinkingSignature can contain 10-16 MiB strings that the adapter ignores. Borrowing discarded thinking/image blocks avoids materializing them while preserving message and call counts. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
 | `fallback_payload` | `tests/fixtures/opaque.jsonl` | Opaque fallback blocks carry no searchable body and need no owned payload copy. | `opaque_blocks_are_not_materialized_and_normalized_counts_are_preserved` |
 
@@ -68,7 +65,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `native_hook_flag` | `tests/fixtures/hook-check.jsonl:2` | A native successful result can quote a hook denial. Its success Boolean excludes text-derived denial inference. | `claude_hook_check_errors_respect_native_success_flags` |
 | `hook_check_error` | `tests/fixtures/hook-check.jsonl:1` | Claude marks a failed PreToolUse hook check as permission-rule, but its anchored hook error identifies the hook source even without DENIED. Its unknown reason stays explicit. | `claude_hook_check_errors_respect_native_success_flags` |
 | `hook_prefix` | `tests/fixtures/outcomes.jsonl` | Only result envelopes with native hook prefixes qualify; transport stdout quotations do not. | `codex_text_array_batch_failures_and_quoted_negative_control` |
-| `newline_hook` | `tests/fixtures/inventory.json[53]`, `tests/fixtures/truncated.jsonl:1,3` | Codex input_text blocks can start with Script error: followed by a newline and Command blocked by PreToolUse hook:. Preserve the hook denial without treating a successful transport's quoted output as a refusal. | `split_script_error_and_truncated_batch_are_denials_with_transport_quote_control` |
+| `newline_hook` | `tests/fixtures/truncated.jsonl:1,3` | Codex input_text blocks can start with Script error: followed by a newline and Command blocked by PreToolUse hook:. Preserve the hook denial without treating a successful transport's quoted output as a refusal. | `split_script_error_and_truncated_batch_are_denials_with_transport_quote_control` |
 | `guard_stdout_control` | `tests/it/outcomes.rs::successful_stdout_guard_examples_are_not_denials` | Output with a successful or missing result flag can print a guard example; generic guard prefixes require a Claude/Pi failure flag. | `successful_stdout_guard_examples_are_not_denials` |
 | `agent_outcome_scope` | `tests/it/outcomes.rs::call_outcomes_are_isolated_by_agent` | Equal native call/session IDs in different agents must not share outcomes. | `call_outcomes_are_isolated_by_agent` |
 | `session_outcome_scope` | Synthetic Codex thread continued in a second rollout file in `tests/it/outcomes.rs` | A call pairs with its result within its session, not its transcript file: Codex can continue a thread in a second rollout file, so the result of a call made in one file can appear in the next. | `a_call_pairs_with_its_result_across_transcripts_of_one_session` |
@@ -208,7 +205,7 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 | `usage_columns` | `tests/fixtures/usage-claude.jsonl`, `usage-codex.jsonl`, and `usage-pi.jsonl` | The token columns mean the same for every agent, as the Anthropic Messages API states usage: `input` is the prompt tokens neither read from nor written to the cache, so the prompt is `input` + `cache_read` + `cache_write`, and `output` includes `reasoning` (Claude `output_tokens_details.thinking_tokens`). Codex, as the OpenAI API does, counts the cached and cache-written tokens inside `input_tokens`, so `input` subtracts them; they fit inside it in all 32,605 records. Pi states them apart: its `totalTokens` equals `input + output + cacheRead + cacheWrite` in all 13,343 entries. A field the record omits stays NULL, not zero. The Claude 5-minute and 1-hour split of cache writes and the Claude and Pi reasoning counts are stored as stated, though 1,395 Claude records split a different total and 25 Claude and 88 Pi records state more reasoning than output. Pi records only the 1-hour part of its cache writes. Route evidence (Claude message ID shapes, Codex `model_provider`, Pi `provider`) and request errors are not indexed. | `codex_requests_come_from_records_or_moved_totals` |
 | `codex_usage_record` | `tests/fixtures/usage-codex.jsonl` | A `token_usage_record` is one model response, identified by its `response_id`, which every copy of the record shares. | `codex_requests_come_from_records_or_moved_totals` |
 | `codex_token_count_request` | `tests/fixtures/usage-codex.jsonl` | Codex builds before `token_usage_record` wrote only `token_count` running totals. Until a rollout writes its first `token_usage_record`, a `token_count` whose total moved is a request with its `last_token_usage`, and one with null `info` or an unchanged total is none. Later totals repeat the records: in 1,084 of 1,165 rollouts with both, the records and the moved totals matched as multisets, and the other 81 had more records. Each of the 12 rollouts with a `token_count` before its first record had one, matching no later record. In 23 records the moved total differs from `last_token_usage` and in 78 the total fell; they stay requests with their `last_token_usage`. Not covered: a thread forked by such a build copies its parent's totals, 26,882 records in 345 rollouts on the maintainer's logs, which count again in the fork. No record marks where the copy ends: the copies carry the fork's write time, so none of the 133,585 moved totals predates its rollout's header, and `subagent_history_start_ordinal` equals the record count in 1,082 rollouts. A `token_count` has no native ID, by which alone inherited history is deduplicated. | `codex_requests_come_from_records_or_moved_totals` |
-| `pi_request_usage` | `tests/fixtures/usage-pi.jsonl` | Each Pi assistant entry is one request with the usage it states; errored and aborted attempts (34 and 30) state zeros and stay requests. A `usage` entry of kind `cache_warm`, 4 on the maintainer's logs, warms the cache outside any request, so it is a known record without a usage row. | `pi_entries_are_requests_and_cache_warm_is_not` |
+| `pi_request_usage` | `tests/fixtures/usage-pi.jsonl` | Each Pi assistant entry is one request with the usage it states; errored and aborted attempts (34 and 30) state zeros and stay requests. A `usage` entry of kind `cache_warm`, 4 on the maintainer's logs, warms the cache outside any request, so it keeps only a context pointer and has no usage row. | `pi_entries_are_requests_and_cache_warm_is_not` |
 | `compaction_records` | `tests/fixtures/usage-claude.jsonl`, `usage-codex.jsonl`, and `usage-pi.jsonl`, with a copied Claude boundary and a copied Codex window in `tests/it/usage.rs` | A Claude `compact_boundary`, a Codex `compacted` record, and a Pi `compaction` entry are compactions, counted by first copy (`canonical_first_copy`). Claude states the trigger, 305 `auto` and 129 `manual`, and the context sizes before and after; Pi states the size before, and Codex neither, so their trigger is `unknown`. A Claude boundary's UUID identifies it, and 31 of 391 appear in more than one transcript; a Codex window ID identifies its compaction, 141 of 578 repeat in another rollout, and each of the 388 records without one counts. A Codex `compaction` response item accompanies its `compacted` record and is not counted again. Pi also states, in all 21 compactions, the usage of the calls that wrote the summary, stored on the compaction as `summary_input`, `summary_output`, `summary_cache_read`, and `summary_cache_write` in the request columns' meaning; it stays out of `count usage`, because an aggregate states no number of requests. | `compactions_count_once_with_their_trigger_and_sizes` |
 
 ### Counting, SQL, and doctor
@@ -242,107 +239,17 @@ Each row names the regression test that fails when its rule is removed. Fixtures
 
 ## Codex output variants
 
-The inventory's output-marker categories overlap and do not count distinct failed calls. Script error: and the hook prefix occur both on one line and separated by a newline (inventory fixture entry 53). Native Codex results have no error Boolean; decoded MCP transport isError remains text-derived evidence.
+Output-marker categories overlap and do not count distinct failed calls. Script error: and the hook prefix occur both on one line and separated by a newline. Native Codex results have no error Boolean; decoded MCP transport isError remains text-derived evidence.
 
 | Output variant | Synthetic fixture | Owning rule |
 | --- | --- | --- |
 | Nonzero Process exited with code N | `tests/fixtures/outcomes.jsonl:1` | `codex_text_outcome` |
 | Serialized nonzero exit_code | `tests/fixtures/outcomes.jsonl:3` | `codex_text_outcome` |
-| Script failed in an input_text array | `tests/fixtures/truncated.jsonl:1`, `tests/fixtures/inventory.json[53]` | `codex_text_outcome` |
-| Script error: with a newline before the hook prefix | `tests/fixtures/truncated.jsonl:1`, `tests/fixtures/inventory.json[53]` | `newline_hook` |
+| Script failed in an input_text array | `tests/fixtures/truncated.jsonl:1` | `codex_text_outcome` |
+| Script error: with a newline before the hook prefix | `tests/fixtures/truncated.jsonl:1` | `newline_hook` |
 | Same-line Script error: and hook prefix | `tests/fixtures/outcomes.jsonl:2` | `hook_prefix` |
 | Serialized batch rejection | `tests/fixtures/outcomes.jsonl:3` | `batch_rejection` |
 | i/index wrapper containing a Promise result | `tests/fixtures/outcomes.jsonl:7` | `result_container` |
 | Exit zero alongside quoted failure markers | `tests/fixtures/outcomes.jsonl:4`, `tests/fixtures/truncated.jsonl:3` | `codex_text_outcome` |
 | String output | `tests/fixtures/outcomes.jsonl:1,5,6` | `codex_text_outcome` |
 | input_text array output | `tests/fixtures/outcomes.jsonl:2,3`, `tests/fixtures/truncated.jsonl:1,2` | `codex_text_outcome`, `newline_hook` |
-
-## Inventory variants
-
-Known auxiliary records receive context pointers without body storage. Thinking, images, fallback, compaction, and branch records do not reconstruct deferred content; their parent message can still be a logical attempt. Pi custom payloads remain unclassified. Known classification is based on the adapter root/payload discriminator; novel content fields within a known message do not yet have a separate unknown-block census.
-
-| Agent | Observed shape | Fixture array index | Owning rule or retained context |
-| --- | --- | ---: | --- |
-| claude | `agent-name / none` | 0 | `auxiliary_coverage` |
-| claude | `ai-title / none` | 1 | `auxiliary_coverage` |
-| claude | `assistant / none` | 2 | `claude_message` |
-| claude | `atis-latch / none` | 3 | `auxiliary_coverage` |
-| claude | `attachment / none` | 4 | `auxiliary_coverage` |
-| claude | `continued-in / none` | 5 | `auxiliary_coverage` |
-| claude | `cost-state / none` | 6 | `auxiliary_coverage` |
-| claude | `custom-title / none` | 7 | `auxiliary_coverage` |
-| claude | `failed / none` | 8 | `auxiliary_coverage` |
-| claude | `file-history-delta / none` | 9 | `auxiliary_coverage` |
-| claude | `file-history-snapshot / none` | 10 | `auxiliary_coverage` |
-| claude | `fork-context-ref / none` | 11 | `auxiliary_coverage` |
-| claude | `last-prompt / none` | 12 | `auxiliary_coverage` |
-| claude | `launched / none` | 13 | `auxiliary_coverage` |
-| claude | `mode / none` | 14 | `auxiliary_coverage` |
-| claude | `permission-mode / none` | 15 | `auxiliary_coverage` |
-| claude | `pr-link / none` | 16 | `auxiliary_coverage` |
-| claude | `queue-operation / none` | 17 | `auxiliary_coverage` |
-| claude | `relocated / none` | 18 | `auxiliary_coverage` |
-| claude | `system / api_error` | 19 | `auxiliary_coverage` |
-| claude | `system / compact_boundary` | 20 | `compaction_records` |
-| claude | `system / informational` | 21 | `auxiliary_coverage` |
-| claude | `system / local_command` | 22 | `auxiliary_coverage` |
-| claude | `system / model_refusal_fallback` | 23 | `auxiliary_coverage` |
-| claude | `system / model_refusal_no_fallback` | 24 | `auxiliary_coverage` |
-| claude | `system / scheduled_task_fire` | 25 | `auxiliary_coverage` |
-| claude | `system / stop_hook_summary` | 26 | `auxiliary_coverage` |
-| claude | `system / turn_duration` | 27 | `auxiliary_coverage` |
-| claude | `user / none` | 28 | `claude_message` |
-| claude | `worktree-state / none` | 29 | `auxiliary_coverage` |
-| claude | `assistant / advisor_tool_result` | 30 | `server_result_kind` |
-| claude | `assistant / fallback` | 31 | `claude_message` |
-| claude | `assistant / server_tool_use` | 32 | `server_call_kind` |
-| claude | `assistant / text` | 33 | `claude_message` |
-| claude | `assistant / thinking` | 34 | `claude_message` |
-| claude | `assistant / tool_use` | 35 | `claude_message` |
-| claude | `user / image` | 36 | `claude_message` |
-| claude | `user / text` | 37 | `claude_message` |
-| claude | `user / tool_result` | 38 | `claude_flag` |
-| codex | `compacted / none` | 39 | `compaction_records` |
-| codex | `event_msg / item_completed` | 40 | `codex_telemetry_coverage` |
-| codex | `event_msg / task_complete` | 41 | `codex_telemetry_coverage` |
-| codex | `event_msg / task_started` | 42 | `codex_telemetry_coverage` |
-| codex | `event_msg / thread_goal_updated` | 43 | `codex_telemetry_coverage` |
-| codex | `event_msg / thread_settings_applied` | 44 | `codex_telemetry_coverage` |
-| codex | `event_msg / token_count` | 45 | `codex_token_count_request` |
-| codex | `event_msg / turn_aborted` | 46 | `codex_telemetry_coverage` |
-| codex | `inter_agent_communication_metadata / none` | 47 | `context_pointers` |
-| codex | `response_item / agent_message` | 48 | `context_pointers` |
-| codex | `response_item / compaction` | 49 | `context_pointers` |
-| codex | `response_item / custom_tool_call` | 50 | `json_arguments` |
-| codex | `response_item / custom_tool_call_output` | 51 | `codex_text_outcome` |
-| codex | `response_item / function_call` | 52 | `json_arguments` |
-| codex | `response_item / function_call_output` | 53 | `codex_text_outcome` |
-| codex | `response_item / message` | 54 | `context_pointers` |
-| codex | `response_item / reasoning` | 55 | `context_pointers` |
-| codex | `response_item / tool_search_call` | 56 | `codex_tool_search` |
-| codex | `response_item / tool_search_output` | 57 | `codex_text_outcome` |
-| codex | `session_meta / none` | 58 | `codex_base_instructions` |
-| codex | `token_usage_record / none` | 59 | `codex_usage_record` |
-| codex | `turn_context / none` | 60 | `codex_model` |
-| codex | `world_state / none` | 61 | `context_pointers` |
-| pi | `compaction / none` | 62 | `compaction_records` |
-| pi | `context_edit / none` | 63 | `context_pointers` |
-| pi | `custom / none` | 64 | `unclassified custom payload` |
-| pi | `message / assistant` | 65 | `pi_message` |
-| pi | `message / bashExecution` | 66 | `context_pointers` |
-| pi | `message / system` | 67 | `pi_message` |
-| pi | `message / toolResult` | 68 | `pi_flag` |
-| pi | `message / user` | 69 | `pi_message` |
-| pi | `model_change / none` | 70 | `pi_model` |
-| pi | `session / none` | 71 | `context_pointers` |
-| pi | `session_info / none` | 72 | `context_pointers` |
-| pi | `thinking_level_change / none` | 73 | `context_pointers` |
-| pi | `message / image` | 74 | `pi_message` |
-| pi | `message / text` | 75 | `pi_message` |
-| pi | `message / thinking` | 76 | `pi_message` |
-| pi | `message / toolCall` | 77 | `pi_call` |
-| pi | `usage / none` | 78 | `pi_request_usage` |
-
-Exact pointer and append/truncate/inode-replacement invariants use `incremental_append_truncate_replace_equals_rebuild_and_exact_pointers`; they are storage invariants rather than additional format aliases. `inventory_variants_are_classified_with_future_shape_negative_control` expects every variant except the opaque Pi custom one to be classified, with unknown-future roots as negative controls. The privacy byte-search fixture covers each storage/output boundary without retaining real corpus content.
-
-Pi message/bashExecution is a user-run record; it receives only a context pointer and is neither indexed as a logical message nor counted as an agent call.

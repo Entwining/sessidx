@@ -170,15 +170,6 @@ fn an_undecodable_rollout_is_a_parse_error_that_does_not_stop_refresh() {
     assert_eq!(refresh.parse_errors, 2);
     assert!(!refresh.stale);
     assert_eq!(files(&store).len(), 3);
-    let invalid: u64 = store
-        .db
-        .query_row(
-            "SELECT sum(n) FROM shapes WHERE signature='invalid_zstd' AND known=0",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(invalid, 2);
     assert!(
         shown(&store, &format!("{}:5", readable.display()))[0].contains("太长"),
         "the readable rollout after the undecodable ones is indexed"

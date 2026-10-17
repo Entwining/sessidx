@@ -1,11 +1,11 @@
 use crate::{
-    model::{Agent, Compaction, Event, EventKind, Record, Request, SessionKind, State, Usage},
+    model::{Agent, Compaction, Event, EventKind, Request, SessionKind, State, Usage},
     normalize::{arguments, hash, shell, string, text, timestamp},
     redaction::Redacted,
 };
 use serde_json::Value;
 
-pub fn parse(v: &Value, s: &mut State) -> Record {
+pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
     let p = &v["payload"];
     match v["type"].as_str().unwrap_or("") {
         "session_meta" => {
@@ -46,10 +46,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     s.instruction_hash = Some(hash(content.as_bytes()));
                 }
             }
-            Record {
-                events: vec![],
-                known: true,
-            }
+            Vec::new()
         }
         "turn_context" => {
             // Codex models are turn-scoped: tests/fixtures/codex.jsonl.
@@ -57,10 +54,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 s.model = Some(m);
                 s.model_source = "turn_context.model".into();
             }
-            Record {
-                events: vec![],
-                known: true,
-            }
+            Vec::new()
         }
         "response_item" => {
             let typ = p["type"].as_str().unwrap_or("");
@@ -122,18 +116,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     e.text = Some(Redacted::new(&text(&p["content"])));
                     e
                 }
-                "reasoning" | "compaction" | "web_search_call" => {
-                    return Record {
-                        events: vec![],
-                        known: true,
-                    };
-                }
-                _ => {
-                    return Record {
-                        events: vec![],
-                        known: false,
-                    };
-                }
+                _ => return Vec::new(),
             };
             e.ts = timestamp(v);
             e.native_id = string(p, "id").or_else(|| {
@@ -141,10 +124,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     .as_ref()
                     .map(|id| format!("{id}:{}", e.kind.as_str()))
             });
-            Record {
-                events: vec![e],
-                known: true,
-            }
+            vec![e]
         }
         // Codex request usage: tests/fixtures/usage-codex.jsonl.
         "token_usage_record" => {
@@ -156,10 +136,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 usage,
                 passes: Vec::new(),
             });
-            Record {
-                events: vec![e],
-                known: true,
-            }
+            vec![e]
         }
         // A running total that moved is a request, until the rollout writes a
         // record per request. Rule: docs/formats.md `codex_token_count_request`.
@@ -177,10 +154,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                     passes: Vec::new(),
                 });
             }
-            Record {
-                events: vec![e],
-                known: true,
-            }
+            vec![e]
         }
         // A window ID that repeats in another rollout is a copy.
         "compacted" => {
@@ -192,19 +166,9 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
                 post_tokens: None,
                 summary: None,
             });
-            Record {
-                events: vec![e],
-                known: true,
-            }
+            vec![e]
         }
-        "event_msg" | "inter_agent_communication_metadata" | "world_state" => Record {
-            events: vec![],
-            known: true,
-        },
-        _ => Record {
-            events: vec![],
-            known: false,
-        },
+        _ => Vec::new(),
     }
 }
 

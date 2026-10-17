@@ -1,14 +1,13 @@
 use crate::{
     model::{
-        Agent, Compaction, Denial, Event, EventKind, Pass, Record, Request, SessionKind, State,
-        Usage,
+        Agent, Compaction, Denial, Event, EventKind, Pass, Request, SessionKind, State, Usage,
     },
     normalize::{arguments, message_text, shell, string, timestamp},
     redaction::Redacted,
 };
 use serde_json::Value;
 
-pub fn parse(v: &Value, s: &mut State) -> Record {
+pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
     // A subagent's records carry its agentId; a main transcript is named after
     // its session ID, which the indexer already holds. Until the first such
     // record, a resumed transcript holds history copied from another session.
@@ -83,10 +82,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             crate::normalize::output_prefix(&mut e, &Value::Array(messages));
             e.native_id = string(v, "uuid");
             e.ts = timestamp(v);
-            return Record {
-                events: vec![e],
-                known: true,
-            };
+            return vec![e];
         }
     }
     // Claude compaction boundaries: tests/fixtures/usage-claude.jsonl.
@@ -103,40 +99,10 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             post_tokens: metadata["postTokens"].as_i64(),
             summary: None,
         });
-        return Record {
-            events: vec![e],
-            known: true,
-        };
+        return vec![e];
     }
     if !matches!(typ, "user" | "assistant") {
-        return Record {
-            events: Vec::new(),
-            known: matches!(
-                typ,
-                "summary"
-                    | "system"
-                    | "progress"
-                    | "file-history-snapshot"
-                    | "queue-operation"
-                    | "last-prompt"
-                    | "custom-title"
-                    | "agent-name"
-                    | "ai-title"
-                    | "atis-latch"
-                    | "attachment"
-                    | "continued-in"
-                    | "cost-state"
-                    | "failed"
-                    | "file-history-delta"
-                    | "fork-context-ref"
-                    | "launched"
-                    | "mode"
-                    | "permission-mode"
-                    | "pr-link"
-                    | "relocated"
-                    | "worktree-state"
-            ),
-        };
+        return Vec::new();
     }
     let m = &v["message"];
     // Claude model fields and synthetic errors: tests/fixtures/claude.jsonl.
@@ -150,10 +116,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
     // Claude fragments, empty replies, and compaction: tests/fixtures/structure.jsonl.
     let summary = v.get("isCompactSummary").and_then(Value::as_bool) == Some(true);
     if summary {
-        return Record {
-            events: Vec::new(),
-            known: true,
-        };
+        return Vec::new();
     }
     let only_results = content
         .as_array()
@@ -283,10 +246,7 @@ pub fn parse(v: &Value, s: &mut State) -> Record {
             events.push(e);
         }
     }
-    Record {
-        events,
-        known: true,
-    }
+    events
 }
 
 /// The tokens a Claude `usage` object or one of its iterations states. Rule:
