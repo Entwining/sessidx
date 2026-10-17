@@ -22,7 +22,7 @@ fn claude_blocks_flags_and_synthetic_model() {
         1
     );
     assert_eq!(s.model.as_deref(), Some("claude-sonnet"));
-    assert_eq!(es.iter().filter(|e| e.role == "user").count(), 1);
+    assert_eq!(es.iter().filter(|e| &*e.role == "user").count(), 1);
     assert!(
         es.iter()
             .filter(|e| e.kind == EventKind::ToolResult)
@@ -78,7 +78,7 @@ fn codex_context_arguments_and_telemetry() {
         &mut history,
     );
     assert_eq!(
-        (sent[0].kind, sent[0].role.as_str()),
+        (sent[0].kind, &*sent[0].role),
         (EventKind::Communication, "assistant")
     );
     assert_eq!(sent[0].text.as_deref(), Some("synthetic-text"));
@@ -89,7 +89,11 @@ fn codex_context_arguments_and_telemetry() {
     );
     assert_eq!(array[0].sites[0].program.as_deref(), Some("printf"));
     assert_eq!(
-        array[0].sites[0].argv,
+        array[0].sites[0]
+            .argv
+            .iter()
+            .map(|a| &**a)
+            .collect::<Vec<_>>(),
         ["'printf'", "'literal quote'\\''s'"]
     );
     assert!(
@@ -120,7 +124,7 @@ fn pi_model_tool_call_and_camel_case_flag() {
         &mut State::default(),
     );
     assert_eq!(system[0].kind, EventKind::Message);
-    assert_eq!(system[0].role, "system");
+    assert_eq!(&*system[0].role, "system");
     assert_eq!(system[0].ts.as_deref(), Some("1970-01-01T00:00:01.234Z"));
 }
 

@@ -536,11 +536,14 @@ fn names_decide_whether_a_value_is_a_credential_an_identifier_or_text() {
         assert_eq!(redaction::redact(text), expected);
     }
     assert_eq!(
-        redaction::redact_argv(&[
+        redaction::Redacted::argv(&[
             "curl".into(),
             "--cookie".into(),
             "session=small; theme=light".into()
-        ]),
+        ])
+        .iter()
+        .map(|a| &**a)
+        .collect::<Vec<_>>(),
         ["curl", "--cookie", "[REDACTED]"]
     );
     let identifiers = "id=".repeat(8192);
@@ -652,6 +655,22 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
     .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].model.as_deref(), Some("claude-haiku-4-5-20251001"));
+}
+
+#[test]
+fn labels_take_credential_patterns_but_not_the_run_verdict() {
+    let values = canaries();
+    let random = &values[1];
+    assert_ne!(redaction::redact(random), *random);
+    assert_eq!(&*redaction::Label::new(random), random);
+    assert_eq!(
+        &*redaction::Label::new(&format!("Bearer {}", values[0])),
+        "[REDACTED]"
+    );
+    assert_eq!(
+        &*redaction::Label::new(&format!("route?api_key={}", values[0])),
+        "route?api_key=[REDACTED]"
+    );
 }
 
 #[test]

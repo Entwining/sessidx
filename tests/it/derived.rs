@@ -222,8 +222,8 @@ fn derived_columns_equal_their_definitions_after_every_commit() {
         &[
             r#"{"type":"session","id":"a-orig","cwd":"/synthetic"}"#,
             r#"{"type":"message","id":"u2","timestamp":"2026-09-01T00:00:00Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}]}}"#,
-            r#"{"type":"message","id":"u3","timestamp":"2026-09-01T00:00:01Z","message":{"role":"toolResult","toolCallId":"t1","isError":false,"content":"fine"}}"#,
-            r#"{"type":"message","id":"message:msg_1","timestamp":"2026-09-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input":1,"output":2}}}"#,
+            r#"{"type":"message","id":"t1","timestamp":"2026-09-01T00:00:01Z","message":{"role":"toolResult","toolCallId":"t1","isError":false,"content":"fine"}}"#,
+            r#"{"type":"message","id":"msg_1","timestamp":"2026-09-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input":1,"output":2}}}"#,
         ],
     );
     let roots = [

@@ -2,8 +2,8 @@ use crate::{
     adapters,
     discovery::{self, Root},
     model::{Agent, EventKind, State, name},
-    normalize::hash,
-    redaction::spaced_cjk,
+    normalize::{Digest, hash},
+    redaction::{Label, spaced_cjk},
     source,
 };
 use anyhow::{Context, Result};
@@ -22,12 +22,12 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 13;
+pub const SCHEMA_VERSION: i64 = 14;
 /// The version of how records become rows: adapters, normalization,
 /// redaction, outcomes, denials and shell sites. A file indexed by another
 /// version is reindexed like a changed file, so that a parser change reaches
 /// every row without a rebuild. Rule: docs/formats.md `parser_version`.
-pub const PARSER_VERSION: i64 = 3;
+pub const PARSER_VERSION: i64 = 4;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -72,6 +72,16 @@ impl ToSql for FileCoverage {
             Self::BudgetExhausted => "budget_exhausted",
         }
         .into())
+    }
+}
+impl ToSql for Label {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok((&**self).into())
+    }
+}
+impl ToSql for Digest {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok((&**self).into())
     }
 }
 impl FromSql for FileCoverage {
@@ -515,7 +525,7 @@ impl Store {
                 && o.inode == meta.ino()
                 && source_size >= o.size
                 && o.prefix_len <= prefix_len
-                && hash(&prefix[..o.prefix_len as usize]) == o.prefix_hash
+                && *hash(&prefix[..o.prefix_len as usize]) == o.prefix_hash
                 && (source_size > o.size || o.mtime == mtime)
         });
         let (mut offset, mut line, mut state, mut errors) = if let Some(o) = appended {
@@ -527,11 +537,7 @@ impl Store {
             )
         } else {
             let state = State {
-                session_id: path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned(),
+                session_id: Label::new(&path.file_stem().unwrap_or_default().to_string_lossy()),
                 session_kind_source: "none".into(),
                 ..State::default()
             };
@@ -600,7 +606,7 @@ impl Store {
             if let Some(v) = parsed {
                 let events = adapters::parse(agent, &v, &mut state);
                 let raw_hash = hash(&buffer);
-                let mut line_roles: Vec<String> = Vec::new();
+                let mut line_roles: Vec<Label> = Vec::new();
                 for (ordinal, event) in events.into_iter().enumerate() {
                     let line_role_first = !line_roles.contains(&event.role);
                     if line_role_first {
@@ -629,15 +635,20 @@ impl Store {
                     first_event.get_or_insert(event_id);
                     if let Some(request) = event.request {
                         let u = &request.usage;
-                        tx.prepare_cached("INSERT INTO usage_rows(event_id,file_id,ts,model,finished,selected,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h,reasoning) VALUES (?,?,?,?,?,1,?,?,?,?,?,?,?)")?.execute(params![event_id,file_id,event.ts,model,request.finished,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.reasoning])?;
+                        let route = request.route.as_ref();
+                        tx.prepare_cached("INSERT INTO usage_rows(event_id,file_id,ts,model,route,route_source,finished,stop_reason,selected,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h,reasoning) VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)")?.execute(params![event_id,file_id,event.ts,model,route.map(|r| &r.value),route.map(|r| r.source),request.finished,request.stop_reason,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.reasoning])?;
                         for (pass, p) in request.passes.iter().enumerate() {
                             let u = &p.usage;
                             tx.prepare_cached("INSERT INTO usage_passes(event_id,pass,kind,model,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h) VALUES (?,?,?,?,?,?,?,?,?,?)")?.execute(params![event_id,pass,p.kind,p.model,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h])?;
                         }
                     }
+                    if let Some(error) = event.error {
+                        let route = error.route.as_ref();
+                        tx.prepare_cached("INSERT INTO error_rows(event_id,model,source,status,code,retry_attempt,route,route_source) VALUES (?,?,?,?,?,?,?,?)")?.execute(params![event_id,state.model,error.source,error.status,error.code,error.retry_attempt,route.map(|r| &r.value),route.map(|r| r.source)])?;
+                    }
                     if let Some(c) = event.compaction {
                         let s = c.summary.as_ref();
-                        tx.prepare_cached("INSERT INTO compaction_rows(event_id,trigger,pre_tokens,post_tokens,summary_input,summary_output,summary_cache_read,summary_cache_write) VALUES (?,?,?,?,?,?,?,?)")?.execute(params![event_id,c.trigger,c.pre_tokens,c.post_tokens,s.map(|s| s.input),s.map(|s| s.output),s.and_then(|s| s.cache_read),s.and_then(|s| s.cache_write)])?;
+                        tx.prepare_cached("INSERT INTO compaction_rows(event_id,trigger,pre_tokens,post_tokens,summary_input,summary_output,summary_cache_read,summary_cache_write,request_native_id) VALUES (?,?,?,?,?,?,?,?,unhex(?))")?.execute(params![event_id,c.trigger,c.pre_tokens,c.post_tokens,s.map(|s| s.input),s.map(|s| s.output),s.and_then(|s| s.cache_read),s.and_then(|s| s.cache_write),c.request_id])?;
                     }
                     for (site, command) in event.sites.into_iter().enumerate() {
                         tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
@@ -672,8 +683,8 @@ impl Store {
             }
             offset += length;
         }
-        let identity_changed =
-            before.is_some_and(|(id, started)| id != state.session_id || started != state.first_ts);
+        let identity_changed = before
+            .is_some_and(|(id, started)| id != *state.session_id || started != state.first_ts);
         if identity_changed {
             mark_file(&tx, file_id)?;
         }

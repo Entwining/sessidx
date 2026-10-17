@@ -48,7 +48,7 @@ static TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Text that passed ingest redaction. Only this module constructs it, so
 /// stored text is never raw and output never redacts it a second time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Redacted(String);
 
 impl Redacted {
@@ -63,6 +63,26 @@ impl Redacted {
         Self(redact(raw))
     }
 
+    /// One command's argv, where a credential-named flag masks the element after it.
+    pub fn argv(raw: &[String]) -> Vec<Self> {
+        let mut out: Vec<Self> = Vec::with_capacity(raw.len());
+        for arg in raw {
+            let flag = out.last().and_then(|prev| {
+                prev.strip_prefix("--")
+                    .or_else(|| prev.strip_prefix('-'))
+                    .filter(|name| !name.contains('='))
+            });
+            out.push(Self(
+                if flag.is_some_and(|name| classify(name) == Name::Credential) {
+                    "[REDACTED]".into()
+                } else {
+                    redact(arg)
+                },
+            ));
+        }
+        out
+    }
+
     /// Cuts at a UTF-8 boundary at or below `limit` and reports whether anything was cut.
     pub fn truncate(&mut self, limit: usize) -> bool {
         let end = self.0.floor_char_boundary(limit);
@@ -73,6 +93,36 @@ impl Redacted {
 }
 
 impl Deref for Redacted {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A label or identity, such as a model, tool, or session ID, that passed
+/// credential patterns and named values but not the run verdict, which would
+/// erase the identifiers lookups filter and counts group by, so a secret
+/// disguised as a label survives. Only this module constructs it;
+/// deserializing reads back the `State` this parser version wrote. Rule:
+/// docs/formats.md `stored_strings`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Label(String);
+
+impl Label {
+    pub fn new(raw: &str) -> Self {
+        Self(redact_metadata(raw))
+    }
+
+    /// A value cut out of text stored as `Redacted`, kept only when full
+    /// redaction leaves it unchanged, so its column never holds what the
+    /// stored text lost. Rule: docs/formats.md `values_from_text`.
+    pub fn verbatim(raw: &str) -> Option<Self> {
+        let redacted = redact(raw);
+        (redacted == raw).then_some(Self(redacted))
+    }
+}
+
+impl Deref for Label {
     type Target = str;
     fn deref(&self) -> &str {
         &self.0
@@ -228,24 +278,6 @@ fn identifier_value(v: &mut Value) {
     }
 }
 
-/// One command's argv, where a credential-named flag masks the element after it.
-pub fn redact_argv(argv: &[String]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(argv.len());
-    for arg in argv {
-        let flag = out.last().and_then(|prev| {
-            prev.strip_prefix("--")
-                .or_else(|| prev.strip_prefix('-'))
-                .filter(|name| !name.contains('='))
-        });
-        if flag.is_some_and(|name| classify(name) == Name::Credential) {
-            out.push("[REDACTED]".into());
-        } else {
-            out.push(redact(arg));
-        }
-    }
-    out
-}
-
 /// Credential patterns and named values, then the verdict on each remaining run.
 pub fn redact(text: &str) -> String {
     redact_named(text, true)
@@ -253,7 +285,7 @@ pub fn redact(text: &str) -> String {
 
 /// Credential patterns and named values only, for labels and identities that
 /// the run verdict must not touch.
-pub fn redact_metadata(text: &str) -> String {
+fn redact_metadata(text: &str) -> String {
     redact_named(text, false)
 }
 

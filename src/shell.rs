@@ -1,3 +1,4 @@
+use crate::redaction::{Label, Redacted};
 use brush_parser::{
     ast::*,
     word::{WordPiece, WordPieceWithSource},
@@ -5,8 +6,8 @@ use brush_parser::{
 
 #[derive(Clone, Debug)]
 pub struct Site {
-    pub program: Option<String>,
-    pub argv: Vec<String>,
+    pub program: Option<Label>,
+    pub argv: Vec<Redacted>,
     pub parsed: bool,
 }
 
@@ -136,14 +137,12 @@ fn walk_command(c: &Command, out: &mut Vec<Site>, depth: usize) -> Result<(), ()
             if let Some(first) = argv.first() {
                 let literal = first.chars().all(|c| !matches!(c, '$' | '`'));
                 let name = brush_parser::unquote_str(first);
-                let program = if literal {
-                    Some(name.rsplit('/').next().unwrap_or(&name).into())
-                } else {
-                    None
-                };
+                let program = literal
+                    .then(|| name.rsplit_once('/').map_or(&*name, |(_, base)| base))
+                    .and_then(Label::verbatim);
                 out.push(Site {
                     program,
-                    argv,
+                    argv: Redacted::argv(&argv),
                     parsed: true,
                 });
             }

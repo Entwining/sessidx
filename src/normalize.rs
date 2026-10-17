@@ -1,17 +1,39 @@
 use crate::{
     model::Agent,
-    redaction::{Redacted, is_run_char},
+    redaction::{Label, Redacted, is_run_char},
 };
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
 
-pub fn hash(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+/// The lowercase hexadecimal SHA-256 of raw bytes.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Digest(String);
+
+impl std::ops::Deref for Digest {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+pub fn hash(bytes: &[u8]) -> Digest {
+    Digest(hex::encode(Sha256::digest(bytes)))
+}
+
+/// The digest of a native ID, which the index stores instead of the ID.
+pub fn native_id(v: &Value, key: &str) -> Option<Digest> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(|id| hash(id.as_bytes()))
 }
 
 pub fn string(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_owned)
+}
+
+pub fn label(v: &Value, key: &str) -> Option<Label> {
+    v.get(key).and_then(Value::as_str).map(Label::new)
 }
 
 pub fn timestamp(v: &Value) -> Option<String> {

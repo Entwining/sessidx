@@ -2,10 +2,7 @@ mod claude;
 mod codex;
 mod pi;
 
-use crate::{
-    model::{Agent, Event, EventKind, State},
-    redaction::{redact, redact_argv, redact_metadata},
-};
+use crate::model::{Agent, Event, EventKind, State};
 use serde_json::Value;
 
 pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Vec<Event> {
@@ -24,25 +21,7 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Vec<Event> {
     if events.is_empty() {
         events.push(Event::context(v));
     }
-    state.session_id = redact_metadata(&state.session_id);
-    state.cwd = redact_metadata(&state.cwd);
-    state.model = state.model.as_deref().map(redact_metadata);
-    state.parent_id = state.parent_id.as_deref().map(redact_metadata);
     for e in &mut events {
-        e.native_id = e
-            .native_id
-            .as_deref()
-            .map(|id| crate::normalize::hash(id.as_bytes()));
-        e.model = e.model.as_deref().map(redact_metadata);
-        for pass in e.request.iter_mut().flat_map(|r| &mut r.passes) {
-            pass.kind = redact_metadata(&pass.kind);
-            pass.model = pass.model.as_deref().map(redact_metadata);
-        }
-        e.tool = e.tool.as_deref().map(redact_metadata);
-        e.call_id = e
-            .call_id
-            .as_deref()
-            .map(|id| crate::normalize::hash(id.as_bytes()));
         if let Some(command) = &e.command {
             e.sites = crate::shell::sites(command);
         } else if e.kind == EventKind::ToolCall
@@ -56,11 +35,6 @@ pub fn parse(agent: Agent, v: &Value, state: &mut State) -> Vec<Event> {
                 parsed: false,
             }];
         }
-        for site in &mut e.sites {
-            site.program = site.program.as_deref().map(redact_metadata);
-            site.argv = redact_argv(&site.argv);
-        }
-        e.role = redact(&e.role);
     }
     events
 }

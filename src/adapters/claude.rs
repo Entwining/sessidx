@@ -1,9 +1,10 @@
 use crate::{
     model::{
-        Agent, Compaction, Denial, Event, EventKind, Pass, Request, SessionKind, State, Usage,
+        Agent, Compaction, Denial, Event, EventKind, Pass, Request, RequestError, Route,
+        SessionKind, State, Usage,
     },
-    normalize::{arguments, message_text, shell, string, timestamp},
-    redaction::Redacted,
+    normalize::{arguments, label, message_text, native_id, shell, timestamp},
+    redaction::{Label, Redacted},
 };
 use serde_json::Value;
 
@@ -11,29 +12,31 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
     // A subagent's records carry its agentId; a main transcript is named after
     // its session ID, which the indexer already holds. Until the first such
     // record, a resumed transcript holds history copied from another session.
+    let agent_id = label(v, "agentId");
+    let session_id = label(v, "sessionId");
     if !s.identified {
-        if let Some(agent_id) = string(v, "agentId") {
-            s.session_id = agent_id;
+        if let Some(agent_id) = &agent_id {
+            s.session_id = agent_id.clone();
             s.session_kind = SessionKind::Subagent;
             s.session_kind_source = "agentId".into();
             s.identified = true;
-        } else if string(v, "sessionId").as_deref() == Some(s.session_id.as_str()) {
+        } else if session_id.as_ref() == Some(&s.session_id) {
             s.identified = true;
         }
     }
     // A subagent's records carry its parent's session ID, though its first
     // record can omit it.
     if s.session_kind == SessionKind::Subagent && s.parent_id.is_none() {
-        s.parent_id = string(v, "sessionId");
+        s.parent_id = session_id.clone();
     }
     // A main transcript's own records carry its session ID and no agent's ID.
     let own = match s.session_kind {
-        SessionKind::Subagent => string(v, "agentId"),
+        SessionKind::Subagent => agent_id,
         SessionKind::Main | SessionKind::Unknown => {
-            string(v, "sessionId").filter(|_| v.get("agentId").is_none())
+            session_id.filter(|_| v.get("agentId").is_none())
         }
     };
-    if own.as_deref() == Some(s.session_id.as_str()) {
+    if own.as_ref() == Some(&s.session_id) {
         if s.session_kind == SessionKind::Unknown
             && let Some(sidechain) = v.get("isSidechain").and_then(Value::as_bool)
         {
@@ -45,7 +48,7 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
             s.session_kind_source = "isSidechain".into();
         }
         if s.cwd.is_empty()
-            && let Some(cwd) = string(v, "cwd")
+            && let Some(cwd) = label(v, "cwd")
         {
             s.cwd = cwd;
         }
@@ -80,7 +83,7 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
         if !messages.is_empty() {
             let mut e = Event::new("tool", EventKind::ToolOutput, "attachment.type");
             crate::normalize::output_prefix(&mut e, &Value::Array(messages));
-            e.native_id = string(v, "uuid");
+            e.native_id = native_id(v, "uuid");
             e.ts = timestamp(v);
             return vec![e];
         }
@@ -98,6 +101,22 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
             pre_tokens: metadata["preTokens"].as_i64(),
             post_tokens: metadata["postTokens"].as_i64(),
             summary: None,
+            request_id: None,
+        });
+        return vec![e];
+    }
+    // An attempt Claude Code retries: tests/fixtures/usage-claude.jsonl.
+    if typ == "system" && v["subtype"] == "api_error" {
+        let mut e = Event::context(v);
+        e.error = Some(RequestError {
+            source: "api_error",
+            status: v.pointer("/error/status").and_then(Value::as_i64),
+            code: v
+                .pointer("/error/cause/code")
+                .and_then(Value::as_str)
+                .map(Label::new),
+            retry_attempt: v["retryAttempt"].as_i64(),
+            route: id_route(v.pointer("/error/requestId"), "error.requestId"),
         });
         return vec![e];
     }
@@ -106,8 +125,9 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
     }
     let m = &v["message"];
     // Claude model fields and synthetic errors: tests/fixtures/claude.jsonl.
-    if let Some(model) = string(m, "model").filter(|m| m != "<synthetic>") {
-        s.model = Some(model);
+    let model = label(m, "model");
+    if let Some(model) = model.as_ref().filter(|m| &***m != "<synthetic>") {
+        s.model = Some(model.clone());
         s.model_source = "message.model".into();
     }
     let role = m.get("role").and_then(Value::as_str).unwrap_or(typ);
@@ -134,17 +154,19 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
         e.kind_source = "root.type,message.content";
         e.text = Some(Redacted::new(&message_text(content)));
         e.native_id = if typ == "assistant" {
-            string(m, "id").map(|id| format!("message:{id}"))
+            native_id(m, "id")
         } else {
             None
         }
-        .or_else(|| string(v, "uuid"));
-        e.model = string(m, "model");
+        .or_else(|| native_id(v, "uuid"));
+        e.model = model.clone();
         e.ts = timestamp(v);
-        // Claude request usage: tests/fixtures/usage-claude.jsonl.
+        // Claude request usage and failures: tests/fixtures/usage-claude.jsonl.
         if e.model.as_deref() != Some("<synthetic>") {
             e.request = usage(&m["usage"]).map(|top| Request {
                 finished: !m["stop_reason"].is_null(),
+                stop_reason: label(m, "stop_reason"),
+                route: id_route(m.get("id"), "message.id"),
                 usage: top,
                 // One pass is the request itself; a pass list that does not
                 // parse whole is not partly counted.
@@ -157,8 +179,8 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
                             .iter()
                             .map(|p| {
                                 Some(Pass {
-                                    kind: string(p, "type")?,
-                                    model: string(p, "model").or_else(|| string(m, "model")),
+                                    kind: label(p, "type")?,
+                                    model: label(p, "model").or_else(|| model.clone()),
                                     usage: usage(p)?,
                                 })
                             })
@@ -166,11 +188,19 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
                     })
                     .unwrap_or_default(),
             });
+        } else if v["isApiErrorMessage"] == true {
+            e.error = Some(RequestError {
+                source: "api_error_message",
+                status: v["apiErrorStatus"].as_i64(),
+                code: label(v, "error"),
+                retry_attempt: None,
+                route: id_route(v.get("requestId"), "requestId"),
+            });
         }
         events.push(e);
     }
     if let Some(blocks) = content.as_array() {
-        for (i, b) in blocks.iter().enumerate() {
+        for b in blocks {
             let bt = b["type"].as_str().unwrap_or("");
             let mut e = match bt {
                 "tool_use" | "server_tool_use" => {
@@ -180,8 +210,8 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
                         e.role_source = "content.server_tool_use";
                         e.kind_source = e.role_source;
                     }
-                    e.tool = string(b, "name");
-                    e.call_id = string(b, "id");
+                    e.tool = label(b, "name");
+                    e.call_id = native_id(b, "id");
                     let args = arguments(&b["input"]);
                     e.command = e.tool.as_deref().and_then(|t| shell(t, &args));
                     e.text = Some(Redacted::new(&args.to_string()));
@@ -194,7 +224,7 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
                         e.role_source = "content.advisor_tool_result";
                         e.kind_source = e.role_source;
                     }
-                    e.call_id = string(b, "tool_use_id");
+                    e.call_id = native_id(b, "tool_use_id");
                     e.ok = b.get("is_error").and_then(Value::as_bool).map(|v| !v);
                     if e.ok.is_some() {
                         e.ok_source = "flag";
@@ -236,17 +266,24 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
                 }
                 _ => continue,
             };
-            e.native_id = e
-                .call_id
-                .as_ref()
-                .map(|id| format!("{}:{id}", e.kind.as_str()))
-                .or_else(|| string(v, "uuid").map(|id| format!("{id}:{i}")));
-            e.model = string(m, "model");
+            e.native_id = e.call_id.clone();
+            e.model = model.clone();
             e.ts = timestamp(v);
             events.push(e);
         }
     }
     events
+}
+
+/// The route an Anthropic message or request ID states by its prefix, the
+/// part before the last `_`, as `msg_vrtx` in `msg_vrtx_01…`. Rule:
+/// docs/formats.md `request_route`.
+fn id_route(id: Option<&Value>, source: &'static str) -> Option<Route> {
+    let (prefix, _) = id?.as_str()?.rsplit_once('_')?;
+    Some(Route {
+        value: Label::new(prefix),
+        source,
+    })
 }
 
 /// The tokens a Claude `usage` object or one of its iterations states. Rule:

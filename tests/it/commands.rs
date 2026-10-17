@@ -29,7 +29,11 @@ fn suffix_assignments_stay_in_argv_and_prefix_assignments_do_not() {
         );
         let sites: Vec<_> = events.iter().flat_map(|e| &e.sites).collect();
         assert_eq!(sites.len(), 1, "{command}");
-        assert_eq!(sites[0].argv, expected, "{command}");
+        assert_eq!(
+            sites[0].argv.iter().map(|a| &**a).collect::<Vec<_>>(),
+            expected,
+            "{command}"
+        );
     }
 }
 
@@ -91,11 +95,33 @@ fn codex_code_mode_literals_decode_exactly_and_other_sites_stay_unparsed() {
             let expected: Vec<Vec<String>> =
                 serde_json::from_value(serde_json::Value::Array(argv.clone())).unwrap();
             assert_eq!(
-                sites.iter().map(|s| s.argv.clone()).collect::<Vec<_>>(),
+                sites
+                    .iter()
+                    .map(|s| s.argv.iter().map(|a| a.to_string()).collect())
+                    .collect::<Vec<Vec<String>>>(),
                 expected,
                 "{}",
                 f["name"]
             );
         }
+    }
+}
+
+#[test]
+fn a_program_is_kept_only_when_full_redaction_leaves_it_unchanged() {
+    let random = "zQ8vN2rK7xP4mT9aF6wH3cS5";
+    for (command, program) in [
+        (format!("./bin/{random} x"), None),
+        (format!("./node_modules/.bin/{random}/tool x"), Some("tool")),
+    ] {
+        let r = adapters::parse(
+            Agent::Claude,
+            &serde_json::json!({"type":"assistant","uuid":"u","sessionId":"s","message":{"role":"assistant","content":[{"type":"tool_use","id":"c","name":"Bash","input":{"command":command}}]}}),
+            &mut State::default(),
+        );
+        let site = r.iter().flat_map(|e| &e.sites).next().unwrap();
+        assert!(site.parsed, "{command}");
+        assert_eq!(site.program.as_deref(), program, "{command}");
+        assert!(site.argv[0].contains("[REDACTED]"), "{command}");
     }
 }

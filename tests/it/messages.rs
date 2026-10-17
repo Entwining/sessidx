@@ -152,7 +152,7 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
     for h in [Agent::Claude, Agent::Codex, Agent::Pi] {
         // The indexer seeds a Claude transcript's identity from its file name.
         let mut s = State {
-            session_id: "delegated".into(),
+            session_id: sessidx::redaction::Label::new("delegated"),
             ..State::default()
         };
         let es: Vec<_> = fixtures[name(h)]
@@ -180,13 +180,13 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             );
             assert!(
                 es.iter()
-                    .filter(|e| e.role == "user")
+                    .filter(|e| &*e.role == "user")
                     .all(|e| e.denials.is_empty())
             );
         } else if h == Agent::Codex {
             assert_eq!(
                 usize::from(
-                    s.session_id == "child-thread"
+                    &*s.session_id == "child-thread"
                         && s.parent_id.as_deref() == Some("parent-thread")
                 ),
                 1
@@ -201,7 +201,7 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
                     .as_str()
                 )
             );
-            assert_eq!(es.iter().filter(|e| e.role == "assistant").count(), 2);
+            assert_eq!(es.iter().filter(|e| &*e.role == "assistant").count(), 2);
         } else {
             assert_eq!(usize::from(s.parent_id.as_deref() == Some("pi-parent")), 1);
             assert_eq!(
@@ -279,4 +279,74 @@ fn inherited_models_change_retrospective_group_counts() {
             .unwrap();
         assert_eq!(n, 1, "{agent:?}");
     }
+}
+
+#[test]
+fn a_copied_codex_call_counts_once_and_distinct_pi_calls_sharing_a_short_id_do_not_merge() {
+    let call = r#"{"timestamp":"2026-10-01T00:00:00Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"call_copied","arguments":"{\"cmd\":\"ls\"}"}}"#;
+    let output = r#"{"timestamp":"2026-10-01T00:00:01Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_copied","output":"ok"}}"#;
+    let rollout = |id: &str| {
+        format!(
+            "{{\"timestamp\":\"2026-10-01T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"source\":\"cli\"}}}}\n{call}\n{output}\n"
+        )
+    };
+    let (_dir, codex, _) = indexed_files(
+        Agent::Codex,
+        &[
+            ("rollout-a", &rollout("thread-a")),
+            ("rollout-b", &rollout("thread-b")),
+        ],
+    );
+    // Pi writes parallel calls as blocks of one record.
+    let pi_calls = |record: &str, commands: &[&str]| {
+        let blocks: Vec<_> = commands
+            .iter()
+            .map(|c| serde_json::json!({"type":"toolCall","id":"abc123","name":"bash","arguments":{"command":c}}))
+            .collect();
+        serde_json::json!({"type":"message","id":record,"timestamp":"2026-10-01T00:00:00Z","message":{"role":"assistant","content":blocks}}).to_string() + "\n"
+    };
+    // A later call in the same session can reuse the ID, so each result
+    // answers the call before it.
+    let pi_result = |record: &str, failed: bool| {
+        serde_json::json!({"type":"message","id":record,"message":{"role":"toolResult","toolCallId":"abc123","toolName":"bash","isError":failed,"content":[]}}).to_string() + "\n"
+    };
+    let (_dir, pi, _) = indexed_files(
+        Agent::Pi,
+        &[
+            ("pi-a", &pi_calls("rec00001", &["ls"])),
+            ("pi-b", &pi_calls("rec00002", &["pwd", "date"])),
+            (
+                "pi-c",
+                &[
+                    pi_calls("rec00003", &["false"]),
+                    pi_result("rec00004", true),
+                    pi_calls("rec00005", &["true"]),
+                    pi_result("rec00006", false),
+                ]
+                .concat(),
+            ),
+        ],
+    );
+    let canonical = |store: &sessidx::store::Store, kind: &str| -> i64 {
+        store
+            .db
+            .query_row(
+                "SELECT count(*) FROM canonical_events WHERE kind=?",
+                [kind],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(canonical(&codex, "tool_call"), 1);
+    assert_eq!(canonical(&codex, "tool_result"), 1);
+    assert_eq!(canonical(&pi, "tool_call"), 5);
+    let outcomes: Vec<Option<i64>> = pi
+        .db
+        .prepare("SELECT ok FROM call_outcomes WHERE path LIKE '%pi-c%' ORDER BY line_no")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(outcomes, [Some(0), Some(1)]);
 }

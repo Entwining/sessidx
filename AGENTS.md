@@ -51,7 +51,7 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 
 ## Roadmap
 
-Next: nothing is scheduled. Codex rate-limit snapshots, route evidence with a `--by route` grouping, and request errors, left out of #58, wait for a count that needs them.
+Next: nothing is scheduled. Codex rate-limit snapshots and a `count usage --by route` grouping wait for a count that needs them.
 
 Later: refresh work that grows with the number of transcripts instead of with the change (`docs/design.md`), about 0.15 s warm on 9,380 transcripts; on 9,096 the directory walk alone was 101 ms warm and 285–292 ms cold. FSEvents history would let discovery follow changes, but dropped events need the walk as a fallback, a second discovery path; one scan of `files` instead of a lookup per transcript saves only about 23 ms. Neither is taken while the cost stays far inside the refresh budget.
 

@@ -47,23 +47,25 @@ fn claude_requests_take_their_final_record_and_list_passes() {
     let (_dir, store, _) = claude();
     // The finished record of `msg_a`, not its first nor the larger value of
     // each counter, and the last of `msg_e`, which no record finishes; the
-    // synthetic placeholder is no request.
+    // synthetic placeholder is no request. A message ID's prefix is its
+    // route, the Vertex one's included.
     assert_eq!(
         rows(
             &store,
-            "SELECT line_no,model,input,cache_read,cache_write,cache_write_5m,cache_write_1h,output,reasoning,finished FROM requests ORDER BY line_no"
+            "SELECT line_no,model,input,cache_read,cache_write,cache_write_5m,cache_write_1h,output,reasoning,finished,stop_reason,route,route_source FROM requests ORDER BY line_no"
         ),
         [
-            "3 claude-model 3 100 50 30 10 40 12 1",
-            "4 claude-model 5 10 0 - - 7 - 1",
-            "5 gateway/other-model 2 - - - - 3 - 1",
-            "10 claude-model 1 - - - - 6 - 0",
-            "11 claude-model 2 - - - - 4 - 1",
+            "3 claude-model 3 100 50 30 10 40 12 1 end_turn msg message.id",
+            "4 claude-model 5 10 0 - - 7 - 1 tool_use msg message.id",
+            "5 gateway/other-model 2 - - - - 3 - 1 end_turn gen message.id",
+            "10 claude-model 1 - - - - 6 - 0 - msg message.id",
+            "11 claude-model 2 - - - - 4 - 1 end_turn msg message.id",
+            "13 claude-model 1 - - - - 8 - 1 max_tokens msg_vrtx message.id",
         ]
     );
     assert_eq!(
         rows(&store, "SELECT count(*) FROM usage_rows"),
-        ["7"],
+        ["8"],
         "every record of a message keeps its usage row"
     );
     // A pass without a model is the executor's, and its tokens are its own,
@@ -72,16 +74,17 @@ fn claude_requests_take_their_final_record_and_list_passes() {
     assert_eq!(
         rows(
             &store,
-            "SELECT r.line_no,p.pass,p.kind,p.model,p.input,p.cache_read,p.cache_write,p.cache_write_5m,p.cache_write_1h,p.output,p.reasoning FROM request_passes p JOIN requests r ON r.id=p.request_id ORDER BY 1,2"
+            "SELECT r.line_no,p.pass,p.kind,p.model,p.input,p.cache_read,p.cache_write,p.cache_write_5m,p.cache_write_1h,p.output,p.reasoning,p.route FROM request_passes p JOIN requests r ON r.id=p.request_id ORDER BY 1,2"
         ),
         [
-            "3 0 - claude-model 3 100 50 30 10 40 12",
-            "4 0 message claude-model 4 10 6 4 2 5 -",
-            "4 1 advisor_message advisor-model 30 0 0 - - 9 -",
-            "4 2 message claude-model 1 0 0 - - 2 -",
-            "5 0 - gateway/other-model 2 - - - - 3 -",
-            "10 0 - claude-model 1 - - - - 6 -",
-            "11 0 - claude-model 2 - - - - 4 -",
+            "3 0 - claude-model 3 100 50 30 10 40 12 msg",
+            "4 0 message claude-model 4 10 6 4 2 5 - msg",
+            "4 1 advisor_message advisor-model 30 0 0 - - 9 - msg",
+            "4 2 message claude-model 1 0 0 - - 2 - msg",
+            "5 0 - gateway/other-model 2 - - - - 3 - gen",
+            "10 0 - claude-model 1 - - - - 6 - msg",
+            "11 0 - claude-model 2 - - - - 4 - msg",
+            "13 0 - claude-model 1 - - - - 8 - msg_vrtx",
         ]
     );
 }
@@ -94,17 +97,52 @@ fn codex_requests_come_from_records_or_moved_totals() {
     );
     // Moved running totals before the first record, then one request per
     // record; a repeated total, an empty one, and a total after the first
-    // record are not requests.
+    // record are not requests. A compaction's embedded record is one more
+    // record of its response, `resp-2`'s later one and `resp-3`'s only one.
+    // Each is sent to the provider the rollout's header names.
     assert_eq!(
         rows(
             &store,
-            "SELECT line_no,model,input,cache_read,cache_write,output,reasoning,native_id IS NOT NULL FROM requests ORDER BY line_no"
+            "SELECT line_no,model,input,cache_read,cache_write,output,reasoning,native_id IS NOT NULL,route,route_source FROM requests ORDER BY line_no"
         ),
         [
-            "4 gpt-model 60 20 - 20 5 0",
-            "6 gpt-model 10 30 - 10 0 0",
-            "7 gpt-model 90 100 10 30 10 1",
-            "9 gpt-model 50 250 0 5 0 1",
+            "4 gpt-model 60 20 - 20 5 0 synthetic-provider session_meta.model_provider",
+            "6 gpt-model 10 30 - 10 0 0 synthetic-provider session_meta.model_provider",
+            "7 gpt-model 90 100 10 30 10 1 synthetic-provider session_meta.model_provider",
+            "10 gpt-model 50 250 0 5 0 1 synthetic-provider session_meta.model_provider",
+            "12 gpt-model 30 40 - 6 2 1 synthetic-provider session_meta.model_provider",
+        ]
+    );
+    // A rollout that continues a compacted thread starts with the record its
+    // compaction embeds, and its next moved total is still a request; a
+    // header copied later names another rollout's provider.
+    let (_dir, store, _) = indexed_files(
+        Agent::Codex,
+        &[(
+            "usage-continued",
+            concat!(
+                r#"{"type":"session_meta","timestamp":"2026-10-06T00:00:00Z","payload":{"id":"codex-continued","source":"cli","model_provider":"synthetic-provider"}}"#,
+                "\n",
+                r#"{"type":"compacted","timestamp":"2026-10-06T00:00:01Z","payload":{"message":"synthetic summary","replacement_history":[],"compaction_response_id":"resp-c","latest_token_usage_record":{"response_id":"resp-c","usage":{"input_tokens":40,"cached_input_tokens":10,"output_tokens":4}}}}"#,
+                "\n",
+                r#"{"type":"session_meta","timestamp":"2026-10-06T00:00:02Z","payload":{"id":"codex-parent","source":"cli","model_provider":"other-provider"}}"#,
+                "\n",
+                r#"{"type":"event_msg","timestamp":"2026-10-06T00:00:03Z","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":60},"last_token_usage":{"input_tokens":50,"cached_input_tokens":0,"output_tokens":10}}}}"#,
+                "\n",
+                r#"{"type":"token_usage_record","timestamp":"2026-10-06T00:00:04Z","payload":{"response_id":"resp-d","usage":{"input_tokens":70,"cached_input_tokens":60,"output_tokens":3}}}"#,
+                "\n",
+            ),
+        )],
+    );
+    assert_eq!(
+        rows(
+            &store,
+            "SELECT line_no,input,cache_read,output,route FROM requests ORDER BY line_no"
+        ),
+        [
+            "2 30 10 4 synthetic-provider",
+            "4 50 0 10 synthetic-provider",
+            "5 10 60 3 synthetic-provider",
         ]
     );
 }
@@ -115,17 +153,19 @@ fn pi_entries_are_requests_and_cache_warm_is_not() {
         Agent::Pi,
         &[("usage-pi", include_str!("../fixtures/usage-pi.jsonl"))],
     );
-    // An errored attempt records zeros; reasoning above output is kept as
-    // stated.
+    // Errored and aborted attempts record zeros; reasoning above output is
+    // kept as stated. A route is the entry's own provider, not the model
+    // change's.
     assert_eq!(
         rows(
             &store,
-            "SELECT line_no,model,input,cache_read,cache_write,cache_write_5m,cache_write_1h,output,reasoning FROM requests ORDER BY line_no"
+            "SELECT line_no,model,input,cache_read,cache_write,cache_write_5m,cache_write_1h,output,reasoning,stop_reason,route,route_source FROM requests ORDER BY line_no"
         ),
         [
-            "3 pi-model 10 100 20 - 20 4 3",
-            "4 pi-model 0 0 0 - - 0 -",
-            "5 pi-model 1 0 0 - - 3 9",
+            "3 pi-model 10 100 20 - 20 4 3 toolUse synthetic-provider message.provider",
+            "4 pi-model 0 0 0 - - 0 - error synthetic-provider message.provider",
+            "5 pi-model 1 0 0 - - 3 9 stop - -",
+            "8 pi-model 0 0 0 - - 0 - aborted synthetic-provider message.provider",
         ]
     );
 }
@@ -168,19 +208,26 @@ fn compactions_count_once_with_their_trigger_and_sizes() {
             (
                 "usage-fork",
                 &format!(
-                    "{}\n{window}\n",
-                    r#"{"type":"session_meta","timestamp":"2026-10-06T00:00:00Z","payload":{"id":"codex-fork","source":"cli"}}"#
+                    "{}\n{window}\n{}\n",
+                    r#"{"type":"session_meta","timestamp":"2026-10-06T00:00:00Z","payload":{"id":"codex-fork","source":"cli"}}"#,
+                    r#"{"type":"compacted","timestamp":"2026-10-06T00:00:01Z","payload":{"message":"synthetic summary","replacement_history":[],"window_id":"window-2","compaction_response_id":"resp-1"}}"#
                 ),
             ),
         ],
     );
     // The window ID dedupes the copy; a compaction item is not another one.
+    // A compaction names the request that wrote it, recorded on its own line
+    // or in another rollout.
     assert_eq!(
         rows(
             &store,
-            "SELECT line_no,trigger,pre_tokens FROM compactions ORDER BY id"
+            "SELECT c.path LIKE '%fork%',c.line_no,c.trigger,c.pre_tokens,r.path LIKE '%fork%',r.line_no FROM compactions c LEFT JOIN requests r ON r.id=c.request_id ORDER BY c.id"
         ),
-        ["10 unknown -", "12 unknown -"]
+        [
+            "0 10 unknown - 0 10",
+            "0 12 unknown - 0 12",
+            "1 3 unknown - 0 7"
+        ]
     );
     let (_dir, store, _) = indexed_files(
         Agent::Pi,
@@ -364,4 +411,60 @@ fn usage_count_work_follows_its_records() {
     // session first takes more.
     let (_, whole) = work(Metric::Usage, &[], &Filters::default());
     assert!(whole < 200_000, "{whole} progress steps");
+}
+
+#[test]
+fn request_errors_are_the_records_that_state_a_failure() {
+    let claude = include_str!("../fixtures/usage-claude.jsonl");
+    // A resumed transcript copies an attempt it continues from.
+    let copied = claude
+        .lines()
+        .find(|l| l.contains("\"retryAttempt\":1"))
+        .unwrap()
+        .replace(
+            "\"sessionId\":\"usage-claude\"",
+            "\"sessionId\":\"usage-resumed\"",
+        )
+        + "\n";
+    let (_dir, store, _) = indexed_files(
+        Agent::Claude,
+        &[("usage-claude", claude), ("usage-resumed", &copied)],
+    );
+    // Attempts Claude Code retries and the failure it reports, under the
+    // session's model, counted by first copy; a synthetic reply that reports
+    // no failure is none.
+    assert_eq!(
+        rows(
+            &store,
+            "SELECT path LIKE '%resumed%',line_no,source,model,status,code,retry_attempt,route,route_source FROM request_errors ORDER BY id"
+        ),
+        [
+            "0 14 api_error claude-model 429 - 1 req_vrtx error.requestId",
+            "0 15 api_error claude-model - ECONNRESET 2 - -",
+            "0 16 api_error_message claude-model 429 rate_limit - req requestId",
+        ]
+    );
+    let (_dir, store, _) = indexed_files(
+        Agent::Pi,
+        &[("usage-pi", include_str!("../fixtures/usage-pi.jsonl"))],
+    );
+    // An entry that ended in an error, not one the user aborted; both
+    // entries' error messages join their text.
+    assert_eq!(
+        rows(
+            &store,
+            "SELECT line_no,source,model,status,code,retry_attempt,route,route_source FROM request_errors"
+        ),
+        ["4 stop_reason pi-model - - - synthetic-provider message.provider"]
+    );
+    assert_eq!(
+        rows(
+            &store,
+            "SELECT line_no,text FROM events WHERE kind='message' AND line_no IN (4,8) ORDER BY line_no"
+        ),
+        [
+            "4 synthetic reply\nsynthetic gateway failure",
+            "8 synthetic abort"
+        ]
+    );
 }
