@@ -18,7 +18,7 @@ todo = "warn"
 [dependencies]
 brush-parser = "=0.4.0"
 rusqlite = { version = "=0.40.2", features = ["bundled", "fallible_uint", "hooks"] }
-serde_json = { version = "=1.0.151", features = ["raw_value"] }
+serde_json = { version = "=1.0.154", features = ["raw_value"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 anyhow = "=1.0.104"
 regex = "=1.13.1"
