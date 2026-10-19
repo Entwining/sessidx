@@ -182,7 +182,7 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
 #[test]
 fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
     let (_dir, mut store, roots) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
-    let lock = store.lock().unwrap().unwrap();
+    let lock = store.lock(None).unwrap().unwrap();
     let busy = store
         .refresh(&roots, false, Some(Duration::from_secs(2)))
         .unwrap();

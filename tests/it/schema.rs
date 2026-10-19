@@ -140,7 +140,7 @@ fn previous_schema_requires_explicit_locked_rebuild() {
         path: root,
     }];
     let mut upgrade = Store::open_for_rebuild(&path).unwrap();
-    let lock = upgrade.lock().unwrap().unwrap();
+    let lock = upgrade.lock(None).unwrap().unwrap();
     let report = upgrade.refresh(&roots, true, None).unwrap();
     assert!(report.writer_busy && report.stale);
     assert_eq!(
@@ -214,7 +214,7 @@ fn initial_schema_creation_respects_the_writer_lock() {
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o700);
-    let lock = store.lock().unwrap().unwrap();
+    let lock = store.lock(None).unwrap().unwrap();
     let mut second = Store::open(&path).unwrap();
     let r = second.refresh(&[], false, None).unwrap();
     assert!(r.writer_busy && r.stale);

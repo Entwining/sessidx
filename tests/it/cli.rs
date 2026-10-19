@@ -205,28 +205,45 @@ fn a_closed_stdout_ends_quietly() {
 }
 
 #[test]
-fn cli_writer_contention_returns_stale_without_waiting() {
+fn cli_writer_contention_waits_within_the_refresh_budget() {
     let serial = serial();
     let (_dir, store, roots) = three_agents();
-    let _lock = store.lock().unwrap().unwrap();
+    let search = || {
+        sessidx(&serial, &store.path, &roots, &["search", "sharedneedle"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    // A writer that releases the lock within the budget delays the query
+    // instead of making it stale.
+    let lock = store.lock(None).unwrap().unwrap();
+    let child = search();
+    std::thread::sleep(Duration::from_millis(300));
+    drop(lock);
+    let rows = stream(&child.wait_with_output().unwrap(), 0);
+    let end = rows.last().unwrap();
+    assert_eq!(end["complete"], true);
+    assert_eq!(end["refresh"]["writer_busy"], false);
+    // A writer that holds it past the budget leaves the query stale once the
+    // budget is spent, and SQLite's own write lock does not block the read.
+    let _lock = store.lock(None).unwrap().unwrap();
     store.db.execute_batch("BEGIN IMMEDIATE;").unwrap();
     let start = Instant::now();
-    let mut child = sessidx(&serial, &store.path, &roots, &["search", "sharedneedle"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
+    let mut child = search();
+    while child.try_wait().unwrap().is_none() {
         if start.elapsed() > Duration::from_secs(5) {
             child.kill().unwrap();
             child.wait().unwrap();
-            panic!("query waited on the writer lock");
+            panic!("query waited on the writer lock past its budget");
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    let waited = start.elapsed();
+    assert!(
+        (Duration::from_secs(2)..Duration::from_secs(4)).contains(&waited),
+        "{waited:?}"
+    );
     let rows = stream(&child.wait_with_output().unwrap(), 0);
     let end = rows.last().unwrap();
     assert_eq!(end["stale"], true);
@@ -457,7 +474,7 @@ fn unmatched_session_selectors_fail_naming_the_selector() {
     }
     // A refresh that could not take the writer lock still leaves the selector
     // an error rather than an empty incomplete result.
-    let _lock = store.lock().unwrap().unwrap();
+    let _lock = store.lock(None).unwrap().unwrap();
     let rows = stream(
         &sessidx(&serial, &store.path, &roots, &["show", "claude-sess"])
             .output()
@@ -535,7 +552,7 @@ fn sql_reads_without_holding_the_writer_lock() {
     .spawn()
     .unwrap();
     std::thread::sleep(Duration::from_millis(500));
-    let lock = store.lock().unwrap();
+    let lock = store.lock(None).unwrap();
     assert!(child.try_wait().unwrap().is_none(), "sql ended early");
     assert!(lock.is_some(), "sql held the lock while reading");
     drop(lock);

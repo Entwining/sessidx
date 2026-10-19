@@ -25,7 +25,7 @@ Run an explicit index once, then retry, when:
 
 A full history takes several minutes, longer than many agents' default shell timeout, so give the command a timeout of at least ten minutes or run it in the background and wait for it to exit. An interrupted run keeps what it committed: queries then report `complete=false` with a `continuation`, and `sessidx index` finishes the rest.
 
-A `writer_busy` refresh means another process holds the index lock; the query still answers from committed data and reports `stale`. Your own commands contend for that lock too, so run `sessidx` commands one at a time: overlapping ones can come back stale and incomplete.
+A `writer_busy` refresh means another process, such as a running `sessidx index`, held the index lock for the whole two-second refresh; the query still answers from committed data and reports `stale`. Overlapping queries wait for one another within that time instead.
 
 ## Find a session
 

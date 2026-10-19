@@ -119,7 +119,10 @@ struct IndexedFile {
     coverage: FileCoverage,
 }
 impl WriterLock {
-    fn acquire(path: &Path, shared: bool) -> Result<Option<Self>> {
+    /// Takes the lock, retrying every 10 ms until `deadline` when one is
+    /// given, because `flock` has no timeout. Rule: docs/formats.md
+    /// `writer_lock_wait`.
+    fn acquire(path: &Path, shared: bool, deadline: Option<Instant>) -> Result<Option<Self>> {
         let f = OpenOptions::new()
             .read(true)
             .write(true)
@@ -127,14 +130,23 @@ impl WriterLock {
             .truncate(false)
             .mode(0o600)
             .open(path.with_extension("lock"))?;
-        match if shared {
-            f.try_lock_shared()
-        } else {
-            f.try_lock()
-        } {
-            Ok(()) => Ok(Some(Self { file: f })),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(e) => Err(e.into()),
+        loop {
+            match if shared {
+                f.try_lock_shared()
+            } else {
+                f.try_lock()
+            } {
+                Ok(()) => return Ok(Some(Self { file: f })),
+                Err(std::fs::TryLockError::WouldBlock) => {}
+                Err(e) => return Err(e.into()),
+            }
+            let Some(left) = deadline
+                .map(|d| d.saturating_duration_since(Instant::now()))
+                .filter(|left| !left.is_zero())
+            else {
+                return Ok(None);
+            };
+            std::thread::sleep(left.min(Duration::from_millis(10)));
         }
     }
 }
@@ -222,12 +234,12 @@ impl Store {
         })
     }
 
-    pub fn lock(&self) -> Result<Option<WriterLock>> {
-        WriterLock::acquire(&self.path, false)
+    pub fn lock(&self, deadline: Option<Instant>) -> Result<Option<WriterLock>> {
+        WriterLock::acquire(&self.path, false, deadline)
     }
 
     pub fn read_lock(path: &Path) -> Result<Option<WriterLock>> {
-        WriterLock::acquire(path, true)
+        WriterLock::acquire(path, true, None)
     }
 
     fn initialize(&mut self, _lock: &WriterLock, full: bool) -> Result<()> {
@@ -286,7 +298,7 @@ impl Store {
         budget: Option<Duration>,
     ) -> Result<Refresh> {
         let deadline = budget.map(|d| Instant::now() + d);
-        let Some(_lock) = self.lock()? else {
+        let Some(_lock) = self.lock(deadline)? else {
             return Ok(Refresh {
                 stale: true,
                 writer_busy: true,
