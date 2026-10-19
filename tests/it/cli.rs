@@ -1,5 +1,6 @@
-use crate::common::{serial, sessidx, shell, stream, three_agents};
+use crate::common::{indexed_files, serial, sessidx, shell, stream, three_agents};
 use serde_json::{Value, json};
+use sessidx::model::Agent;
 use std::{
     fs,
     process::Stdio,
@@ -374,9 +375,10 @@ fn cli_count_groupings_and_date_bounds_parse_at_the_boundary() {
 fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
     let serial = serial();
     let (_dir, store, roots) = three_agents();
+    let past_end = format!("{}:99", roots[0].path.display());
     for args in [
         vec!["grep", "absentneedle", "--agent", "claude"],
-        vec!["show", "absent-session"],
+        vec!["show", &past_end],
         vec!["count", "commands", "--agent", "pi"],
         vec!["sql", "SELECT 1 AS n WHERE 0"],
     ] {
@@ -396,6 +398,77 @@ fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
             );
         }
     }
+}
+
+#[test]
+fn unmatched_session_selectors_fail_naming_the_selector() {
+    let serial = serial();
+    let records: String = (0..2)
+        .map(|i| format!("{}\n", json!({"type":"user","uuid":format!("u-{i}"),"sessionId":"deleted-session","message":{"role":"user","content":"sharedneedle"}})))
+        .collect();
+    let (_dir, store, roots) = indexed_files(
+        Agent::Claude,
+        &[("claude-session", &records), ("deleted-session", &records)],
+    );
+    let deleted = roots[0].path.join("deleted-session.jsonl");
+    let deleted = deleted.to_str().unwrap();
+    let first = stream(
+        &sessidx(
+            &serial,
+            &store.path,
+            &roots,
+            &["show", deleted, "--limit", "1"],
+        )
+        .output()
+        .unwrap(),
+        0,
+    );
+    let cursor = first.last().unwrap()["next"].as_str().unwrap().to_owned();
+    fs::remove_file(deleted).unwrap();
+    let absent = roots[0].path.join("absent.jsonl");
+    let absent = absent.to_str().unwrap();
+    let absent_ref = format!("{absent}:1");
+    for (selector, args) in [
+        // A prefix of a session ID.
+        ("claude-sess", vec!["show", "claude-sess"]),
+        (
+            "claude-sess",
+            vec!["search", "sharedneedle", "--session", "claude-sess"],
+        ),
+        (absent, vec!["show", &absent_ref]),
+        (
+            deleted,
+            vec!["show", deleted, "--limit", "1", "--cursor", &cursor],
+        ),
+    ] {
+        let rows = stream(
+            &sessidx(&serial, &store.path, &roots, &args)
+                .output()
+                .unwrap(),
+            2,
+        );
+        let error = rows.last().unwrap()["error"].as_str().unwrap();
+        assert!(
+            error.contains(&format!("selector {selector} names no indexed transcript")),
+            "{args:?}: {error}"
+        );
+        assert!(error.contains("sessidx index finishes"), "{error}");
+        assert!(error.contains("sessidx search"), "{error}");
+    }
+    // A refresh that could not take the writer lock still leaves the selector
+    // an error rather than an empty incomplete result.
+    let _lock = store.lock().unwrap().unwrap();
+    let rows = stream(
+        &sessidx(&serial, &store.path, &roots, &["show", "claude-sess"])
+            .output()
+            .unwrap(),
+        2,
+    );
+    let error = rows.last().unwrap()["error"].as_str().unwrap();
+    assert!(
+        error.contains("selector claude-sess names no indexed transcript"),
+        "{error}"
+    );
 }
 
 #[test]

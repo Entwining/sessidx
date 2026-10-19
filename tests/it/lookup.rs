@@ -76,7 +76,7 @@ fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
         [5, 5, 1]
     );
     let path = "/synthetic/transcript-1.jsonl";
-    assert_eq!(query::session_file(&store.db, path).unwrap(), Some(1));
+    assert_eq!(query::session_file(&store.db, path).unwrap(), 1);
     assert!(
         store
             .db
@@ -116,7 +116,7 @@ fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
         steps.load(Ordering::Relaxed)
     };
     let (indexed_file, indexed_show) = (
-        work(&|| assert_eq!(query::session_file(&store.db, path).unwrap(), Some(1))),
+        work(&|| assert_eq!(query::session_file(&store.db, path).unwrap(), 1)),
         work(&|| {
             let (hits, _) = query::show(&store.db, path, 0, 10, None).unwrap();
             assert_eq!(hits.len(), 2);
@@ -124,7 +124,7 @@ fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
     );
     store.db.execute_batch("DROP INDEX sessions_path").unwrap();
     let (unindexed_file, unindexed_show) = (
-        work(&|| assert_eq!(query::session_file(&store.db, path).unwrap(), Some(1))),
+        work(&|| assert_eq!(query::session_file(&store.db, path).unwrap(), 1)),
         work(&|| {
             let (hits, _) = query::show(&store.db, path, 0, 10, None).unwrap();
             assert_eq!(hits.len(), 2);

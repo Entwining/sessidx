@@ -49,7 +49,7 @@ pub struct Filters {
     /// Only sessions whose working directory is DIR or below it
     #[arg(long, value_name = "DIR")]
     pub cwd: Option<String>,
-    /// Only this session, by native ID or transcript path
+    /// Only this session, by its whole native ID, transcript path, or codex://threads/ID link
     #[arg(long, value_name = "ID|PATH")]
     pub session: Option<String>,
     #[arg(skip)]
@@ -128,13 +128,8 @@ impl Filters {
             args.push(Value::Text(name(kind)));
         }
         if let Some(session) = &self.session {
-            match session_file(db, session)? {
-                Some(file_id) => {
-                    conditions.push("s.file_id=?".into());
-                    args.push(Value::Integer(file_id));
-                }
-                None => conditions.push("0".into()),
-            }
+            conditions.push("s.file_id=?".into());
+            args.push(Value::Integer(session_file(db, session)?));
         }
         if let Some(cwd) = &self.cwd {
             conditions.push("(s.cwd=? OR substr(s.cwd,1,length(?)+1)=?||'/')".into());
@@ -149,7 +144,7 @@ impl Filters {
 /// The transcript a session selector names. Claude subagent IDs are unique
 /// only within their parent session, so an ID shared by several transcripts is
 /// refused with their paths rather than merged.
-pub fn session_file(db: &Connection, selector: &str) -> Result<Option<i64>> {
+pub fn session_file(db: &Connection, selector: &str) -> Result<i64> {
     let id = selector
         .strip_prefix("codex://threads/")
         .unwrap_or(selector);
@@ -160,8 +155,8 @@ pub fn session_file(db: &Connection, selector: &str) -> Result<Option<i64>> {
         .query_map([id, selector], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
     match matches.as_slice() {
-        [] => Ok(None),
-        [(file_id, _)] => Ok(Some(*file_id)),
+        [] => Err(unmatched(selector)),
+        [(file_id, _)] => Ok(*file_id),
         _ => anyhow::bail!(
             "session ID {} names {} transcripts; pass one of their paths: {}",
             selector,
@@ -173,6 +168,15 @@ pub fn session_file(db: &Connection, selector: &str) -> Result<Option<i64>> {
                 .join(", ")
         ),
     }
+}
+
+/// A selector that names no transcript fails rather than selecting nothing,
+/// because an empty complete result reads as absence. Rule: docs/formats.md
+/// `unmatched_selector`.
+fn unmatched(selector: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "session selector {selector} names no indexed transcript; a selector is a whole session ID, transcript path, or codex://threads/ link, not a prefix; its transcript may not be indexed yet, which sessidx index finishes, or may have been deleted; find an indexed session's ID with sessidx search or sessidx sql"
+    )
 }
 
 fn date(s: &str) -> Result<DateTime<Utc>> {
@@ -772,16 +776,13 @@ pub fn show_snapshot(
             let file = db
                 .prepare_cached("SELECT file_id FROM sessions WHERE path=?")?
                 .query_row([path], |r| r.get::<_, i64>(0))
-                .optional()?;
+                .optional()?
+                .ok_or_else(|| unmatched(path))?;
             let first = line.saturating_sub(around as u64).max(1);
             let last = line.saturating_add(around as u64).min(i64::MAX as u64);
             (file, (first as i64, last as i64))
         }
         None => (session_file(db, target)?, (1, i64::MAX)),
-    };
-    let Some(file) = file else {
-        anyhow::ensure!(after.is_none(), CURSOR_MISMATCH);
-        return Ok((Vec::new(), Coverage::default()));
     };
     let (line, ordinal) = match after {
         Some((after_file, line, ordinal)) => {
