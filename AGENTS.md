@@ -53,7 +53,7 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 
 Next: nothing is scheduled. Codex rate-limit snapshots and a `count usage --by route` grouping wait for a count that needs them.
 
-Later: refresh work that grows with the number of transcripts instead of with the change (`docs/design.md`), about 0.15 s warm on 9,380 transcripts; on 9,096 the directory walk alone was 101 ms warm and 285–292 ms cold. FSEvents history would let discovery follow changes, but dropped events need the walk as a fallback, a second discovery path; one scan of `files` instead of a lookup per transcript saves only about 23 ms. Neither is taken while the cost stays far inside the refresh budget.
+Later: refresh work that grows with the number of transcripts instead of with the change, whose measured cost `docs/design.md` gives. FSEvents history would let discovery follow changes, but dropped events need the walk as a fallback, a second discovery path; one scan of `files` instead of a lookup per transcript saved only about 23 ms on 9,096 transcripts. Neither is taken while the cost stays far inside the refresh budget.
 
 Not planned: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, cost accounting, Claude and Pi loaded-instruction attribution, and Pi branch reconstruction.
 
