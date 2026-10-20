@@ -53,7 +53,7 @@ Each of these was argued and measured; reopen one only with new evidence, not on
 
 Next: nothing is scheduled. Codex rate-limit snapshots and a `count usage --by route` grouping wait for a count that needs them.
 
-Later: refresh work that grows with the number of transcripts instead of with the change (`docs/design.md`), about 0.15 s warm on 9,380 transcripts; on 9,096 the directory walk alone was 101 ms warm and 285–292 ms cold. FSEvents history would let discovery follow changes, but dropped events need the walk as a fallback, a second discovery path; one scan of `files` instead of a lookup per transcript saves only about 23 ms. Neither is taken while the cost stays far inside the refresh budget.
+Later: cheaper refreshes when nothing changed. Every refresh walks all the session roots and checks each transcript, so it gets slower as history grows, even when nothing is new; `docs/design.md` has the figures from both machines. Pick this up once the `warm` p50 of `count` or `show` in a `measure` run passes 0.5 s on either machine, a quarter of the two-second budget. Until then, neither of the two ideas so far pays for itself. FSEvents history could tell discovery what changed, but macOS can drop events, so the walk would have to stay as a fallback, leaving two discovery paths to maintain. Reading `files` in one scan instead of looking up each transcript saves only about 23 ms on the M4 Mac mini at 9,096 transcripts.
 
 Not planned: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, cost accounting, Claude and Pi loaded-instruction attribution, and Pi branch reconstruction.
 
