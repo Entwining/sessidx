@@ -12,7 +12,7 @@ use rusqlite::{
     types::{Value, ValueRef},
 };
 use serde_json::{Value as Json, json};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub enum Metric {
@@ -437,7 +437,7 @@ pub fn doctor(db: &Connection) -> Result<Json> {
 
 pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
     db.execute_batch("PRAGMA query_only=ON;")?;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + crate::BUDGET;
     db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
     let result = (|| {
         let mut batch = rusqlite::Batch::new(db, sql);

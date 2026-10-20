@@ -179,7 +179,8 @@ fn unmatched(selector: &str) -> anyhow::Error {
     )
 }
 
-fn date(s: &str) -> Result<DateTime<Utc>> {
+/// Parses `--since` and `--until`: RFC 3339, or a UTC date.
+pub fn date(s: &str) -> Result<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
     }

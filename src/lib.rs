@@ -1,5 +1,8 @@
 #![warn(clippy::unwrap_used)]
 
+/// What a query may spend refreshing the index, and then answering (`docs/cli.md`).
+pub const BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub mod adapters;
 mod code_mode;
 pub mod counting;

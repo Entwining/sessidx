@@ -281,7 +281,7 @@ fn run(cli: Cli) -> Result<i32> {
 /// snapshot (a transaction on the store) so all records and cursor fingerprints agree.
 fn refreshed(path: &Path, roots: &[Root]) -> Result<(Store, Refresh)> {
     let mut store = Store::open(path)?;
-    let refresh = store.refresh(roots, false, Some(Duration::from_secs(2)))?;
+    let refresh = store.refresh(roots, false, Some(sessidx::BUDGET))?;
     Ok((store, refresh))
 }
 
@@ -315,7 +315,7 @@ fn search(
         .as_ref()
         .map(|order| order.iter().skip(offset).copied().collect());
     filters.search_order = remaining.clone();
-    let found = query::search(&db, query, &filters, page.limit, Duration::from_secs(2))?;
+    let found = query::search(&db, query, &filters, page.limit, sessidx::BUDGET)?;
     if snapshot.search_order.is_none() {
         snapshot.search_order = found.order;
         snapshot.search_matched = found.matched_sessions;
@@ -393,7 +393,7 @@ fn grep(
         &filters,
         page.limit,
         snapshot.after,
-        Duration::from_secs(2),
+        sessidx::BUDGET,
     )?;
     for hit in &hits {
         emit("hit", serde_json::to_value(hit)?)?;
