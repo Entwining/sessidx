@@ -1,3 +1,8 @@
+#![allow(
+    clippy::too_many_lines,
+    reason = "a scenario test reads as one fixture, its calls, and its assertions"
+)]
+
 mod adapters;
 mod cli;
 mod commands;

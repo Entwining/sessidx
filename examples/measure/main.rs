@@ -140,16 +140,7 @@ fn main() -> Result<()> {
     let transcript = synthetic.join("measure.jsonl");
     let mut appended = 0;
     append(&transcript, &mut appended, 1)?;
-    let mut roots = if args.roots.is_empty() {
-        let home = std::env::home_dir().context("home directory unknown")?;
-        sessidx::discovery::defaults(&home)
-            .into_iter()
-            .map(|r| format!("{}={}", sessidx::model::name(r.agent), r.path.display()))
-            .collect()
-    } else {
-        args.roots.clone()
-    };
-    roots.push(format!("claude={}", synthetic.display()));
+    let roots = roots(&args.roots, &synthetic)?;
 
     let mut binaries = vec![Binary {
         name: "candidate",
@@ -164,30 +155,7 @@ fn main() -> Result<()> {
         });
     }
     let started = Instant::now();
-    let mut identities = serde_json::Map::new();
-    for b in &binaries {
-        identities.insert(
-            b.name.into(),
-            json!({
-                "version": output(&b.path, &["--version"])?,
-                "sha256": hex::encode(Sha256::digest(fs::read(&b.path)?)),
-            }),
-        );
-    }
-    emit(json!({
-        "type": "header",
-        "date": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        "commit": output("git", &["rev-parse", "HEAD"])?,
-        "binaries": identities,
-        "chip": output("sysctl", &["-n", "machdep.cpu.brand_string"])?,
-        "cores": output("sysctl", &["-n", "hw.ncpu"])?.parse::<u32>()?,
-        "memory_bytes": output("sysctl", &["-n", "hw.memsize"])?.parse::<u64>()?,
-        "load_1m": load()?,
-        "since": args.since,
-        "until": args.until,
-        "runs": args.runs,
-        "appended_per_pair": APPENDED,
-    }));
+    emit(header(&args, &binaries)?);
 
     for b in &binaries {
         emit(build(b, &roots)?);
@@ -262,6 +230,48 @@ fn main() -> Result<()> {
         "seconds": started.elapsed().as_secs_f64(),
     }));
     Ok(())
+}
+
+/// The session roots to index, given or the defaults, and the synthetic one.
+fn roots(given: &[String], synthetic: &Path) -> Result<Vec<String>> {
+    let mut roots = if given.is_empty() {
+        let home = std::env::home_dir().context("home directory unknown")?;
+        sessidx::discovery::defaults(&home)
+            .into_iter()
+            .map(|r| format!("{}={}", sessidx::model::name(r.agent), r.path.display()))
+            .collect()
+    } else {
+        given.to_vec()
+    };
+    roots.push(format!("claude={}", synthetic.display()));
+    Ok(roots)
+}
+
+fn header(args: &Args, binaries: &[Binary]) -> Result<Value> {
+    let mut identities = serde_json::Map::new();
+    for b in binaries {
+        identities.insert(
+            b.name.into(),
+            json!({
+                "version": output(&b.path, &["--version"])?,
+                "sha256": hex::encode(Sha256::digest(fs::read(&b.path)?)),
+            }),
+        );
+    }
+    Ok(json!({
+        "type": "header",
+        "date": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "commit": output("git", &["rev-parse", "HEAD"])?,
+        "binaries": identities,
+        "chip": output("sysctl", &["-n", "machdep.cpu.brand_string"])?,
+        "cores": output("sysctl", &["-n", "hw.ncpu"])?.parse::<u32>()?,
+        "memory_bytes": output("sysctl", &["-n", "hw.memsize"])?.parse::<u64>()?,
+        "load_1m": load()?,
+        "since": args.since,
+        "until": args.until,
+        "runs": args.runs,
+        "appended_per_pair": APPENDED,
+    }))
 }
 
 #[expect(

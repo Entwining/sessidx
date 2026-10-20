@@ -291,6 +291,10 @@ impl Store {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one writer lock and one deadline cover its steps, in the order docs/formats.md `refresh_budget` gives them"
+    )]
     pub fn refresh(
         &mut self,
         roots: &[Root],
@@ -455,6 +459,10 @@ impl Store {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one transaction indexes a file's new records, from the checks that reuse its rows to `settle`"
+    )]
     fn index_file(
         &mut self,
         agent: Agent,

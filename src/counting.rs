@@ -87,6 +87,10 @@ pub fn check(metric: Metric, by: &[By], program: Option<&str>, filters: &Filters
 /// `daily_program_counts` too, for the whole UTC days inside the window, and
 /// from the events themselves for the part of a day at either edge. Rule:
 /// docs/formats.md `daily_counts`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "it builds one statement whose columns, rollups, and edge days must agree (docs/formats.md `daily_counts`)"
+)]
 pub fn count(
     db: &Connection,
     metric: Metric,

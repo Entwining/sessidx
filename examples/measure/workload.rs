@@ -141,6 +141,10 @@ fn literal(pieces: &[brush_parser::word::WordPieceWithSource], quoted: bool) -> 
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "a scenario test reads as one fixture, its calls, and its assertions"
+)]
 mod tests {
     use super::*;
     use serde_json::{Value, json};

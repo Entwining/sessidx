@@ -626,6 +626,10 @@ fn display_range(bytes: &[u8]) -> Result<Json> {
 /// Matches `pattern` against the source ranges of the selected sessions'
 /// events after `after`, a transcript at a time in file ID order, until `limit`
 /// hits or `budget`. Rule: docs/formats.md `grep_traversal`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one budgeted traversal stops the page, its cursor, and its coverage together (docs/formats.md `grep_traversal`)"
+)]
 pub fn scan(
     db: &Connection,
     pattern: &str,
