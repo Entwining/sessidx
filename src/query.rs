@@ -626,10 +626,6 @@ fn display_range(bytes: &[u8]) -> Result<Json> {
 /// Matches `pattern` against the source ranges of the selected sessions'
 /// events after `after`, a transcript at a time in file ID order, until `limit`
 /// hits or `budget`. Rule: docs/formats.md `grep_traversal`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one budgeted traversal stops the page, its cursor, and its coverage together (docs/formats.md `grep_traversal`)"
-)]
 pub fn scan(
     db: &Connection,
     pattern: &str,
@@ -650,25 +646,7 @@ pub fn scan(
     // Whether the page stopped before the end of the selection.
     let stopped = (|| -> Result<bool> {
         let pattern = Regex::new(pattern).context("invalid grep regex")?;
-        let (sessions, mut args) = filters.session_sql(db)?;
-        let mut conditions = vec![sessions, "s.file_id>=?".to_owned()];
-        args.push(Value::Integer(cursor.0));
-        // A transcript outside the window holds no event the time filter keeps.
-        if let Some(since) = filters.since() {
-            conditions.push("s.max_ts>=?".into());
-            args.push(Value::Text(since));
-        }
-        if let Some(until) = filters.until() {
-            conditions.push("s.min_ts<?".into());
-            args.push(Value::Text(until));
-        }
-        let files = db
-            .prepare(&format!(
-                "SELECT s.file_id FROM sessions s WHERE {} ORDER BY s.file_id",
-                conditions.join(" AND ")
-            ))?
-            .query_map(params_from_iter(args), |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let files = selected_files(db, filters, cursor.0)?;
         let (events, event_args) = filters.event_sql();
         // Rule: docs/formats.md `line_role_record`.
         let mut stmt = db.prepare(&format!(
@@ -749,6 +727,29 @@ pub fn scan(
         coverage.continuation = Some(cursor);
     }
     Ok((hits, coverage))
+}
+
+/// The file IDs of the transcripts `filters` selects, from `first` on, in order.
+fn selected_files(db: &Connection, filters: &Filters, first: i64) -> Result<Vec<i64>> {
+    let (sessions, mut args) = filters.session_sql(db)?;
+    let mut conditions = vec![sessions, "s.file_id>=?".to_owned()];
+    args.push(Value::Integer(first));
+    // A transcript outside the window holds no event the time filter keeps.
+    if let Some(since) = filters.since() {
+        conditions.push("s.max_ts>=?".into());
+        args.push(Value::Text(since));
+    }
+    if let Some(until) = filters.until() {
+        conditions.push("s.min_ts<?".into());
+        args.push(Value::Text(until));
+    }
+    Ok(db
+        .prepare(&format!(
+            "SELECT s.file_id FROM sessions s WHERE {} ORDER BY s.file_id",
+            conditions.join(" AND ")
+        ))?
+        .query_map(params_from_iter(args), |r| r.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn show(

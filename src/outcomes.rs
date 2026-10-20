@@ -131,57 +131,60 @@ fn structured(v: &Value, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
                 }
             }
         }
-        Value::String(s) => {
-            let mut candidate = s.trim();
-            let truncated = candidate.starts_with("Warning: truncated output");
-            if candidate.starts_with("Script completed")
-                || candidate.starts_with("Script failed")
-                || candidate.starts_with("Script error:")
-            {
-                texts.push(
-                    candidate
-                        .lines()
-                        .take_while(|l| *l != "Output:")
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+        Value::String(s) => string_outcome(s, texts, e, depth),
+        _ => {}
+    }
+}
+
+/// A string value's script summary, and the JSON values it holds.
+fn string_outcome(s: &str, texts: &mut Vec<String>, e: &mut Event, depth: usize) {
+    let mut candidate = s.trim();
+    let truncated = candidate.starts_with("Warning: truncated output");
+    if candidate.starts_with("Script completed")
+        || candidate.starts_with("Script failed")
+        || candidate.starts_with("Script error:")
+    {
+        texts.push(
+            candidate
+                .lines()
+                .take_while(|l| *l != "Output:")
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        if let Some((_, tail)) = candidate.split_once("\nOutput:\n") {
+            candidate = tail.trim();
+        }
+    }
+    if candidate.starts_with("Warning: truncated output")
+        && let Some((_, tail)) = candidate.split_once("\n\n")
+    {
+        candidate = tail.trim();
+    }
+    let mut values = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
+    let mut parsed = false;
+    while let Some(Ok(v)) = values.next() {
+        if matches!(v, Value::Object(_) | Value::Array(_)) {
+            structured(&v, texts, e, depth);
+            parsed = true;
+        } else {
+            break;
+        }
+    }
+    // Truncated Codex batches retain complete rejection values: tests/fixtures/truncated.jsonl.
+    if truncated {
+        for capture in PARTIAL_REJECTION.captures_iter(&candidate[values.byte_offset()..]) {
+            if let Ok(reason) = serde_json::from_str::<Value>(&capture[1]) {
+                structured(
+                    &serde_json::json!({"status":"rejected","reason":reason}),
+                    texts,
+                    e,
+                    depth,
                 );
-                if let Some((_, tail)) = candidate.split_once("\nOutput:\n") {
-                    candidate = tail.trim();
-                }
-            }
-            if candidate.starts_with("Warning: truncated output")
-                && let Some((_, tail)) = candidate.split_once("\n\n")
-            {
-                candidate = tail.trim();
-            }
-            let mut values = serde_json::Deserializer::from_str(candidate).into_iter::<Value>();
-            let mut parsed = false;
-            while let Some(Ok(v)) = values.next() {
-                if matches!(v, Value::Object(_) | Value::Array(_)) {
-                    structured(&v, texts, e, depth);
-                    parsed = true;
-                } else {
-                    break;
-                }
-            }
-            // Truncated Codex batches retain complete rejection values: tests/fixtures/truncated.jsonl.
-            if truncated {
-                for capture in PARTIAL_REJECTION.captures_iter(&candidate[values.byte_offset()..]) {
-                    if let Ok(reason) = serde_json::from_str::<Value>(&capture[1]) {
-                        structured(
-                            &serde_json::json!({"status":"rejected","reason":reason}),
-                            texts,
-                            e,
-                            depth,
-                        );
-                    }
-                }
-            }
-            if !parsed {
-                texts.push(candidate.into());
             }
         }
-        _ => {}
+    }
+    if !parsed {
+        texts.push(candidate.into());
     }
 }
 

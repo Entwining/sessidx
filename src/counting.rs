@@ -87,10 +87,6 @@ pub fn check(metric: Metric, by: &[By], program: Option<&str>, filters: &Filters
 /// `daily_program_counts` too, for the whole UTC days inside the window, and
 /// from the events themselves for the part of a day at either edge. Rule:
 /// docs/formats.md `daily_counts`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "it builds one statement whose columns, rollups, and edge days must agree (docs/formats.md `daily_counts`)"
-)]
 pub fn count(
     db: &Connection,
     metric: Metric,
@@ -99,96 +95,10 @@ pub fn count(
     filters: &Filters,
 ) -> Result<Vec<Json>> {
     check(metric, by, program, filters)?;
-    // Columns named `program_*` are the program's rows; the others, every
-    // event's.
-    let (kind, mut fields): (&str, Vec<(&str, &str)>) = match (metric, program.is_some()) {
-        (Metric::Commands, _) => (
-            "tool_call",
-            vec![
-                ("sites", "sum(x.sites)"),
-                ("sites_without_program", "sum(x.sites_without_program)"),
-                ("unparsed_calls", "sum(x.unparsed_calls)"),
-            ],
-        ),
-        (Metric::Failures, false) => (
-            "tool_call",
-            vec![
-                ("calls", "sum(x.events)"),
-                ("failed", "sum(x.failed)"),
-                ("succeeded", "sum(x.succeeded)"),
-                ("outcome_unknown", "sum(x.events-x.failed-x.succeeded)"),
-            ],
-        ),
-        (Metric::Failures, true) => (
-            "tool_call",
-            vec![
-                ("calls", "sum(x.program_events)"),
-                ("failed", "sum(x.program_failed)"),
-                ("succeeded", "sum(x.program_succeeded)"),
-                (
-                    "outcome_unknown",
-                    "sum(x.program_events-x.program_failed-x.program_succeeded)",
-                ),
-            ],
-        ),
-        (Metric::Denials, false) => (
-            "tool_result",
-            vec![
-                ("results", "sum(x.events)"),
-                ("denied", "sum(x.denied)"),
-                ("denied_reason_unknown", "sum(x.denied_reason_unknown)"),
-            ],
-        ),
-        (Metric::Denials, true) => (
-            "tool_result",
-            vec![
-                ("results", "sum(x.program_events)"),
-                ("denied", "sum(x.program_denied)"),
-                (
-                    "denied_reason_unknown",
-                    "sum(x.program_denied_reason_unknown)",
-                ),
-            ],
-        ),
-        (Metric::Usage | Metric::Compactions, _) => return count_records(db, metric, by, filters),
+    let Some((kind, fields)) = kind_and_fields(metric, program.is_some()) else {
+        return count_records(db, metric, by, filters);
     };
-    // Events whose program is unknown, less those that also name the program.
-    let unresolved = "sum(x.unresolved_program-x.program_unresolved_program)";
-    if program.is_some() {
-        fields.push(match metric {
-            Metric::Commands => ("matching_sites", "sum(x.program_matching_sites)"),
-            Metric::Failures => ("calls_with_unresolved_program", unresolved),
-            Metric::Denials => ("results_with_unresolved_program", unresolved),
-            Metric::Usage | Metric::Compactions => unreachable!("check refuses --program"),
-        });
-    }
-    // Whole days run from the first midnight at or after --since to the last
-    // at or before --until; a bound already at midnight leaves an empty edge.
-    let whole_from = filters.since.map(|t| {
-        let day = t.date_naive();
-        if t.time() == NaiveTime::MIN {
-            day
-        } else {
-            day + chrono::Days::new(1)
-        }
-    });
-    let whole_to = filters.until.map(|t| t.date_naive());
-    let stamp = |day: NaiveDate| day.format("%Y-%m-%dT00:00:00.000Z").to_string();
-    let mut whole_days = None;
-    let mut edges = Vec::new();
-    if let (Some(from), Some(to)) = (whole_from, whole_to)
-        && from >= to
-    {
-        edges.push((filters.since(), filters.until()));
-    } else {
-        whole_days = Some((whole_from, whole_to));
-        if let (Some(since), Some(from)) = (filters.since(), whole_from) {
-            edges.push((Some(since), Some(stamp(from))));
-        }
-        if let (Some(until), Some(to)) = (filters.until(), whole_to) {
-            edges.push((Some(stamp(to)), Some(until)));
-        }
-    }
+    let (whole_days, edges) = days_and_edges(filters);
     // The program's rollup follows every event's, and its columns are
     // prefixed `program_`.
     let rollups: Vec<(&Rollup, Option<&str>)> = std::iter::once((&DAILY_COUNTS, None))
@@ -273,6 +183,116 @@ pub fn count(
         conditions.join(" AND ")
     );
     grouped(db, metric, by, program, &fields, &from, args)
+}
+
+/// The kind of event a metric counts and the fields it reports, with or without
+/// `--program`, or None for the metrics `count_records` sums.
+fn kind_and_fields(
+    metric: Metric,
+    program: bool,
+) -> Option<(&'static str, Vec<(&'static str, &'static str)>)> {
+    // Columns named `program_*` are the program's rows; the others, every
+    // event's.
+    let (kind, mut fields) = match (metric, program) {
+        (Metric::Commands, _) => (
+            "tool_call",
+            vec![
+                ("sites", "sum(x.sites)"),
+                ("sites_without_program", "sum(x.sites_without_program)"),
+                ("unparsed_calls", "sum(x.unparsed_calls)"),
+            ],
+        ),
+        (Metric::Failures, false) => (
+            "tool_call",
+            vec![
+                ("calls", "sum(x.events)"),
+                ("failed", "sum(x.failed)"),
+                ("succeeded", "sum(x.succeeded)"),
+                ("outcome_unknown", "sum(x.events-x.failed-x.succeeded)"),
+            ],
+        ),
+        (Metric::Failures, true) => (
+            "tool_call",
+            vec![
+                ("calls", "sum(x.program_events)"),
+                ("failed", "sum(x.program_failed)"),
+                ("succeeded", "sum(x.program_succeeded)"),
+                (
+                    "outcome_unknown",
+                    "sum(x.program_events-x.program_failed-x.program_succeeded)",
+                ),
+            ],
+        ),
+        (Metric::Denials, false) => (
+            "tool_result",
+            vec![
+                ("results", "sum(x.events)"),
+                ("denied", "sum(x.denied)"),
+                ("denied_reason_unknown", "sum(x.denied_reason_unknown)"),
+            ],
+        ),
+        (Metric::Denials, true) => (
+            "tool_result",
+            vec![
+                ("results", "sum(x.program_events)"),
+                ("denied", "sum(x.program_denied)"),
+                (
+                    "denied_reason_unknown",
+                    "sum(x.program_denied_reason_unknown)",
+                ),
+            ],
+        ),
+        (Metric::Usage | Metric::Compactions, _) => return None,
+    };
+    // Events whose program is unknown, less those that also name the program.
+    let unresolved = "sum(x.unresolved_program-x.program_unresolved_program)";
+    if program {
+        fields.push(match metric {
+            Metric::Commands => ("matching_sites", "sum(x.program_matching_sites)"),
+            Metric::Failures => ("calls_with_unresolved_program", unresolved),
+            Metric::Denials => ("results_with_unresolved_program", unresolved),
+            Metric::Usage | Metric::Compactions => unreachable!("check refuses --program"),
+        });
+    }
+    Some((kind, fields))
+}
+
+/// A range from its first value up to, but not including, its second; a
+/// missing end leaves that side open.
+type Bounds<T> = (Option<T>, Option<T>);
+
+/// The whole UTC days inside the window, which `daily_counts` answers, and the
+/// parts of a day at either edge as timestamp ranges, which the events answer.
+/// Rule: docs/formats.md `daily_counts_window`.
+fn days_and_edges(filters: &Filters) -> (Option<Bounds<NaiveDate>>, Vec<Bounds<String>>) {
+    // Whole days run from the first midnight at or after --since to the last
+    // at or before --until; a bound already at midnight leaves an empty edge.
+    let whole_from = filters.since.map(|t| {
+        let day = t.date_naive();
+        if t.time() == NaiveTime::MIN {
+            day
+        } else {
+            day + chrono::Days::new(1)
+        }
+    });
+    let whole_to = filters.until.map(|t| t.date_naive());
+    let stamp = |day: NaiveDate| day.format("%Y-%m-%dT00:00:00.000Z").to_string();
+    let mut whole_days = None;
+    let mut edges = Vec::new();
+    if let (Some(from), Some(to)) = (whole_from, whole_to)
+        && from >= to
+    {
+        edges.push((filters.since(), filters.until()));
+    } else {
+        whole_days = Some((whole_from, whole_to));
+        if let (Some(since), Some(from)) = (filters.since(), whole_from) {
+            edges.push((Some(since), Some(stamp(from))));
+        }
+        if let (Some(until), Some(to)) = (filters.until(), whole_to) {
+            edges.push((Some(stamp(to)), Some(until)));
+        }
+    }
+    (whole_days, edges)
 }
 
 /// `count usage` and `count compactions`, summed over the public views. A

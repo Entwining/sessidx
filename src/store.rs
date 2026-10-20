@@ -1,7 +1,7 @@
 use crate::{
     adapters,
     discovery::{self, Root},
-    model::{Agent, EventKind, State, name},
+    model::{Agent, Event, EventKind, State, name},
     normalize::{Digest, hash},
     redaction::{Label, spaced_cjk},
     source,
@@ -27,7 +27,7 @@ pub const SCHEMA_VERSION: i64 = 14;
 /// redaction, outcomes, denials and shell sites. A file indexed by another
 /// version is reindexed like a changed file, so that a parser change reaches
 /// every row without a rebuild. Rule: docs/formats.md `parser_version`.
-pub const PARSER_VERSION: i64 = 4;
+pub const PARSER_VERSION: i64 = 5;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {
@@ -112,6 +112,110 @@ struct FileRow {
     index_status: FileCoverage,
     agent: String,
     parser: i64,
+}
+impl FileRow {
+    fn read(db: &Connection, path: &str) -> Result<Option<Self>> {
+        Ok(db
+            .prepare_cached("SELECT * FROM files WHERE path=?")?
+            .query_row([path], |r| {
+                Ok(Self {
+                    id: r.get("id")?,
+                    dev: r.get("dev")?,
+                    inode: r.get("inode")?,
+                    size: r.get("size")?,
+                    mtime: r.get("mtime")?,
+                    prefix_hash: r.get("prefix_hash")?,
+                    prefix_len: r.get("prefix_len")?,
+                    bytes_indexed: r.get("bytes_indexed")?,
+                    lines_indexed: r.get("lines_indexed")?,
+                    state_json: r.get("state_json")?,
+                    parse_errors: r.get("parse_errors")?,
+                    index_status: r.get("index_status")?,
+                    agent: r.get("agent")?,
+                    parser: r.get("parser")?,
+                })
+            })
+            .optional()?)
+    }
+
+    /// The coverage of a file these rows still describe, or None when it must
+    /// be read.
+    fn unchanged(&self, agent: &str, path: &Path) -> Option<FileCoverage> {
+        // Another agent parses the same bytes differently, so neither the
+        // cached rows nor an append to them can be reused. Only a refresh that
+        // ran out of budget leaves an unchanged file's records unread. Most
+        // files a refresh visits are unchanged, so a stat decides before opening.
+        if self.agent == agent
+            && self.parser == PARSER_VERSION
+            && self.index_status != FileCoverage::BudgetExhausted
+            && let Ok(meta) = source::metadata(path)
+            && self.dev == meta.dev()
+            && self.inode == meta.ino()
+            && self.size == meta.len()
+            && self.mtime == change_stamp(&meta)
+        {
+            Some(if self.index_status == FileCoverage::DeferredTail {
+                FileCoverage::DeferredTail
+            } else {
+                FileCoverage::Ready
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Whether the file is the one these rows read, by its device, inode, and
+    /// stored prefix, and only grew or did not change, so indexing resumes
+    /// where they end: after an append, or after a refresh that ran out of
+    /// budget in the file.
+    fn appended(&self, agent: &str, meta: &fs::Metadata, prefix: &[u8], mtime: &str) -> bool {
+        self.agent == agent
+            && self.parser == PARSER_VERSION
+            && self.dev == meta.dev()
+            && self.inode == meta.ino()
+            && meta.len() >= self.size
+            && self.prefix_len <= prefix.len() as u64
+            && *hash(&prefix[..self.prefix_len as usize]) == self.prefix_hash
+            && (meta.len() > self.size || self.mtime == mtime)
+    }
+
+    fn cursor(&self) -> Result<Cursor> {
+        Ok(Cursor {
+            offset: self.bytes_indexed,
+            line: self.lines_indexed,
+            state: serde_json::from_str(&self.state_json)?,
+            errors: self.parse_errors,
+        })
+    }
+}
+/// Where indexing stands in a file, as its `files` row keeps it between
+/// transactions: only complete records advance it.
+struct Cursor {
+    offset: u64,
+    line: u64,
+    state: State,
+    errors: u64,
+}
+impl Cursor {
+    fn start(path: &Path) -> Self {
+        Self {
+            offset: 0,
+            line: 0,
+            state: State {
+                session_id: Label::new(&path.file_stem().unwrap_or_default().to_string_lossy()),
+                session_kind_source: "none".into(),
+                ..State::default()
+            },
+            errors: 0,
+        }
+    }
+}
+/// What one transaction read from a file.
+struct Batch {
+    records: usize,
+    coverage: FileCoverage,
+    first_event: Option<i64>,
+    bounds: Option<(String, String)>,
 }
 struct IndexedFile {
     changed: bool,
@@ -291,10 +395,6 @@ impl Store {
         Ok(())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one writer lock and one deadline cover its steps, in the order docs/formats.md `refresh_budget` gives them"
-    )]
     pub fn refresh(
         &mut self,
         roots: &[Root],
@@ -394,19 +494,8 @@ impl Store {
         // first, and within the same budget, because each deletion is a
         // transaction that cannot be interrupted. Rule: docs/formats.md
         // `refresh_budget`.
-        for (id, path) in vanished {
-            if report.continuation.is_some() {
-                break;
-            }
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                report.stale = true;
-                report.continuation = Some(path);
-                break;
-            }
-            let tx = self.db.transaction()?;
-            delete_file(&tx, id)?;
-            settle(&tx, None)?;
-            tx.commit()?;
+        if report.continuation.is_none() {
+            self.delete_files(vanished, deadline, &mut report)?;
         }
         if report.continuation.is_none() {
             self.index_files(stale_files, deadline, &mut report)?;
@@ -429,6 +518,28 @@ impl Store {
                     r.get(0)
                 })?;
         Ok(report)
+    }
+
+    /// Deletes the rows of `files` in order until the deadline, recording where
+    /// it stopped.
+    fn delete_files(
+        &mut self,
+        files: Vec<(i64, String)>,
+        deadline: Option<Instant>,
+        report: &mut Refresh,
+    ) -> Result<()> {
+        for (id, path) in files {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                report.stale = true;
+                report.continuation = Some(path);
+                break;
+            }
+            let tx = self.db.transaction()?;
+            delete_file(&tx, id)?;
+            settle(&tx, None)?;
+            tx.commit()?;
+        }
+        Ok(())
     }
 
     /// Indexes `files` in order until the deadline, recording where it stopped.
@@ -459,10 +570,6 @@ impl Store {
         Ok(())
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one transaction indexes a file's new records, from the checks that reuse its rows to `settle`"
-    )]
     fn index_file(
         &mut self,
         agent: Agent,
@@ -471,50 +578,12 @@ impl Store {
     ) -> Result<IndexedFile> {
         let path_text = path.to_string_lossy();
         let agent_name = name(agent);
-        let old = self
-            .db
-            .prepare_cached("SELECT * FROM files WHERE path=?")?
-            .query_row([path_text.as_ref()], |r| {
-                Ok(FileRow {
-                    id: r.get("id")?,
-                    dev: r.get("dev")?,
-                    inode: r.get("inode")?,
-                    size: r.get("size")?,
-                    mtime: r.get("mtime")?,
-                    prefix_hash: r.get("prefix_hash")?,
-                    prefix_len: r.get("prefix_len")?,
-                    bytes_indexed: r.get("bytes_indexed")?,
-                    lines_indexed: r.get("lines_indexed")?,
-                    state_json: r.get("state_json")?,
-                    parse_errors: r.get("parse_errors")?,
-                    index_status: r.get("index_status")?,
-                    agent: r.get("agent")?,
-                    parser: r.get("parser")?,
-                })
-            })
-            .optional()?;
-        // Another agent parses the same bytes differently, so neither the
-        // cached rows nor an append to them can be reused. Only a refresh that
-        // ran out of budget leaves an unchanged file's records unread. Most
-        // files a refresh visits are unchanged, so a stat decides before opening.
-        if let Some(ref o) = old
-            && o.agent == agent_name
-            && o.parser == PARSER_VERSION
-            && o.index_status != FileCoverage::BudgetExhausted
-            && let Ok(meta) = source::metadata(path)
-            && o.dev == meta.dev()
-            && o.inode == meta.ino()
-            && o.size == meta.len()
-            && o.mtime == change_stamp(&meta)
-        {
+        let old = FileRow::read(&self.db, &path_text)?;
+        if let Some(coverage) = old.as_ref().and_then(|o| o.unchanged(&agent_name, path)) {
             return Ok(IndexedFile {
                 changed: false,
                 records: 0,
-                coverage: if o.index_status == FileCoverage::DeferredTail {
-                    FileCoverage::DeferredTail
-                } else {
-                    FileCoverage::Ready
-                },
+                coverage,
             });
         }
         // The agent deleted or archived the log after discovery listed it.
@@ -538,30 +607,12 @@ impl Store {
         let mut prefix = vec![0; prefix_len as usize];
         source.file.read_exact(&mut prefix)?;
         let prefix_hash = hash(&prefix);
-        let appended = old.as_ref().filter(|o| {
-            o.agent == agent_name
-                && o.parser == PARSER_VERSION
-                && o.dev == meta.dev()
-                && o.inode == meta.ino()
-                && source_size >= o.size
-                && o.prefix_len <= prefix_len
-                && *hash(&prefix[..o.prefix_len as usize]) == o.prefix_hash
-                && (source_size > o.size || o.mtime == mtime)
-        });
-        let (mut offset, mut line, mut state, mut errors) = if let Some(o) = appended {
-            (
-                o.bytes_indexed,
-                o.lines_indexed,
-                serde_json::from_str::<State>(&o.state_json)?,
-                o.parse_errors,
-            )
-        } else {
-            let state = State {
-                session_id: Label::new(&path.file_stem().unwrap_or_default().to_string_lossy()),
-                session_kind_source: "none".into(),
-                ..State::default()
-            };
-            (0, 0, state, 0)
+        let appended = old
+            .as_ref()
+            .filter(|o| o.appended(&agent_name, &meta, &prefix, &mtime));
+        let mut cursor = match appended {
+            Some(o) => o.cursor()?,
+            None => Cursor::start(path),
         };
         let tx = self.db.transaction()?;
         if appended.is_none()
@@ -569,7 +620,7 @@ impl Store {
         {
             delete_file(&tx, o.id)?;
         }
-        tx.execute("INSERT INTO files(path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json,parser) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, agent_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&state)?, PARSER_VERSION])?;
+        tx.execute("INSERT INTO files(path,agent,dev,inode,size,mtime,prefix_hash,prefix_len,state_json,parser) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET dev=excluded.dev,inode=excluded.inode,size=excluded.size,mtime=excluded.mtime,prefix_hash=excluded.prefix_hash,prefix_len=excluded.prefix_len", params![path_text, agent_name, meta.dev(), meta.ino(), source_size, mtime, prefix_hash, prefix_len, serde_json::to_string(&cursor.state)?, PARSER_VERSION])?;
         let file_id: i64 = tx.query_row(
             "SELECT id FROM files WHERE path=?",
             [path_text.as_ref()],
@@ -585,157 +636,195 @@ impl Store {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        let mut first_event = None;
-        let mut bounds: Option<(String, String)> = None;
-        let compressed = source.compressed;
-        let mut reader = source.records_from(offset)?;
-        let mut buffer = Vec::new();
-        let mut records = 0;
-        let mut coverage = FileCoverage::Ready;
-        loop {
-            if deadline.is_some_and(|d| Instant::now() >= d) {
-                coverage = FileCoverage::BudgetExhausted;
-                break;
-            }
-            let (length, complete, oversized) = match read_record(&mut reader, &mut buffer) {
-                Ok(record) => record,
-                // zstd reports undecodable content as an error without an OS
-                // code; records decoded before it stay indexed.
-                Err(e) if compressed => {
-                    if e.raw_os_error().is_some() {
-                        return Err(e.into());
-                    }
-                    errors += 1;
-                    break;
-                }
-                Err(e) => return Err(e.into()),
-            };
-            if length == 0 || !complete {
-                if length > 0 {
-                    coverage = FileCoverage::DeferredTail;
-                }
-                break;
-            }
-            line += 1;
-            records += 1;
-            let parsed = if oversized {
-                None
-            } else {
-                crate::normalize::record_for_index(&buffer, agent).ok()
-            };
-            if let Some(v) = parsed {
-                let events = adapters::parse(agent, &v, &mut state);
-                let raw_hash = hash(&buffer);
-                let mut line_roles: Vec<Label> = Vec::new();
-                for (ordinal, event) in events.into_iter().enumerate() {
-                    let line_role_first = !line_roles.contains(&event.role);
-                    if line_role_first {
-                        line_roles.push(event.role.clone());
-                    }
-                    if let Some(ts) = &event.ts {
-                        bounds = Some(match bounds {
-                            Some((min, max)) => (min.min(ts.clone()), max.max(ts.clone())),
-                            None => (ts.clone(), ts.clone()),
-                        });
-                    }
-                    let model = event.model.as_deref().or(state.model.as_deref());
-                    let model_source = if event.model.is_some() {
-                        "message.model"
-                    } else if state.model.is_some() {
-                        &state.model_source
-                    } else {
-                        "none"
-                    };
-                    // Derived columns start as if the event had no copy and no
-                    // result, and its usage as its request's only record;
-                    // `settle` corrects every key these rows touch.
-                    let call_ok_source = (event.kind == EventKind::ToolCall).then_some("none");
-                    tx.prepare_cached("INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,native_id,ts,role,role_source,kind,kind_source,model,model_source,tool,call_id,ok,ok_source,exit_code,line_role_first,canonical,call_ok_source) VALUES (?,?,?,?,?,unhex(?),unhex(?),?,?,?,?,?,?,?,?,unhex(?),?,?,?,?,?,?)")?.execute(params![file_id,line,offset,length,ordinal,&raw_hash,event.native_id,event.ts,event.role,event.role_source,event.kind.as_str(),event.kind_source,model,model_source,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code,line_role_first,true,call_ok_source])?;
-                    let event_id = tx.last_insert_rowid();
-                    first_event.get_or_insert(event_id);
-                    if let Some(request) = event.request {
-                        let u = &request.usage;
-                        let route = request.route.as_ref();
-                        tx.prepare_cached("INSERT INTO usage_rows(event_id,file_id,ts,model,route,route_source,finished,stop_reason,selected,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h,reasoning) VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)")?.execute(params![event_id,file_id,event.ts,model,route.map(|r| &r.value),route.map(|r| r.source),request.finished,request.stop_reason,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.reasoning])?;
-                        for (pass, p) in request.passes.iter().enumerate() {
-                            let u = &p.usage;
-                            tx.prepare_cached("INSERT INTO usage_passes(event_id,pass,kind,model,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h) VALUES (?,?,?,?,?,?,?,?,?,?)")?.execute(params![event_id,pass,p.kind,p.model,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h])?;
-                        }
-                    }
-                    if let Some(error) = event.error {
-                        let route = error.route.as_ref();
-                        tx.prepare_cached("INSERT INTO error_rows(event_id,model,source,status,code,retry_attempt,route,route_source) VALUES (?,?,?,?,?,?,?,?)")?.execute(params![event_id,state.model,error.source,error.status,error.code,error.retry_attempt,route.map(|r| &r.value),route.map(|r| r.source)])?;
-                    }
-                    if let Some(c) = event.compaction {
-                        let s = c.summary.as_ref();
-                        tx.prepare_cached("INSERT INTO compaction_rows(event_id,trigger,pre_tokens,post_tokens,summary_input,summary_output,summary_cache_read,summary_cache_write,request_native_id) VALUES (?,?,?,?,?,?,?,?,unhex(?))")?.execute(params![event_id,c.trigger,c.pre_tokens,c.post_tokens,s.map(|s| s.input),s.map(|s| s.output),s.and_then(|s| s.cache_read),s.and_then(|s| s.cache_write),c.request_id])?;
-                    }
-                    for (site, command) in event.sites.into_iter().enumerate() {
-                        tx.prepare_cached("INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)")?.execute(params![event_id,site,command.program,serde_json::to_string(&command.argv)?,command.parsed])?;
-                    }
-                    for denial in event.denials {
-                        tx.prepare_cached(
-                            "INSERT INTO denials(event_id,source,class,producer,reason_id) VALUES (?,?,?,?,?)",
-                        )?
-                        .execute(params![
-                            event_id,
-                            denial.source,
-                            denial.class,
-                            denial.producer,
-                            denial.reason_id
-                        ])?;
-                    }
-                    if let Some(text) = event.text {
-                        tx.prepare_cached(
-                            "INSERT INTO event_texts(event_id,text,truncated) VALUES (?,?,?)",
-                        )?
-                        .execute(params![
-                            event_id,
-                            &*text,
-                            event.text_truncated
-                        ])?;
-                        tx.prepare_cached("INSERT INTO fts(rowid,text) VALUES (?,?)")?
-                            .execute(params![event_id, spaced_cjk(&text)])?;
-                    }
-                }
-            } else {
-                errors += 1;
-            }
-            offset += length;
-        }
+        let batch = read_records(&tx, file_id, agent, source, &mut cursor, deadline)?;
+        let state = &cursor.state;
         let identity_changed = before
             .is_some_and(|(id, started)| id != *state.session_id || started != state.first_ts);
         if identity_changed {
             mark_file(&tx, file_id)?;
         }
-        let (min_ts, max_ts) = bounds.unzip();
+        let (min_ts, max_ts) = batch.bounds.unzip();
         // SQLite's two-argument min and max are NULL when either side is.
         tx.execute("INSERT INTO sessions(file_id,agent,session_id,parent_id,session_kind,session_kind_source,path,cwd,started_at,instruction_hash,min_ts,max_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(file_id) DO UPDATE SET session_id=excluded.session_id,parent_id=excluded.parent_id,session_kind=excluded.session_kind,session_kind_source=excluded.session_kind_source,cwd=excluded.cwd,started_at=excluded.started_at,instruction_hash=excluded.instruction_hash,min_ts=coalesce(min(min_ts,excluded.min_ts),min_ts,excluded.min_ts),max_ts=coalesce(max(max_ts,excluded.max_ts),max_ts,excluded.max_ts)", params![file_id,agent_name,state.session_id,state.parent_id,name(state.session_kind),state.session_kind_source,path_text,state.cwd,state.first_ts,state.instruction_hash,min_ts,max_ts])?;
         if identity_changed {
             mark_file(&tx, file_id)?;
-        } else if let Some(first) = first_event {
+        } else if let Some(first) = batch.first_event {
             // Event IDs only grow, so this transaction's rows are those from
             // its first insert on.
             tx.execute(MARK_GROUPS_FROM, [first])?;
             tx.execute(MARK_CALLS_FROM, [first])?;
         }
-        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=? WHERE id=?", params![offset,line,serde_json::to_string(&state)?,errors,coverage,file_id])?;
+        tx.execute("UPDATE files SET bytes_indexed=?,lines_indexed=?,state_json=?,parse_errors=?,index_status=? WHERE id=?", params![cursor.offset,cursor.line,serde_json::to_string(state)?,cursor.errors,batch.coverage,file_id])?;
         tx.execute(
             "UPDATE index_identity SET written=written+?",
-            [records as i64],
+            [batch.records as i64],
         )?;
-        settle(&tx, first_event)?;
+        settle(&tx, batch.first_event)?;
         // This transaction's rows count once, with the values `settle` gave them.
-        if let Some(first) = first_event {
+        if let Some(first) = batch.first_event {
             add_counts(&tx, 1, "e.id>=?", [first])?;
         }
         tx.commit()?;
         Ok(IndexedFile {
             changed: true,
-            records,
-            coverage,
+            records: batch.records,
+            coverage: batch.coverage,
         })
     }
+}
+
+/// Reads `source`'s complete records from `cursor` until its end or the
+/// deadline, writing each record's events and advancing `cursor` past it.
+fn read_records(
+    tx: &Transaction,
+    file_id: i64,
+    agent: Agent,
+    source: source::Source,
+    cursor: &mut Cursor,
+    deadline: Option<Instant>,
+) -> Result<Batch> {
+    let mut batch = Batch {
+        records: 0,
+        coverage: FileCoverage::Ready,
+        first_event: None,
+        bounds: None,
+    };
+    let compressed = source.compressed;
+    let mut reader = source.records_from(cursor.offset)?;
+    let mut buffer = Vec::new();
+    loop {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            batch.coverage = FileCoverage::BudgetExhausted;
+            break;
+        }
+        let (length, complete, oversized) = match read_record(&mut reader, &mut buffer) {
+            Ok(record) => record,
+            // zstd reports undecodable content as an error without an OS
+            // code; records decoded before it stay indexed.
+            Err(e) if compressed => {
+                if e.raw_os_error().is_some() {
+                    return Err(e.into());
+                }
+                cursor.errors += 1;
+                break;
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if length == 0 || !complete {
+            if length > 0 {
+                batch.coverage = FileCoverage::DeferredTail;
+            }
+            break;
+        }
+        cursor.line += 1;
+        batch.records += 1;
+        let parsed = if oversized {
+            None
+        } else {
+            crate::normalize::record_for_index(&buffer, agent).ok()
+        };
+        if let Some(v) = parsed {
+            let events = adapters::parse(agent, &v, &mut cursor.state);
+            let state = &cursor.state;
+            let raw_hash = hash(&buffer);
+            let mut line_roles: Vec<Label> = Vec::new();
+            for (ordinal, mut event) in events.into_iter().enumerate() {
+                let line_role_first = !line_roles.contains(&event.role);
+                if line_role_first {
+                    line_roles.push(event.role.clone());
+                }
+                if let Some(ts) = &event.ts {
+                    batch.bounds = Some(match batch.bounds {
+                        Some((min, max)) => (min.min(ts.clone()), max.max(ts.clone())),
+                        None => (ts.clone(), ts.clone()),
+                    });
+                }
+                let event_model = event.model.take();
+                let model = event_model.as_deref().or(state.model.as_deref());
+                let model_source = if event_model.is_some() {
+                    "message.model"
+                } else if state.model.is_some() {
+                    &state.model_source
+                } else {
+                    "none"
+                };
+                // Derived columns start as if the event had no copy and no
+                // result; `settle` corrects every key these rows touch.
+                let call_ok_source = (event.kind == EventKind::ToolCall).then_some("none");
+                tx.prepare_cached("INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,native_id,ts,role,role_source,kind,kind_source,model,model_source,tool,call_id,ok,ok_source,exit_code,line_role_first,canonical,call_ok_source) VALUES (?,?,?,?,?,unhex(?),unhex(?),?,?,?,?,?,?,?,?,unhex(?),?,?,?,?,?,?)")?.execute(params![file_id,cursor.line,cursor.offset,length,ordinal,&raw_hash,event.native_id,event.ts,event.role,event.role_source,event.kind.as_str(),event.kind_source,model,model_source,event.tool,event.call_id,event.ok,event.ok_source,event.exit_code,line_role_first,true,call_ok_source])?;
+                let event_id = tx.last_insert_rowid();
+                batch.first_event.get_or_insert(event_id);
+                insert_keyed_rows(tx, file_id, event_id, model, state, event)?;
+            }
+        } else {
+            cursor.errors += 1;
+        }
+        cursor.offset += length;
+    }
+    Ok(batch)
+}
+
+/// Writes the rows keyed by an event: its request's usage, a request error, a
+/// compaction, command sites, denials, and its text with the text's search entry.
+/// `model` is the one its event row stored; `event.model` was taken for it.
+fn insert_keyed_rows(
+    tx: &Transaction,
+    file_id: i64,
+    event_id: i64,
+    model: Option<&str>,
+    state: &State,
+    event: Event,
+) -> Result<()> {
+    if let Some(request) = event.request {
+        let u = &request.usage;
+        let route = request.route.as_ref();
+        // A usage row starts as its request's only record; `settle` corrects
+        // `selected`.
+        tx.prepare_cached("INSERT INTO usage_rows(event_id,file_id,ts,model,route,route_source,finished,stop_reason,selected,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h,reasoning) VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)")?.execute(params![event_id,file_id,event.ts,model,route.map(|r| &r.value),route.map(|r| r.source),request.finished,request.stop_reason,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h,u.reasoning])?;
+        for (pass, p) in request.passes.iter().enumerate() {
+            let u = &p.usage;
+            tx.prepare_cached("INSERT INTO usage_passes(event_id,pass,kind,model,input,output,cache_read,cache_write,cache_write_5m,cache_write_1h) VALUES (?,?,?,?,?,?,?,?,?,?)")?.execute(params![event_id,pass,p.kind,p.model,u.input,u.output,u.cache_read,u.cache_write,u.cache_write_5m,u.cache_write_1h])?;
+        }
+    }
+    if let Some(error) = event.error {
+        let route = error.route.as_ref();
+        tx.prepare_cached("INSERT INTO error_rows(event_id,model,source,status,code,retry_attempt,route,route_source) VALUES (?,?,?,?,?,?,?,?)")?.execute(params![event_id,state.model,error.source,error.status,error.code,error.retry_attempt,route.map(|r| &r.value),route.map(|r| r.source)])?;
+    }
+    if let Some(c) = event.compaction {
+        let s = c.summary.as_ref();
+        tx.prepare_cached("INSERT INTO compaction_rows(event_id,trigger,pre_tokens,post_tokens,summary_input,summary_output,summary_cache_read,summary_cache_write,request_native_id) VALUES (?,?,?,?,?,?,?,?,unhex(?))")?.execute(params![event_id,c.trigger,c.pre_tokens,c.post_tokens,s.map(|s| s.input),s.map(|s| s.output),s.and_then(|s| s.cache_read),s.and_then(|s| s.cache_write),c.request_id])?;
+    }
+    for (site, command) in event.sites.into_iter().enumerate() {
+        tx.prepare_cached(
+            "INSERT INTO commands(event_id,site,program,argv_json,parsed) VALUES (?,?,?,?,?)",
+        )?
+        .execute(params![
+            event_id,
+            site,
+            command.program,
+            serde_json::to_string(&command.argv)?,
+            command.parsed
+        ])?;
+    }
+    for denial in event.denials {
+        tx.prepare_cached(
+            "INSERT INTO denials(event_id,source,class,producer,reason_id) VALUES (?,?,?,?,?)",
+        )?
+        .execute(params![
+            event_id,
+            denial.source,
+            denial.class,
+            denial.producer,
+            denial.reason_id
+        ])?;
+    }
+    if let Some(text) = event.text {
+        tx.prepare_cached("INSERT INTO event_texts(event_id,text,truncated) VALUES (?,?,?)")?
+            .execute(params![event_id, &*text, event.text_truncated])?;
+        tx.prepare_cached("INSERT INTO fts(rowid,text) VALUES (?,?)")?
+            .execute(params![event_id, spaced_cjk(&text)])?;
+    }
+    Ok(())
 }
 
 /// Whether more than half of the indexed records were written since the index

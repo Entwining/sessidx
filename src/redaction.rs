@@ -340,20 +340,7 @@ fn redact_named(text: &str, judge_runs: bool) -> String {
             ""
         };
         let value_end = if header {
-            let line_end = assignment.end() + tail.find(['\r', '\n']).unwrap_or(tail.len());
-            if let Some(quote) = caps.name("quote") {
-                let value = ASSIGNED_VALUE
-                    .find(&out[quote.start()..line_end])
-                    .expect("header starts with a quote");
-                let end = quote.start() + value.end();
-                if out[assignment.end()..end].ends_with(quote.as_str()) {
-                    end - quote.len()
-                } else {
-                    end
-                }
-            } else {
-                line_end
-            }
+            header_end(&out, &caps)
         } else if assignment.end() < unquoted_end {
             unquoted_end
         } else {
@@ -400,6 +387,27 @@ fn redact_named(text: &str, judge_runs: bool) -> String {
     redacted.push_str(&out[offset..protected_end]);
     redacted.push_str(&runs(&out[protected_end..]));
     redacted
+}
+
+/// The end of a header's value, which runs to the end of its line unless it
+/// opens with a quote.
+fn header_end(out: &str, caps: &regex::Captures<'_>) -> usize {
+    let assignment = caps.get_match();
+    let tail = &out[assignment.end()..];
+    let line_end = assignment.end() + tail.find(['\r', '\n']).unwrap_or(tail.len());
+    if let Some(quote) = caps.name("quote") {
+        let value = ASSIGNED_VALUE
+            .find(&out[quote.start()..line_end])
+            .expect("header starts with a quote");
+        let end = quote.start() + value.end();
+        if out[assignment.end()..end].ends_with(quote.as_str()) {
+            end - quote.len()
+        } else {
+            end
+        }
+    } else {
+        line_end
+    }
 }
 
 fn redact_runs(text: &str) -> String {
