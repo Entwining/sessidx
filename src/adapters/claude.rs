@@ -265,14 +265,9 @@ fn tool_result(v: &Value, b: &Value, bt: &str) -> Event {
     e
 }
 
-/// Claude Code 2.1.296 writes toolDenialKind from a fixed set and labels hook
-/// denials permission-rule; permissionDecision (2.1.293+) names the deciding
-/// channel. Rules: docs/formats.md `native_denial_kind` and
-/// `permission_decision`.
+/// Rules: docs/formats.md `native_denial_kind` and `permission_decision`.
 fn tool_denial(e: &mut Event, v: &Value) {
     if let Some(kind) = v.get("toolDenialKind").and_then(Value::as_str) {
-        // Claude Code itself maps interrupted and cancelled to an error
-        // outcome, not a denial; is_error still marks the result failed.
         if !matches!(kind, "interrupted" | "cancelled") {
             e.denials.retain(|d| d.source != "native_denial");
             let hook = v.get("permissionDecision").is_some_and(|d| {

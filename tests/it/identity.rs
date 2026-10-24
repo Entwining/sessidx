@@ -183,6 +183,14 @@ fn session_kind_comes_only_from_native_evidence() {
             vec![json!({"type":"session","version":3,"id":"p","cwd":"/synthetic"})],
             "main",
         ),
+        (
+            Agent::Pi,
+            "pi-fork.jsonl",
+            vec![
+                json!({"type":"session","version":3,"id":"f","cwd":"/synthetic","parentSession":"p"}),
+            ],
+            "main",
+        ),
     ] {
         let root = dir.path().join(format!("{file}.root"));
         write(&root.join(file), &records);

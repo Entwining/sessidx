@@ -105,8 +105,7 @@ pub fn output_prefix(e: &mut crate::model::Event, output: &Value) {
                     text.push('\n');
                 }
                 let mut end = s.floor_char_boundary(LIMIT - text.len());
-                // Rule: docs/formats.md `tool_output_prefix`. A run cut by the
-                // limit can end in part of a secret that no rule recognizes.
+                // Rule: docs/formats.md `prefix_run_boundary`.
                 if s[end..].starts_with(is_run_char) {
                     end = s[..end].trim_end_matches(is_run_char).len();
                 }

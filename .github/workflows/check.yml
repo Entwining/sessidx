@@ -21,16 +21,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      # Rows an earlier parser indexed are reindexed only when PARSER_VERSION
-      # changes, so parser sources that differ from the last release's need a
-      # new one. Rule: docs/formats.md `parser_version`.
+      # git ignores every changed line when the -I pattern can match an empty
+      # string, so the pattern ends in the line's newline.
+      # Rule: docs/formats.md `parser_version`.
       - name: Check the parser version
         run: |
           release=$(git describe --tags --abbrev=0 --match 'v*' HEAD)
           parser() { git show "$1:src/store.rs" | sed -n 's/^pub const PARSER_VERSION: i64 = \(.*\);$/\1/p'; }
-          if ! git diff --quiet "$release" HEAD -- src/adapters src/code_mode.rs src/model.rs src/normalize.rs src/outcomes.rs src/redaction.rs src/shell.rs src/source.rs \
-            && test "$(parser "$release")" = "$(parser HEAD)"; then
-            echo "Parser sources changed since $release; raise PARSER_VERSION in src/store.rs" >&2
+          brush() { git show "$1:Cargo.lock" | sed -n '/^name = "brush-parser"$/{n;p;}'; }
+          old_parser=$(parser "$release") new_parser=$(parser HEAD) old_brush=$(brush "$release") new_brush=$(brush HEAD)
+          if test -z "$old_parser" || test -z "$new_parser" || test -z "$old_brush" || test -z "$new_brush"; then
+            echo "Cannot read PARSER_VERSION or the brush-parser version at $release or HEAD" >&2
+            exit 1
+          fi
+          if { ! git diff --quiet -I$'^[[:blank:]]*(//.*)?\n' "$release" HEAD -- src/adapters src/code_mode.rs src/model.rs src/normalize.rs src/outcomes.rs src/redaction.rs src/shell.rs src/source.rs \
+            || test "$old_brush" != "$new_brush"; } \
+            && test "$old_parser" = "$new_parser"; then
+            echo "Parser sources or Brush changed since $release; raise PARSER_VERSION in src/store.rs" >&2
             exit 1
           fi
       - name: Install the pinned Rust toolchain

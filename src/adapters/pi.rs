@@ -21,9 +21,7 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
                     s.cwd = cwd;
                 }
                 s.parent_id = label(v, "parentSession");
-                // Pi ships without subagents, and a fork is a session a user
-                // started; a package that adds subagents could write ordinary
-                // sessions this rule cannot tell apart.
+                // Rule: docs/formats.md `session_kind`.
                 s.session_kind = SessionKind::Main;
                 s.session_kind_source = "session".into();
                 s.identified = true;
