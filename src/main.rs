@@ -87,7 +87,7 @@ enum Command {
         /// Comma-separated grouping; with no value, one total row [default: agent,model,role,week; for usage and compactions agent,model,week]
         #[arg(long, value_enum, value_delimiter = ',', num_args = 0..=1, action = clap::ArgAction::Set)]
         by: Option<Vec<By>>,
-        /// Count only shell calls that run this program
+        /// Select shell calls whose static syntax names this program
         #[arg(long, value_name = "NAME")]
         program: Option<String>,
         #[command(flatten)]

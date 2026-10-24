@@ -439,13 +439,6 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let page = first.sessions;
     assert_eq!(
         page.iter()
-            .map(|s| &s.session_id)
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        2
-    );
-    assert_eq!(
-        page.iter()
             .map(|s| s.session_id.as_str())
             .collect::<Vec<_>>(),
         ["crowded", "older"]

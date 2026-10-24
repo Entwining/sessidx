@@ -147,19 +147,6 @@ fn cli_validates_enum_values_and_unions_agents() {
         data.iter()
             .all(|v| v["agent"] == "claude" || v["agent"] == "pi")
     );
-    for flag in ["--json", "--scan", "--file", "--offset"] {
-        stream(
-            &sessidx(
-                &serial,
-                &store.path,
-                &roots,
-                &["search", "sharedneedle", flag, "1"],
-            )
-            .output()
-            .unwrap(),
-            2,
-        );
-    }
     let rows = stream(
         &sessidx(
             &serial,

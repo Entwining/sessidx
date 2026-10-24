@@ -184,13 +184,8 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
                     .all(|e| e.denials.is_empty())
             );
         } else if h == Agent::Codex {
-            assert_eq!(
-                usize::from(
-                    &*s.session_id == "child-thread"
-                        && s.parent_id.as_deref() == Some("parent-thread")
-                ),
-                1
-            );
+            assert_eq!(&*s.session_id, "child-thread");
+            assert_eq!(s.parent_id.as_deref(), Some("parent-thread"));
             // The injected AGENTS.md message stands in for absent base instructions.
             assert_eq!(
                 s.instruction_hash.as_deref(),
@@ -203,7 +198,7 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
             );
             assert_eq!(es.iter().filter(|e| &*e.role == "assistant").count(), 2);
         } else {
-            assert_eq!(usize::from(s.parent_id.as_deref() == Some("pi-parent")), 1);
+            assert_eq!(s.parent_id.as_deref(), Some("pi-parent"));
             assert_eq!(
                 es.iter()
                     .flat_map(|e| &e.denials)

@@ -334,10 +334,6 @@ fn result_envelopes_exclude_quoted_markers_and_preserve_native_denials() {
 
 #[test]
 fn claude_denial_kinds_map_channels_and_interruptions_record_no_denial() {
-    // Claude Code 2.1.296 writes toolDenialKind from a fixed set and labels
-    // hook denials permission-rule; permissionDecision (2.1.293+) names the
-    // deciding channel. The structured value replaces the generic
-    // text-derived native_denial source.
     let cases: &[(&str, Option<serde_json::Value>, &str)] = &[
         ("user-rejected", None, "user_rejected"),
         ("permission-rule", None, "permission_rule"),

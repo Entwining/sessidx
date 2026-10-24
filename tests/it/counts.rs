@@ -149,7 +149,6 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         &store.db,
         "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n",
     );
-    assert!(excess.is_err());
     assert!(excess.unwrap_err().to_string().contains("10000 rows"));
     let start = std::time::Instant::now();
     let err = counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
@@ -195,7 +194,8 @@ fn program_selection_names_calls_whose_program_is_unresolved_apart_from_its_popu
     assert_eq!(result[0]["results_with_unresolved_program"], 1);
 }
 
-/// Every fixture indexed from two files into one store.
+/// Each agent's fixture in one transcript and a copy of its history in
+/// another, all in one store.
 fn copied_history() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     // Denied calls whose program selection depends on matching the call: two

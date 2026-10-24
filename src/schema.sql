@@ -1,4 +1,3 @@
--- Source files are the authority; byte ranges include the complete JSONL newline.
 -- `written` counts the records indexed since the database was last compacted. Rule:
 -- docs/formats.md `index_compaction`.
 CREATE TABLE IF NOT EXISTS index_identity (
@@ -36,8 +35,9 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- skips transcripts outside its window. Rule: docs/formats.md `grep_traversal`.
 CREATE INDEX IF NOT EXISTS sessions_id ON sessions(session_id);
 CREATE UNIQUE INDEX IF NOT EXISTS sessions_path ON sessions(path);
--- Every indexed event needs a range for show/grep and identity for dedup. Bodies live in
--- event_texts so that scans over this metadata stay narrow.
+-- Every indexed event needs a range for show/grep and identity for dedup. Source files are
+-- the authority, and a range includes its record's newline. Bodies live in event_texts so
+-- that scans over this metadata stay narrow.
 CREATE TABLE IF NOT EXISTS event_rows (
  id INTEGER PRIMARY KEY AUTOINCREMENT, file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
  line_no INTEGER NOT NULL, byte_off INTEGER NOT NULL, byte_len INTEGER NOT NULL, ordinal INTEGER NOT NULL,
@@ -78,7 +78,8 @@ CREATE VIEW IF NOT EXISTS events AS
  CASE WHEN e.native_id IS NULL THEN NULL ELSE lower(hex(e.native_id)) END AS native_id,
  e.file_id,e.byte_off,e.byte_len,e.ordinal,lower(hex(e.raw_hash)) AS raw_hash,e.canonical
  FROM event_rows e JOIN sessions s ON s.file_id=e.file_id;
--- Static sites are not execution counts. All results are attributed at call level.
+-- Static sites are not execution counts, and a site has no outcome of its own: results
+-- belong to the call.
 CREATE TABLE IF NOT EXISTS commands (
  id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL REFERENCES event_rows(id) ON DELETE CASCADE,
  site INTEGER NOT NULL, program TEXT, argv_json TEXT, parsed INTEGER NOT NULL

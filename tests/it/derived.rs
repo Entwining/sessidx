@@ -9,16 +9,16 @@ use std::{
     },
 };
 
-/// `canonical` as `canonical_events` defined it before it was stored: the first
-/// copy of each native event by its session's start, path, and position.
+/// `canonical` by its definition, read from the rows: the first copy of each
+/// native event by its session's start, path, and position.
 const FIRST_COPIES: &str = "SELECT r.id FROM event_rows r JOIN sessions s ON s.file_id=r.file_id
  WHERE r.native_id IS NULL OR NOT EXISTS (
   SELECT 1 FROM event_rows r2 JOIN sessions s2 ON s2.file_id=r2.file_id
   WHERE r2.native_id=r.native_id AND r2.kind=r.kind AND r2.id<>r.id AND s2.agent=s.agent
   AND (coalesce(s2.started_at,'9999'),s2.path,r2.line_no,r2.ordinal) < (coalesce(s.started_at,'9999'),s.path,r.line_no,r.ordinal))";
 
-/// `call_ok` and `call_ok_source` as `call_outcomes` defined them before they
-/// were stored, for every tool call rather than only first copies.
+/// `call_ok` and `call_ok_source` by their definition, read from the rows, for
+/// every tool call rather than only first copies.
 const OUTCOMES: &str = "SELECT c.id,
  (SELECT CASE WHEN sum(r.ok=0)>0 THEN 0 WHEN sum(r.ok=1)>0 THEN 1 END
   FROM sessions rs JOIN event_rows r ON r.file_id=rs.file_id

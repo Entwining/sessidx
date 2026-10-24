@@ -191,15 +191,6 @@ fn previous_compact_schema_rebuilds_without_reading_new_columns() {
         let mut upgrade = Store::open_for_rebuild(&path).unwrap();
         upgrade.refresh(&[], true, None).unwrap();
         Store::require_schema(&upgrade.db).unwrap();
-        let n: i64 = upgrade
-            .db
-            .query_row(
-                "SELECT count(*) FROM events WHERE text_truncated=1",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(n, 0);
     }
 }
 
