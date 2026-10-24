@@ -232,6 +232,23 @@ fn end(
     )
 }
 
+/// Writes a query's data records and its `end` record, and returns its exit
+/// code: 0 with data, 1 without.
+fn finish<T: Serialize>(
+    kind: &str,
+    records: &[T],
+    refresh: &Value,
+    coverage: &Coverage,
+    cursor: Option<String>,
+    unit: &str,
+) -> Result<i32> {
+    for record in records {
+        emit(kind, serde_json::to_value(record)?)?;
+    }
+    end(refresh, coverage, cursor, unit, records.len())?;
+    Ok(i32::from(records.is_empty()))
+}
+
 fn run(cli: Cli) -> Result<i32> {
     let home = std::env::home_dir().context("home directory unknown")?;
     let path = cli
@@ -339,9 +356,6 @@ fn search(
         }
     };
     let more = reached < snapshot.search_matched;
-    for session in &sessions {
-        emit("session", serde_json::to_value(session)?)?;
-    }
     // Past the frozen prefix the end stays incomplete without a cursor.
     let coverage = Coverage {
         incomplete: more,
@@ -354,14 +368,14 @@ fn search(
             ..snapshot
         }),
     )?;
-    end(
+    finish(
+        "session",
+        &sessions,
         &json!(refresh),
         &coverage,
         cursor,
         "session_hits",
-        sessions.len(),
-    )?;
-    Ok(if sessions.is_empty() { 1 } else { 0 })
+    )
 }
 
 fn grep(
@@ -396,10 +410,9 @@ fn grep(
         snapshot.after,
         sessidx::BUDGET,
     )?;
-    for hit in &hits {
-        emit("hit", serde_json::to_value(hit)?)?;
-    }
-    end(
+    finish(
+        "hit",
+        &hits,
         &json!(refresh),
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
@@ -407,9 +420,7 @@ fn grep(
             ..snapshot
         }))?,
         "source_ranges",
-        hits.len(),
-    )?;
-    Ok(if hits.is_empty() { 1 } else { 0 })
+    )
 }
 
 fn show(
@@ -434,10 +445,9 @@ fn show(
         snapshot.within,
         snapshot.high_water,
     )?;
-    for hit in &hits {
-        emit("record", serde_json::to_value(hit)?)?;
-    }
-    end(
+    finish(
+        "record",
+        &hits,
         &json!(refresh),
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
@@ -446,9 +456,7 @@ fn show(
             ..snapshot
         }))?,
         "source_ranges",
-        hits.len(),
-    )?;
-    Ok(if hits.is_empty() { 1 } else { 0 })
+    )
 }
 
 fn count(
@@ -463,10 +471,9 @@ fn count(
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
     let rows = counting::count(&db, metric, by, program, filters)?;
-    for row in &rows {
-        emit("count", row.clone())?;
-    }
-    end(
+    finish(
+        "count",
+        &rows,
         &json!(refresh),
         &Coverage {
             records: rows.len(),
@@ -474,17 +481,20 @@ fn count(
         },
         None,
         "aggregate_rows",
-        rows.len(),
-    )?;
-    Ok(if rows.is_empty() { 1 } else { 0 })
+    )
 }
 
 fn doctor(path: &Path, roots: &[Root]) -> Result<i32> {
     let (store, refresh) = refreshed(path, roots)?;
     let db = store.db.unchecked_transaction()?;
-    emit("doctor", counting::doctor(&db)?)?;
-    end(&json!(refresh), &Coverage::default(), None, "diagnostic", 1)?;
-    Ok(0)
+    finish(
+        "doctor",
+        &[counting::doctor(&db)?],
+        &json!(refresh),
+        &Coverage::default(),
+        None,
+        "diagnostic",
+    )
 }
 
 fn sql(path: &Path, query: &str) -> Result<i32> {
@@ -504,11 +514,13 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.busy_timeout(Duration::from_millis(50))?;
     Store::require_schema(&db)?;
-    let rows = counting::sql(&db, query)?;
-    for row in &rows {
-        emit("row", json!({"data":row}))?;
-    }
-    end(
+    let rows: Vec<Value> = counting::sql(&db, query)?
+        .into_iter()
+        .map(|row| json!({"data":row}))
+        .collect();
+    finish(
+        "row",
+        &rows,
         &refresh,
         &Coverage {
             records: rows.len(),
@@ -516,9 +528,7 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         },
         None,
         "sql_rows",
-        rows.len(),
-    )?;
-    Ok(if rows.is_empty() { 1 } else { 0 })
+    )
 }
 
 fn index(path: &Path, roots: &[Root], full: bool) -> Result<i32> {

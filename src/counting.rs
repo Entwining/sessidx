@@ -1,6 +1,6 @@
 use crate::{
     model::name,
-    query::Filters,
+    query::{Filters, with_deadline},
     store::{DAILY_COUNTS, PROGRAM_COUNTS, Rollup},
 };
 use anyhow::Result;
@@ -462,8 +462,7 @@ pub fn doctor(db: &Connection) -> Result<Json> {
 pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
     db.execute_batch("PRAGMA query_only=ON;")?;
     let deadline = Instant::now() + crate::BUDGET;
-    db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
-    let result = (|| {
+    let result = with_deadline(db, deadline, || {
         let mut batch = rusqlite::Batch::new(db, sql);
         let mut stmt = batch.next()?.ok_or_else(|| anyhow::anyhow!("empty SQL"))?;
         anyhow::ensure!(batch.next()?.is_none(), "sql accepts exactly one statement");
@@ -507,17 +506,11 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
             result.push(Json::Object(obj));
         }
         Ok(result)
-    })();
-    db.progress_handler(0, None::<fn() -> bool>)?;
+    });
     db.execute_batch("PRAGMA query_only=OFF;")?;
-    result.map_err(|e| match e.downcast_ref::<rusqlite::Error>() {
-        Some(rusqlite::Error::SqliteFailure(f, _))
-            if f.code == rusqlite::ErrorCode::OperationInterrupted =>
-        {
-            anyhow::anyhow!(
-                "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
-            )
-        }
-        _ => e,
+    result?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
+        )
     })
 }
