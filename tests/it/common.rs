@@ -63,6 +63,10 @@ pub fn stream(out: &Output, exit: i32) -> Vec<Value> {
     assert_eq!(records.iter().filter(|v| v["type"] == "end").count(), 1);
     let end = records.last().unwrap();
     assert_eq!(end["type"], "end");
+    if end.get("error").is_some() {
+        assert_eq!(end.get("stale"), Some(&Value::Null));
+        assert!(end.get("refresh").is_none());
+    }
     let searched = &end["searched"];
     let returned = searched["returned"].as_u64().unwrap();
     match searched["unit"].as_str() {

@@ -26,7 +26,7 @@ Then build the index once:
 sessidx index
 ```
 
-It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes, and an interrupted build resumes from the files it finished. From then on, each query first indexes new and changed logs within a two-second budget, so nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete. The same holds after an upgrade that changes how logs are read or indexed until `sessidx index` runs; an upgrade that changes the index's tables says in its release notes to run `sessidx index --full`.
+It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes, and an interrupted build resumes from the files it finished. From then on, each query except `sql` first indexes new and changed logs within a two-second budget, so nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete. The same holds after an upgrade that changes how logs are read or indexed until `sessidx index` runs; an upgrade that changes the index's tables says in its release notes to run `sessidx index --full`.
 
 ### Keep history searchable
 
@@ -83,7 +83,7 @@ $ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, 
 {"agent":"pi","calls":1,"failed":0,"succeeded":1,"outcome_unknown":0}
 ```
 
-The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the 24 KiB page size, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
+The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the 24 KiB page size, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`. `sql` does not refresh, so its `complete` does not cover records the index has not reached, and its `stale` is `null`.
 
 | Command | Use it to |
 | --- | --- |

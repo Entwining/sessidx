@@ -27,7 +27,11 @@ fn cli_streams_end_coverage_and_query_bound_cursors() {
             exit,
         );
         assert!(rows[..rows.len() - 1].iter().all(|v| v["type"] == kind));
-        assert_eq!(rows.last().unwrap()["complete"], true);
+        let end = rows.last().unwrap();
+        assert_eq!(end["complete"], true);
+        if kind != "row" {
+            assert_eq!(end.get("stale"), Some(&json!(false)), "{args:?}");
+        }
         if kind == "record" {
             assert_eq!(rows[0]["record"]["message"]["content"], "sharedneedle");
         }

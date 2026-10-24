@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use sessidx::model::Agent;
 use std::{
     fs,
+    io::Write,
     process::Stdio,
     time::{Duration, Instant},
 };
@@ -260,13 +261,12 @@ fn cli_writer_contention_waits_within_the_refresh_budget() {
         .unwrap(),
         0,
     );
-    assert_eq!(rows.last().unwrap()["stale"], true);
-    assert_eq!(rows.last().unwrap()["complete"], false);
-    // sql does not refresh, so it reports no coverage it did not measure.
-    assert_eq!(
-        rows.last().unwrap()["refresh"],
-        json!({"stale": true, "writer_busy": true})
-    );
+    // sql does not refresh, so a writer leaves its result complete and its
+    // freshness unknown, and only `writer_busy` reports the writer.
+    let end = rows.last().unwrap();
+    assert_eq!(end.get("stale"), Some(&Value::Null));
+    assert_eq!(end["complete"], true);
+    assert_eq!(end["refresh"], json!({"stale": null, "writer_busy": true}));
 }
 
 #[test]
@@ -411,7 +411,7 @@ fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
         if args[0] == "sql" {
             assert_eq!(
                 rows[0]["refresh"],
-                json!({"stale": false, "writer_busy": false})
+                json!({"stale": null, "writer_busy": false})
             );
         }
     }
@@ -531,6 +531,40 @@ fn provenance_labels_are_unredacted_and_none_when_absent() {
         count("SELECT count(*) FROM events WHERE (model IS NULL)!=(model_source='none')"),
         0
     );
+}
+
+#[test]
+fn sql_answers_from_the_indexed_rows_until_a_refresh() {
+    let serial = serial();
+    let (_dir, store, roots) = three_agents();
+    let later = json!({"type":"user","uuid":"c-later","sessionId":"claude-session","timestamp":"2026-10-02T00:00:00Z","message":{"role":"user","content":"laterneedle"}});
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&roots[0].path)
+        .unwrap()
+        .write_all(format!("{later}\n").as_bytes())
+        .unwrap();
+    let run = |args: &[&str]| {
+        stream(
+            &sessidx(&serial, &store.path, &roots, args)
+                .output()
+                .unwrap(),
+            0,
+        )
+    };
+    let max_ts = || {
+        let rows = run(&[
+            "sql",
+            "SELECT max_ts FROM sessions WHERE session_id = 'claude-session'",
+        ]);
+        // Nothing compared the index with the sources, so sql cannot claim
+        // its rows are current.
+        assert_eq!(rows[1].get("stale"), Some(&Value::Null));
+        rows[0]["data"]["max_ts"].clone()
+    };
+    assert_eq!(max_ts(), "2026-10-01T00:00:00.000Z");
+    run(&["search", "laterneedle"]);
+    assert_eq!(max_ts(), "2026-10-02T00:00:00.000Z");
 }
 
 #[test]

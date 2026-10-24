@@ -224,10 +224,11 @@ fn end(
     unit: &str,
     returned: usize,
 ) -> Result<()> {
-    let stale = refresh["stale"] == true;
+    // `sql` reports `null`: it never compares the index with the sources.
+    let stale = refresh["stale"].as_bool();
     emit(
         "end",
-        json!({"complete": !coverage.incomplete && !stale, "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges,"refresh":refresh}),
+        json!({"complete": !coverage.incomplete && stale != Some(true), "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges,"refresh":refresh}),
     )
 }
 
@@ -492,12 +493,13 @@ fn sql(path: &Path, query: &str) -> Result<i32> {
         "no index at {}; run sessidx index to build it",
         path.display()
     );
-    // sql does not refresh, so its coverage holds only whether a writer held
-    // the lock when it started. Holding the lock through the query would make
-    // every refresh meanwhile report a busy writer. Rule: docs/formats.md
+    // sql does not refresh, so whether its rows are current is unknown, and
+    // its coverage holds only whether a writer held the lock when it started.
+    // Holding the lock through the query would make every refresh meanwhile
+    // report a busy writer. Rules: docs/formats.md `sql_freshness` and
     // `sql_lock_probe`.
     let writer_busy = Store::read_lock(path)?.is_none();
-    let refresh = json!({"stale": writer_busy, "writer_busy": writer_busy});
+    let refresh = json!({"stale": null, "writer_busy": writer_busy});
     let db =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     db.busy_timeout(Duration::from_millis(50))?;
