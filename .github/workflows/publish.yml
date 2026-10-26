@@ -19,6 +19,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify tag and release notes
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
@@ -43,6 +45,7 @@ jobs:
           private-key: ${{ secrets.TAP_APP_PRIVATE_KEY }}
           owner: Entwining
           repositories: homebrew-tap
+          permission-contents: write
       - name: Ask the tap to pick up this version
         env:
           GH_TOKEN: ${{ steps.tap-token.outputs.token }}
