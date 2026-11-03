@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "sessidx"
-version = "0.0.14"
+version = "0.0.15"
 dependencies = [
  "anyhow",
  "brush-parser",
