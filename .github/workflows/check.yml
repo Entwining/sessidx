@@ -84,6 +84,7 @@ jobs:
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
           test "$("$RUNNER_TEMP/package/bin/sessidx" --version)" = "sessidx $version"
           test -s "$RUNNER_TEMP/package/LICENSE-THIRD-PARTY.md"
+          cmp skills/sessidx/SKILL.md "$RUNNER_TEMP/package/share/sessidx/skills/sessidx/SKILL.md"
       - name: Test
         run: |
           test "$(uname -m)" = arm64

@@ -34,7 +34,7 @@ When an agent deletes an old session file, sessidx drops its rows too, so the se
 
 ## Use it from an agent
 
-The [`sessidx` skill](skills/sessidx/SKILL.md) tells an agent when to reach for sessidx and how to read its results. Each agent installs it as a plugin or package with the commands below; start a new session afterwards to load it. If you installed the skill another way before, remove that copy first, or the agent finds two and may keep the old one. The skill does not include the `sessidx` binary: the agent runs the one you installed above, so it must be on `PATH`.
+The [`sessidx` skill](skills/sessidx/SKILL.md) tells an agent when to reach for sessidx and how to read its results. Install it for each agent with one of the methods below; start a new session afterwards to load it. If you installed the skill another way before, remove that copy first, or the agent finds two and may keep the old one. The skill does not include the `sessidx` binary: the agent runs the one you installed above, so it must be on `PATH`.
 
 ### Claude Code
 
@@ -60,6 +60,15 @@ pi install git:github.com/Entwining/sessidx
 ```
 
 Update it with `pi update git:github.com/Entwining/sessidx`.
+
+### Homebrew's copy
+
+A Homebrew install also puts the skill from its release at `$(brew --prefix sessidx)/share/sessidx/skills/sessidx`, so it matches the installed binary through upgrades. Link it into the skills directory an agent reads, such as `~/.claude/skills` for Claude Code or `~/.agents/skills` for Codex and Pi:
+
+```sh
+mkdir -p ~/.agents/skills
+ln -s "$(brew --prefix sessidx)/share/sessidx/skills/sessidx" ~/.agents/skills/sessidx
+```
 
 ## Use it directly
 

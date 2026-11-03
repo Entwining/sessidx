@@ -11,6 +11,8 @@ build:
 	mkdir -p "$(OUT)/bin"
 	install -m 755 "$(target_dir)/release/sessidx" "$(OUT)/bin/sessidx"
 	install -m 644 LICENSE README.md "$(OUT)/"
+	mkdir -p "$(OUT)/share/sessidx/skills"
+	cp -R skills/sessidx "$(OUT)/share/sessidx/skills/"
 # cargo metadata needs every target's crates, which no build fetches; cargo-about only logs a dropped notice, such as a clarification whose checksum no longer matches, so any warning or error fails.
 	$(CARGO) fetch --locked
 	$(CARGO) about generate --frozen --fail --output-file "$(OUT)/LICENSE-THIRD-PARTY.md" about.hbs 2> "$(target_dir)/cargo-about.log" || { cat "$(target_dir)/cargo-about.log" >&2; exit 1; }
