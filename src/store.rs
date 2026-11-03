@@ -80,11 +80,7 @@ impl Store {
     }
 
     pub fn lock(&self, deadline: Option<Instant>) -> Result<Option<WriterLock>> {
-        WriterLock::acquire(&self.path, false, deadline)
-    }
-
-    pub fn read_lock(path: &Path) -> Result<Option<WriterLock>> {
-        WriterLock::acquire(path, true, None)
+        WriterLock::acquire(&self.path, deadline)
     }
 
     pub fn refresh(

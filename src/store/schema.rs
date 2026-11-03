@@ -4,19 +4,6 @@ use rusqlite::Connection;
 use std::collections::BTreeMap;
 
 impl Store {
-    pub fn require_schema(db: &Connection) -> Result<()> {
-        let version: i64 = db.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        anyhow::ensure!(
-            version == SCHEMA_VERSION,
-            "database schema changed; run sessidx index --full"
-        );
-        anyhow::ensure!(
-            definitions(db, "view")? == definitions(&expected_schema()?, "view")?,
-            "database views changed; run sessidx index"
-        );
-        Ok(())
-    }
-
     /// Brings views and indexes to the definitions in `schema.sql`, which
     /// change without a schema version. Views are recreated at once, because
     /// the query that follows reads them; indexes only when `build_indexes`,

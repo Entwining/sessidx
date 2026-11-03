@@ -52,35 +52,6 @@ fn cli_static_help_and_version_preserve_locators_and_errors_redact_values() {
 }
 
 #[test]
-fn sql_without_an_index_names_the_build_command() {
-    let serial = serial();
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("index.db");
-    let out = sessidx(&serial, &db, &[], &["sql", "SELECT 1"])
-        .output()
-        .unwrap();
-    let rows = stream(&out, 2);
-    assert!(
-        rows[0]["error"]
-            .as_str()
-            .unwrap()
-            .contains("run sessidx index")
-    );
-    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
-    let out = sessidx(&serial, &db, &[], &["index"]).output().unwrap();
-    let home = dir.path().display();
-    assert_eq!(
-        stream(&out, 0)[0]["missing_roots"],
-        json!([
-            format!("claude={home}/.claude/projects"),
-            format!("codex={home}/.codex/sessions"),
-            format!("codex={home}/.codex/archived_sessions"),
-            format!("pi={home}/.pi/agent/sessions"),
-        ])
-    );
-}
-
-#[test]
 fn cli_validates_enum_values_and_unions_agents() {
     let serial = serial();
     let (_dir, store, roots) = three_agents();
@@ -237,23 +208,6 @@ fn cli_writer_contention_waits_within_the_refresh_budget() {
     assert_eq!(end["stale"], true);
     assert_eq!(end["complete"], false);
     assert_eq!(end["refresh"]["writer_busy"], true);
-    let rows = stream(
-        &sessidx(
-            &serial,
-            &store.path,
-            &roots,
-            &["sql", "SELECT count(*) AS n FROM events"],
-        )
-        .output()
-        .unwrap(),
-        0,
-    );
-    // sql does not refresh, so a writer leaves its result complete and its
-    // freshness unknown, and only `writer_busy` reports the writer.
-    let end = rows.last().unwrap();
-    assert_eq!(end.get("stale"), Some(&Value::Null));
-    assert_eq!(end["complete"], true);
-    assert_eq!(end["refresh"], json!({"stale": null, "writer_busy": true}));
 }
 
 #[test]
@@ -395,12 +349,6 @@ fn empty_grep_show_count_and_sql_results_exit_one_with_a_complete_end() {
         assert_eq!(rows.len(), 1, "{args:?}");
         assert_eq!(rows[0]["complete"], true, "{args:?}");
         assert!(rows[0].get("error").is_none(), "{args:?}");
-        if args[0] == "sql" {
-            assert_eq!(
-                rows[0]["refresh"],
-                json!({"stale": null, "writer_busy": false})
-            );
-        }
     }
 }
 
@@ -521,7 +469,7 @@ fn provenance_labels_are_unredacted_and_none_when_absent() {
 }
 
 #[test]
-fn sql_answers_from_the_indexed_rows_until_a_refresh() {
+fn sql_answers_after_refreshing_the_index() {
     let serial = serial();
     let (_dir, store, roots) = three_agents();
     let later = json!({"type":"user","uuid":"c-later","sessionId":"claude-session","timestamp":"2026-10-02T00:00:00Z","message":{"role":"user","content":"laterneedle"}});
@@ -531,27 +479,22 @@ fn sql_answers_from_the_indexed_rows_until_a_refresh() {
         .unwrap()
         .write_all(format!("{later}\n").as_bytes())
         .unwrap();
-    let run = |args: &[&str]| {
-        stream(
-            &sessidx(&serial, &store.path, &roots, args)
-                .output()
-                .unwrap(),
-            0,
+    let rows = stream(
+        &sessidx(
+            &serial,
+            &store.path,
+            &roots,
+            &[
+                "sql",
+                "SELECT max_ts FROM sessions WHERE session_id = 'claude-session'",
+            ],
         )
-    };
-    let max_ts = || {
-        let rows = run(&[
-            "sql",
-            "SELECT max_ts FROM sessions WHERE session_id = 'claude-session'",
-        ]);
-        // Nothing compared the index with the sources, so sql cannot claim
-        // its rows are current.
-        assert_eq!(rows[1].get("stale"), Some(&Value::Null));
-        rows[0]["data"]["max_ts"].clone()
-    };
-    assert_eq!(max_ts(), "2026-10-01T00:00:00.000Z");
-    run(&["search", "laterneedle"]);
-    assert_eq!(max_ts(), "2026-10-02T00:00:00.000Z");
+        .output()
+        .unwrap(),
+        0,
+    );
+    assert_eq!(rows[0]["data"]["max_ts"], "2026-10-02T00:00:00.000Z");
+    assert_eq!(rows[1]["stale"], false);
 }
 
 #[test]

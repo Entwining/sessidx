@@ -33,8 +33,8 @@
 //! Each command runs `--runs` times per binary, the binaries alternating so that
 //! drift falls on both. In the `warm` condition every command runs with nothing
 //! new to index; in the `append` condition the most recent command of each
-//! refreshing verb runs with records appended to a synthetic transcript before
-//! every pair, as when an agent queries while its own transcript grows. Run it
+//! verb runs with records appended to a synthetic transcript before every
+//! pair, as when an agent queries while its own transcript grows. Run it
 //! from an ordinary shell on an otherwise idle machine: agent sandboxes break
 //! `/usr/bin/time -l`, and anything else writing session logs shows up in the
 //! refresh tallies.
@@ -210,7 +210,7 @@ fn main() -> Result<()> {
         }
     }
     for (verb, commands) in &workload {
-        if *verb == "sql" || commands.is_empty() {
+        if commands.is_empty() {
             continue;
         }
         let runs = time(

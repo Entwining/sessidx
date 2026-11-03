@@ -16,7 +16,6 @@ use sha2::{Digest, Sha256};
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
-    time::Duration,
 };
 
 #[derive(Parser)]
@@ -93,7 +92,7 @@ enum Command {
         #[command(flatten)]
         filters: Filters,
     },
-    /// Run one read-only SELECT/WITH without refresh
+    /// Run one read-only SELECT/WITH over the refreshed index
     Sql {
         /// One SELECT or WITH statement over the tables in src/schema.sql
         query: String,
@@ -218,17 +217,16 @@ fn emit(kind: &str, value: Value) -> Result<()> {
 }
 
 fn end(
-    refresh: &Value,
+    refresh: &Refresh,
     coverage: &Coverage,
     cursor: Option<String>,
     unit: &str,
     returned: usize,
 ) -> Result<()> {
-    // `sql` reports `null`: it never compares the index with the sources.
-    let stale = refresh["stale"].as_bool();
+    let stale = refresh.stale;
     emit(
         "end",
-        json!({"complete": !coverage.incomplete && stale != Some(true), "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges,"refresh":refresh}),
+        json!({"complete": !coverage.incomplete && !stale, "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges,"refresh":refresh}),
     )
 }
 
@@ -237,7 +235,7 @@ fn end(
 fn finish<T: Serialize>(
     kind: &str,
     records: &[T],
-    refresh: &Value,
+    refresh: &Refresh,
     coverage: &Coverage,
     cursor: Option<String>,
     unit: &str,
@@ -289,7 +287,7 @@ fn run(cli: Cli) -> Result<i32> {
             program.as_deref(),
             &filters,
         ),
-        Command::Sql { query } => sql(&path, &query),
+        Command::Sql { query } => sql(&path, &roots, &query),
         Command::Index { full } => index(&path, &roots, full),
         Command::Doctor => doctor(&path, &roots),
     }
@@ -371,7 +369,7 @@ fn search(
     finish(
         "session",
         &sessions,
-        &json!(refresh),
+        &refresh,
         &coverage,
         cursor,
         "session_hits",
@@ -413,7 +411,7 @@ fn grep(
     finish(
         "hit",
         &hits,
-        &json!(refresh),
+        &refresh,
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
             after: Some(after),
@@ -448,7 +446,7 @@ fn show(
     finish(
         "record",
         &hits,
-        &json!(refresh),
+        &refresh,
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
             after: Some(after),
@@ -474,7 +472,7 @@ fn count(
     finish(
         "count",
         &rows,
-        &json!(refresh),
+        &refresh,
         &Coverage {
             records: rows.len(),
             ..Coverage::default()
@@ -490,31 +488,16 @@ fn doctor(path: &Path, roots: &[Root]) -> Result<i32> {
     finish(
         "doctor",
         &[counting::doctor(&db)?],
-        &json!(refresh),
+        &refresh,
         &Coverage::default(),
         None,
         "diagnostic",
     )
 }
 
-fn sql(path: &Path, query: &str) -> Result<i32> {
-    anyhow::ensure!(
-        path.exists(),
-        "no index at {}; run sessidx index to build it",
-        path.display()
-    );
-    // sql does not refresh, so whether its rows are current is unknown, and
-    // its coverage holds only whether a writer held the lock when it started.
-    // Holding the lock through the query would make every refresh meanwhile
-    // report a busy writer. Rules: docs/formats.md `sql_freshness` and
-    // `sql_lock_probe`.
-    let writer_busy = Store::read_lock(path)?.is_none();
-    let refresh = json!({"stale": null, "writer_busy": writer_busy});
-    let db =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    db.busy_timeout(Duration::from_millis(50))?;
-    Store::require_schema(&db)?;
-    let rows: Vec<Value> = counting::sql(&db, query)?
+fn sql(path: &Path, roots: &[Root], query: &str) -> Result<i32> {
+    let (store, refresh) = refreshed(path, roots)?;
+    let rows: Vec<Value> = counting::sql(&store.db, query)?
         .into_iter()
         .map(|row| json!({"data":row}))
         .collect();
@@ -540,7 +523,7 @@ fn index(path: &Path, roots: &[Root], full: bool) -> Result<i32> {
     let report = store.refresh(roots, full, None)?;
     emit("index", serde_json::to_value(&report)?)?;
     end(
-        &json!(report),
+        &report,
         &Coverage {
             records: report.records,
             ..Coverage::default()

@@ -68,15 +68,11 @@ fn changed_views_and_indexes_are_rebuilt_without_reindexing() {
         include_str!("../fixtures/claude.jsonl"),
     )
     .unwrap();
-    let error = Store::require_schema(&store.db).unwrap_err().to_string();
-    assert!(error.contains("run sessidx index"), "{error}");
-
     let report = store
         .refresh(&roots, false, Some(Duration::from_secs(60)))
         .unwrap();
     assert!(report.stale && report.continuation.is_some(), "{report:?}");
     assert_eq!(report.files_changed, 0);
-    Store::require_schema(&store.db).unwrap();
     let is_view = |d: &&(String, String, String)| d.0 == "view";
     assert_eq!(
         definitions(&store)
@@ -187,10 +183,9 @@ fn previous_compact_schema_rebuilds_without_reading_new_columns() {
         let old = rusqlite::Connection::open(&path).unwrap();
         old.execute_batch(&schema).unwrap();
         assert!(Store::open(&path).is_err());
-        assert!(Store::require_schema(&old).is_err());
         let mut upgrade = Store::open_for_rebuild(&path).unwrap();
         upgrade.refresh(&[], true, None).unwrap();
-        Store::require_schema(&upgrade.db).unwrap();
+        Store::open(&path).unwrap();
     }
 }
 
