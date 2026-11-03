@@ -35,7 +35,8 @@ pub struct Filters {
     /// Only events from this speaker
     #[arg(long, value_enum)]
     pub role: Option<Role>,
-    /// Only sessions started on their own (main) or spawned by another session (subagent)
+    /// Only sessions started on their own (main) or that their agent's log records as spawned
+    /// by another session of the same agent (subagent)
     #[arg(long, value_enum)]
     pub session_kind: Option<SessionKind>,
     /// Only events at or after this RFC 3339 time or UTC YYYY-MM-DD date
