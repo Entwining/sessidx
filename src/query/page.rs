@@ -58,7 +58,7 @@ impl Hit {
         self.body = Body::Part { part: text };
         let line = line_len(self, kind);
         if let Body::Part { part } = &mut self.body {
-            self.cut = fit(line, vec![("/part".to_owned(), part, offset)]);
+            self.cut = vec![fit(line, "/part", part, offset)];
         }
         Ok(self
             .cut
@@ -108,43 +108,28 @@ pub(super) fn line_len(record: &impl Serialize, kind: &str) -> usize {
 pub const CURSOR_MISMATCH: &str =
     "cursor belongs to another query or index version; restart without --cursor";
 
-/// Shortens strings, each from its offset, to the largest common length that
-/// fits a data line of `line` bytes into [`PAGE_BYTES`], so short ones stay
-/// whole, and lists each string that was shortened or starts past its
-/// beginning.
-pub(super) fn fit(line: usize, slots: Vec<(String, &mut String, usize)>) -> Vec<Cut> {
-    let whole: usize = slots.iter().map(|(_, text, _)| json_len(text)).sum();
+/// Shortens `text` from `offset` to the longest piece that fits a data line
+/// of `line` bytes, which holds the whole text, into [`PAGE_BYTES`], and
+/// returns the cut that lists it as `field`.
+fn fit(line: usize, field: &str, text: &mut String, offset: usize) -> Cut {
+    let others = line - json_len(text);
     let layout = |limit: usize| {
-        let mut size = line - whole;
-        let mut kept = Vec::new();
-        let mut cuts = Vec::new();
-        for (field, text, offset) in &slots {
-            let rest = &text[*offset..];
-            let k = rest.floor_char_boundary(limit);
-            size += json_len(&&rest[..k]);
-            if k < rest.len() || *offset > 0 {
-                cuts.push(Cut {
-                    field: field.clone(),
-                    bytes: text.len(),
-                    offset: *offset,
-                    kept: k,
-                });
-            }
-            kept.push(k);
-        }
-        if !cuts.is_empty() {
-            size += r#","cut":"#.len() + json_len(&cuts);
-        }
-        (size, kept, cuts)
+        let rest = &text[offset..];
+        let cut = Cut {
+            field: field.to_owned(),
+            bytes: text.len(),
+            offset,
+            kept: rest.floor_char_boundary(limit),
+        };
+        let size = others + json_len(&&rest[..cut.kept]) + r#","cut":"#.len() + json_len(&[&cut]);
+        (size, cut)
     };
     // Four bytes hold any character, so a continuing record always advances.
     let limits: Vec<usize> = (4..=PAGE_BYTES).collect();
     let fitting = limits.partition_point(|&limit| layout(limit).0 <= PAGE_BYTES);
-    let (_, kept, cuts) = layout(limits[fitting.saturating_sub(1)]);
-    for ((_, text, offset), k) in slots.into_iter().zip(kept) {
-        *text = text[offset..offset + k].to_owned();
-    }
-    cuts
+    let (_, cut) = layout(limits[fitting.saturating_sub(1)]);
+    *text = text[offset..offset + cut.kept].to_owned();
+    cut
 }
 
 /// A hit's columns, from `event_rows e` and `sessions s`.

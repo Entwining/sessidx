@@ -1,4 +1,4 @@
-use crate::common::{body, indexed, search_hits, truncated};
+use crate::common::{body, indexed, search_hits, stored, truncated};
 use clap::ValueEnum;
 use sessidx::{
     model::Agent,
@@ -26,7 +26,7 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].role, "tool");
         assert!(truncated(&hits[0]));
-        assert_eq!(body(&hits[0]), prefix);
+        assert_eq!(stored(&store.db, &hits[0]), prefix);
         assert!(
             search_hits(&store.db, "tailoutside", &Filters::default(), 20)
                 .unwrap()

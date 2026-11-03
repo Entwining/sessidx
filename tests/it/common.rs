@@ -57,8 +57,16 @@ pub fn stream(out: &Output, exit: i32) -> Vec<Value> {
         .collect();
     assert!(!records.is_empty());
     assert!(records.iter().all(|v| v["type"].is_string()));
+    // A search hit names its line by `ref` and leaves the rest to its session.
     for record in records.iter().filter(|v| v["type"] == "session") {
-        assert_eq!(record["path"], record["hits"][0]["path"]);
+        let path = record["path"].as_str().unwrap();
+        for hit in record["hits"].as_array().unwrap() {
+            let line = hit["ref"].as_str().unwrap().strip_prefix(path).unwrap();
+            assert!(line.strip_prefix(':').unwrap().parse::<u64>().is_ok());
+            for field in ["agent", "session_id", "path", "line_no"] {
+                assert!(hit.get(field).is_none(), "{hit}");
+            }
+        }
     }
     assert_eq!(records.iter().filter(|v| v["type"] == "end").count(), 1);
     let end = records.last().unwrap();
@@ -171,6 +179,16 @@ pub fn body(hit: &query::Hit) -> String {
         query::Body::Part { part } => part.clone(),
         query::Body::Unavailable { unavailable } => unavailable.clone(),
     }
+}
+
+/// The indexed text of a search hit's event, of which the hit shows an excerpt.
+pub fn stored(db: &rusqlite::Connection, hit: &query::Hit) -> String {
+    db.query_row(
+        "SELECT text FROM event_texts WHERE event_id=?",
+        [hit.event_id],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 pub fn truncated(hit: &query::Hit) -> bool {

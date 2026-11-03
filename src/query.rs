@@ -11,7 +11,7 @@ use clap::{Args, ValueEnum};
 pub use grep::scan;
 pub use page::{Body, CURSOR_MISMATCH, Coverage, Cut, Hit, Position};
 use rusqlite::{Connection, types::Value};
-pub use search::{SEARCH_PAGE_SESSIONS, SearchPage, Session, fts_query, search};
+pub use search::{EXCERPT_BYTES, SEARCH_PAGE_SESSIONS, SearchPage, Session, search};
 use serde::Serialize;
 pub use show::{show, show_snapshot};
 use std::time::Instant;

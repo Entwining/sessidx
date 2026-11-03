@@ -167,7 +167,7 @@ fn cli_validates_enum_values_and_unions_agents() {
     assert!(
         rows[..1]
             .iter()
-            .all(|r| r["hits"][0]["path"] == roots[0].path.to_str().unwrap())
+            .all(|r| r["path"] == roots[0].path.to_str().unwrap())
     );
 }
 

@@ -6,9 +6,9 @@ use std::fs;
 /// The page size docs/cli.md promises.
 const PAGE: usize = 24 * 1024;
 
-/// A record too large for a page in both its strings and its structure, then
-/// a short record that `searchneedle` also matches, and two that fit a page only apart and that `pairneedle`
-/// and `[cd]{100}` match.
+/// A record too large for a page in both its strings and its structure, a
+/// short record, and two that fit a page only apart and that `[cd]{100}`
+/// matches.
 fn transcript() -> String {
     let answer = "词语 ".repeat(15_000) + "searchneedle";
     let output = "b".repeat(60_000) + "tailneedle";
@@ -113,7 +113,7 @@ fn show_pages_continue_inside_a_record_and_move_whole_records() {
 }
 
 #[test]
-fn grep_and_search_cut_hits_whose_match_lies_past_the_page() {
+fn grep_cuts_a_record_whose_match_lies_past_the_page() {
     let serial = serial();
     let text = transcript();
     let (_dir, store, roots) = indexed_files(Agent::Claude, &[("pages", &text)]);
@@ -134,33 +134,13 @@ fn grep_and_search_cut_hits_whose_match_lies_past_the_page() {
     assert_eq!(rows[0]["cut"][0]["field"], "/part");
     assert!(!rows[0]["part"].as_str().unwrap().contains("tailneedle"));
     assert_eq!(rows[1]["complete"], true);
-
-    let out = sessidx(&serial, &store.path, &roots, &["search", "searchneedle"])
-        .output()
-        .unwrap();
-    within_page(&out.stdout);
-    let rows = stream(&out, 0);
-    // Only the long hit text is cut; the short one stays whole.
-    let cut = rows[0]["cut"].as_array().unwrap();
-    assert_eq!(cut.len(), 1);
-    let text = rows[0]
-        .pointer(cut[0]["field"].as_str().unwrap())
-        .unwrap()
-        .as_str()
-        .unwrap();
-    assert!(text.starts_with("词语") && !text.contains("searchneedle"));
-    assert_eq!(rows[0]["hits"].as_array().unwrap().len(), 2);
 }
 
 #[test]
-fn grep_and_search_move_a_record_that_does_not_fit_to_the_next_page() {
+fn grep_moves_a_record_that_does_not_fit_to_the_next_page() {
     let serial = serial();
     let text = transcript();
-    let other = format!(
-        "{}\n",
-        json!({"type":"user","uuid":"o1","sessionId":"other","timestamp":"2026-10-01T00:00:04Z","message":{"role":"user","content":format!("pairneedle {}", "e".repeat(14 * 1024))}})
-    );
-    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("pages", &text), ("other", &other)]);
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("pages", &text)]);
     let path = roots[0].path.join("pages.jsonl").display().to_string();
     let pages = |args: &[&str], exit| {
         let mut pages: Vec<Vec<Value>> = Vec::new();
@@ -204,28 +184,18 @@ fn grep_and_search_move_a_record_that_does_not_fit_to_the_next_page() {
     for key in ["records", "bytes"] {
         assert_eq!(searched(&grep, key), searched(&all, key), "{key}");
     }
-    let search = pages(&["search", "pairneedle"], 0);
-    let sessions: Vec<usize> = search.iter().map(|p| p.len() - 1).collect();
-    assert_eq!(sessions, [1, 1]);
-    assert!(search.iter().flatten().all(|r| r.get("cut").is_none()));
 }
 
 #[test]
 fn a_page_of_exactly_24_kib_stays_whole() {
     let serial = serial();
-    // A second session that only `search` reaches puts its filled line after another.
-    let pair = format!(
-        "{}\n",
-        json!({"type":"user","uuid":"p1","sessionId":"pair","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"fitneedle"}})
-    );
-    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("exact", ""), ("pair", &pair)]);
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("exact", "")]);
     let file = roots[0].path.join("exact.jsonl");
     let path = file.display().to_string();
     let target = format!("{path}:1");
     for args in [
         vec!["show", &target, "--around", "0"],
         vec!["grep", "fitneedle", "--session", &path],
-        vec!["search", "fitneedle"],
     ] {
         let page = |filler: usize| {
             let record = json!({"type":"user","uuid":"x1","sessionId":"exact","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":format!("fitneedle {}", "x".repeat(filler))}});
@@ -241,4 +211,78 @@ fn a_page_of_exactly_24_kib_stays_whole() {
         assert_eq!(filled.len(), rows.len(), "{args:?}");
         assert!(filled.iter().all(|r| r.get("cut").is_none()), "{args:?}");
     }
+}
+
+#[test]
+fn search_moves_a_session_that_does_not_fit_and_keeps_an_exact_page_whole() {
+    let serial = serial();
+    // One long token keeps every session's BM25 score equal, so a longer
+    // filler changes the page's size but not the order: newest first.
+    let message = |session: &str, ts: &str, filler: usize| {
+        format!(
+            "{}\n",
+            json!({"type":"user","uuid":format!("{session}-1"),"sessionId":session,"timestamp":ts,"message":{"role":"user","content":format!("fitneedle {}", "x".repeat(filler))}})
+        )
+    };
+    let older: Vec<(String, String)> = (0..80)
+        .map(|i| {
+            let id = format!("s{i:03}");
+            let ts = format!("2026-10-01T00:{:02}:{:02}Z", i / 60, i % 60);
+            let line = message(&id, &ts, 1);
+            (id, line)
+        })
+        .collect();
+    let mut sessions: Vec<(&str, &str)> = older
+        .iter()
+        .map(|(id, line)| (id.as_str(), line.as_str()))
+        .collect();
+    sessions.push(("exact", ""));
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &sessions);
+    let file = roots[0].path.join("exact.jsonl");
+    let search = |filler: usize, cursor: Option<&str>| {
+        fs::write(&file, message("exact", "2026-10-02T00:00:00Z", filler)).unwrap();
+        let mut args = vec!["search", "fitneedle", "--limit", "1000"];
+        args.extend(cursor.iter().flat_map(|c| ["--cursor", *c]));
+        let out = sessidx(&serial, &store.path, &roots, &args)
+            .output()
+            .unwrap();
+        (within_page(&out.stdout), stream(&out, 0))
+    };
+    let ids = |rows: &[Value]| -> Vec<String> {
+        rows.iter()
+            .filter_map(|r| r["session_id"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let (short, first) = search(1, None);
+    let next = first.last().unwrap()["next"].as_str().unwrap().to_owned();
+    let (_, second) = search(1, Some(&next));
+    assert_eq!(second.last().unwrap()["complete"], true);
+    let mut all = [ids(&first), ids(&second)].concat();
+    assert_eq!(all[0], "exact");
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 81);
+    // The session that did not fit opens the next page whole.
+    assert!(first.iter().chain(&second).all(|r| r.get("cut").is_none()));
+    let (exact, filled) = search(1 + PAGE - short, None);
+    assert_eq!(exact, PAGE);
+    assert_eq!(ids(&filled), ids(&first));
+    assert!(filled.iter().all(|r| r.get("cut").is_none()));
+}
+
+#[test]
+fn search_shows_a_session_larger_than_a_page_alone() {
+    let serial = serial();
+    // Only the session's own fields, here its directory, can pass a page.
+    let line = format!(
+        "{}\n",
+        json!({"type":"user","uuid":"big-1","sessionId":"big","cwd":format!("/{}", "d".repeat(PAGE)),"timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":"bigneedle"}})
+    );
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("big", &line)]);
+    let out = sessidx(&serial, &store.path, &roots, &["search", "bigneedle"])
+        .output()
+        .unwrap();
+    let rows = stream(&out, 0);
+    assert_eq!(rows[0]["session_id"], "big");
+    assert_eq!(rows.last().unwrap()["complete"], true);
 }

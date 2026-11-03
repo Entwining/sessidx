@@ -1,22 +1,42 @@
 use super::{
     Filters, IN_FLIGHT_LOOKUP,
-    page::{Body, COLUMNS, Cut, Hit, PAGE_BYTES, fit, hit, line_len},
+    page::{Body, COLUMNS, Cut, Hit, PAGE_BYTES, hit, line_len},
     with_deadline,
 };
 use crate::{redaction::spaced_cjk, store::compaction_due};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use regex::Regex;
-use rusqlite::{Connection, params_from_iter, types::Value};
+use rusqlite::{Connection, params, params_from_iter, types::Value};
 use serde::Serialize;
 use std::{
+    ops::Range,
     sync::LazyLock,
     time::{Duration, Instant},
 };
 
 static SEARCH_TOKENS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""([^"]+)"|(\S+)"#).expect("static regex is valid"));
+static TOKENIZE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"tokenize='[^']*'").expect("static regex is valid"));
 
-pub fn fts_query(query: &str) -> Result<String> {
+/// The most bytes of a hit's text that a search page shows, around its
+/// matches: larger shows more context and fits fewer sessions on a page. Rule:
+/// docs/formats.md `search_excerpt`.
+pub const EXCERPT_BYTES: usize = 512;
+
+/// The most bytes of a hit's text that one FTS5 `highlight` call reads. Its
+/// time grows with the square of a text's matches, about 3 s for 100,000, so a
+/// longer text is read in pieces: larger lets a text with more matches exceed
+/// the deadline, smaller highlights more rows.
+const PIECE_BYTES: usize = 8 * EXCERPT_BYTES;
+
+/// The highlight markers around a match. A text that holds one shows its
+/// prefix instead, since its matches cannot be told from it.
+const OPEN: char = '\u{1}';
+const CLOSE: char = '\u{2}';
+
+/// The quoted FTS5 phrases of a search query, which a match holds all of.
+fn fts_phrases(query: &str) -> Result<Vec<String>> {
     anyhow::ensure!(!query.trim().is_empty(), "search query is empty");
     Ok(SEARCH_TOKENS
         .captures_iter(query)
@@ -28,8 +48,7 @@ pub fn fts_query(query: &str) -> Result<String> {
                 .as_str();
             format!("\"{}\"", spaced_cjk(term).replace('"', "\"\""))
         })
-        .collect::<Vec<_>>()
-        .join(" AND "))
+        .collect())
 }
 
 /// Sessions reachable through search pagination: larger allows deeper paging
@@ -46,6 +65,7 @@ pub struct Session {
     pub cwd: String,
     pub started_at: Option<String>,
     pub matched_hits: usize,
+    #[serde(serialize_with = "ranked_hits")]
     pub hits: Vec<Hit>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cut: Vec<Cut>,
@@ -53,21 +73,27 @@ pub struct Session {
     pub file_id: i64,
 }
 
-impl Session {
-    /// Cuts hit texts so the session's line fits a page.
-    fn fit(&mut self) {
-        let line = line_len(self, "session");
-        let slots = self
-            .hits
-            .iter_mut()
-            .enumerate()
-            .filter_map(|(i, hit)| match &mut hit.body {
-                Body::Text { text, .. } => Some((format!("/hits/{i}/text"), text, 0)),
-                _ => None,
-            })
-            .collect();
-        self.cut = fit(line, slots);
+/// Writes each hit without the agent, session ID, and path its session
+/// already carries, or the line its `ref` names, which would take a page's
+/// room from hit text.
+fn ranked_hits<S: serde::Serializer>(hits: &[Hit], serializer: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Ranked<'a> {
+        ts: &'a Option<String>,
+        role: &'a str,
+        model: &'a Option<String>,
+        #[serde(flatten)]
+        body: &'a Body,
+        #[serde(rename = "ref")]
+        reference: &'a str,
     }
+    serializer.collect_seq(hits.iter().map(|hit| Ranked {
+        ts: &hit.ts,
+        role: &hit.role,
+        model: &hit.model,
+        body: &hit.body,
+        reference: &hit.reference,
+    }))
 }
 
 pub struct SearchPage {
@@ -91,7 +117,7 @@ pub fn search(
     budget: Duration,
 ) -> Result<SearchPage> {
     let deadline = Instant::now() + budget;
-    if let Some(page) = with_deadline(db, deadline, || rank(db, query, filters, limit))? {
+    if let Some(page) = with_deadline(db, deadline, || rank(db, query, filters, limit, deadline))? {
         return Ok(page);
     }
     // Filters apply after each match is read, so they do not shorten the
@@ -105,7 +131,13 @@ pub fn search(
     anyhow::bail!("search exceeded {} seconds; {recovery}", budget.as_secs())
 }
 
-fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result<SearchPage> {
+fn rank(
+    db: &Connection,
+    query: &str,
+    filters: &Filters,
+    limit: usize,
+    deadline: Instant,
+) -> Result<SearchPage> {
     let (clause, mut args) = filters.sql(db)?;
     let frozen = filters
         .search_order
@@ -122,7 +154,8 @@ fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result
         }
         None => ("", "0"),
     };
-    args.push(Value::Text(fts_query(query)?));
+    let phrases = fts_phrases(query)?;
+    args.push(Value::Text(phrases.join(" AND ")));
     if let Some(order) = &frozen {
         args.push(Value::Text(order.clone()));
     }
@@ -188,19 +221,8 @@ fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result
             }),
         }
     }
-    // A session that does not fit after others starts the next page.
-    let mut used = 0;
-    for (i, session) in sessions.iter_mut().enumerate() {
-        let line = line_len(session, "session");
-        if used + line > PAGE_BYTES {
-            if i > 0 {
-                sessions.truncate(i);
-                break;
-            }
-            session.fit();
-        }
-        used += line_len(session, "session");
-    }
+    excerpt(db, &phrases, &mut sessions, deadline)?;
+    paginate(&mut sessions);
     Ok(SearchPage {
         sessions,
         matched_sessions,
@@ -209,4 +231,255 @@ fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result
             _ => None,
         },
     })
+}
+
+/// Keeps the sessions that fit a page; a session that does not fit after
+/// others starts the next page. Excerpts keep a session's line to a few KiB, so
+/// one that fills a page alone, which only a session field the log supplies,
+/// such as a `cwd` of kilobytes, could make, is kept whole rather than cut.
+fn paginate(sessions: &mut Vec<Session>) {
+    let mut used = 0;
+    let fitting = sessions
+        .iter()
+        .take_while(|session| {
+            used += line_len(session, "session");
+            used <= PAGE_BYTES
+        })
+        .count();
+    sessions.truncate(fitting.max(1));
+}
+
+/// Replaces each hit text longer than [`EXCERPT_BYTES`] with the window
+/// around its matches, listed in its session's `cut`. FTS5 finds each
+/// phrase's matches, so they are the ones the ranking counted. Rule:
+/// docs/formats.md `search_excerpt`.
+fn excerpt(
+    db: &Connection,
+    phrases: &[String],
+    sessions: &mut [Session],
+    deadline: Instant,
+) -> Result<()> {
+    let long: Vec<(usize, usize)> = sessions
+        .iter()
+        .enumerate()
+        .flat_map(|(i, s)| s.hits.iter().enumerate().map(move |(j, h)| (i, j, h)))
+        .filter(
+            |(_, _, h)| matches!(&h.body, Body::Text { text, .. } if text.len() > EXCERPT_BYTES),
+        )
+        .map(|(i, j, _)| (i, j))
+        .collect();
+    if long.is_empty() {
+        return Ok(());
+    }
+    fn text(hit: &Hit) -> &str {
+        match &hit.body {
+            Body::Text { text, .. } => text,
+            _ => unreachable!("search hits carry text"),
+        }
+    }
+    // The live table's tokenizer, so the matches are the ones it indexed.
+    let schema: String =
+        db.query_row("SELECT sql FROM sqlite_schema WHERE name='fts'", [], |r| {
+            r.get(0)
+        })?;
+    let tokenize = TOKENIZE
+        .find(&schema)
+        .context("the fts table names its tokenizer")?
+        .as_str();
+    let scratch = Connection::open_in_memory()?;
+    scratch.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
+    scratch.execute_batch(&format!(
+        "CREATE VIRTUAL TABLE excerpt USING fts5(text, {tokenize})"
+    ))?;
+    let mut insert = scratch.prepare("INSERT INTO excerpt(rowid,text) VALUES (?,?)")?;
+    // Each piece's hit and the range of its text it reads.
+    let mut read = Vec::new();
+    // Each text's spans per phrase, or `None` once a phrase's could not be
+    // aligned or the text holds a marker.
+    let mut spans = vec![Some(vec![Vec::new(); phrases.len()]); long.len()];
+    for (n, &(i, j)) in long.iter().enumerate() {
+        let text = text(&sessions[i].hits[j]);
+        if text.contains([OPEN, CLOSE]) {
+            spans[n] = None;
+            continue;
+        }
+        for range in pieces(text) {
+            insert.execute(params![read.len() as i64, spaced_cjk(&text[range.clone()])])?;
+            read.push((n, range));
+        }
+    }
+    let mut stmt = scratch.prepare(
+        "SELECT rowid,highlight(excerpt,0,char(1),char(2)) FROM excerpt WHERE excerpt MATCH ? ORDER BY rowid",
+    )?;
+    for (p, phrase) in phrases.iter().enumerate() {
+        let mut rows = stmt.query([phrase])?;
+        while let Some(row) = rows.next()? {
+            let (n, range) = &read[usize::try_from(row.get::<_, i64>(0)?)?];
+            let (i, j) = long[*n];
+            let whole = text(&sessions[i].hits[j]);
+            match (
+                &mut spans[*n],
+                align(&whole[range.clone()], &row.get::<_, String>(1)?),
+            ) {
+                // A piece that starts inside a token longer than a window
+                // reads the token's end as a token of its own.
+                (Some(found), Some(aligned)) => found[p].extend(
+                    aligned
+                        .into_iter()
+                        .map(|s| s.start + range.start..s.end + range.start)
+                        .filter(|s| !(s.start == range.start && splits_token(whole, s.start))),
+                ),
+                (slot, _) => *slot = None,
+            }
+        }
+    }
+    for (&(i, j), mut spans) in long.iter().zip(spans) {
+        // Pieces overlap, so a match can arrive twice and after later ones.
+        for found in spans.iter_mut().flatten() {
+            found.sort_unstable_by_key(|s| s.start);
+            found.dedup();
+        }
+        let session = &mut sessions[i];
+        let Body::Text { text, .. } = &mut session.hits[j].body else {
+            unreachable!("search hits carry text")
+        };
+        let window = window(text, spans.as_deref().unwrap_or_default(), deadline)?;
+        session.cut.push(Cut {
+            field: format!("/hits/{j}/text"),
+            bytes: text.len(),
+            offset: window.start,
+            kept: window.len(),
+        });
+        *text = text[window].to_owned();
+    }
+    Ok(())
+}
+
+/// The ranges of `text` that [`excerpt`] highlights. Each reads a window past
+/// where the next starts, so a match a window can hold lies whole in one.
+fn pieces(text: &str) -> Vec<Range<usize>> {
+    let mut starts = vec![0];
+    while let Some(&last) = starts.last()
+        && last + PIECE_BYTES < text.len()
+    {
+        starts.push(token_boundary(text, last + PIECE_BYTES));
+    }
+    starts
+        .iter()
+        .enumerate()
+        .map(|(k, &start)| {
+            let next = starts.get(k + 1).copied().unwrap_or(text.len());
+            start..token_boundary(text, next + EXCERPT_BYTES)
+        })
+        .collect()
+}
+
+/// The last position at most a window before `at` that no token spans, so
+/// cutting there leaves the tokens on both sides whole; `at` itself inside a
+/// token longer than that, which no window can show whole anyway.
+fn token_boundary(text: &str, at: usize) -> usize {
+    if at >= text.len() {
+        return text.len();
+    }
+    let at = text.floor_char_boundary(at);
+    std::iter::once(at)
+        .chain(text[..at].char_indices().rev().map(|(i, _)| i))
+        .take_while(|&cut| at - cut <= EXCERPT_BYTES)
+        .find(|&cut| !splits_token(text, cut))
+        .unwrap_or(at)
+}
+
+/// Whether `at` lies inside one token of FTS5's `unicode61`, which joins
+/// letters, digits, and the diacritics it removes, while [`spaced_cjk`] makes
+/// each CJK ideograph a token of its own by spacing it.
+fn splits_token(text: &str, at: usize) -> bool {
+    // `spaced_cjk` collapses whitespace, so only a letter before shows the space.
+    let alone = |c: char| spaced_cjk(&format!("a{c}")).contains(' ');
+    let joined = |c: char| c.is_alphanumeric() && !alone(c) || ('\u{300}'..='\u{331}').contains(&c);
+    text[..at].chars().next_back().is_some_and(joined)
+        && text[at..].chars().next().is_some_and(joined)
+}
+
+/// The byte ranges of `text` that `highlighted` marks. `highlighted` is
+/// `spaced_cjk(text)` with markers, so it differs from `text` only in
+/// whitespace and the two align character by character over the rest; `None`
+/// when they do not.
+fn align(text: &str, highlighted: &str) -> Option<Vec<Range<usize>>> {
+    let mut rest = text
+        .char_indices()
+        .filter(|(_, c)| !c.is_whitespace())
+        .peekable();
+    let mut spans = Vec::new();
+    let (mut start, mut end) = (None, 0);
+    for c in highlighted.chars() {
+        match c {
+            OPEN => start = Some(rest.peek()?.0),
+            CLOSE => spans.push(start.take()?..end),
+            c if c.is_whitespace() => {}
+            c => {
+                let (i, found) = rest.next()?;
+                if found != c {
+                    return None;
+                }
+                end = i + c.len_utf8();
+            }
+        }
+    }
+    Some(spans)
+}
+
+/// The range of at most [`EXCERPT_BYTES`] of `text` holding the most query
+/// phrases, given each phrase's spans in order, starting at the line before
+/// its first match when that line starts within an eighth of a window, and
+/// otherwise an eighth of a window before it, or less when the match would not
+/// fit after that. The earliest wins a tie, and the prefix is the window when
+/// nothing matched. Fails as interrupted once `deadline` passes, as the
+/// statements before it do.
+fn window(
+    text: &str,
+    phrases: &[Vec<Range<usize>>],
+    deadline: Instant,
+) -> rusqlite::Result<Range<usize>> {
+    // Each match start with the end of the longest match there.
+    let mut firsts = phrases
+        .iter()
+        .flatten()
+        .map(|s| (s.start, s.end))
+        .collect::<Vec<_>>();
+    firsts.sort_unstable_by_key(|&(start, end)| (start, std::cmp::Reverse(end)));
+    firsts.dedup_by_key(|first| first.0);
+    let mut best = (0, 0..text.floor_char_boundary(EXCERPT_BYTES));
+    for (first, last) in firsts {
+        if Instant::now() >= deadline {
+            return Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_INTERRUPT),
+                None,
+            ));
+        }
+        let room = EXCERPT_BYTES.saturating_sub(last - first);
+        let lead = text.ceil_char_boundary(first.saturating_sub(room.min(EXCERPT_BYTES / 8)));
+        let start = text[lead..first].rfind('\n').map_or(lead, |i| lead + i + 1);
+        // A window that would pass the end shows the end's full width instead.
+        let (start, end) = if start + EXCERPT_BYTES >= text.len() {
+            (
+                text.ceil_char_boundary(text.len() - EXCERPT_BYTES),
+                text.len(),
+            )
+        } else {
+            (start, text.floor_char_boundary(start + EXCERPT_BYTES))
+        };
+        // A phrase's spans end in the order they start, so its first from `start` ends first.
+        let covered = phrases
+            .iter()
+            .filter(|spans| {
+                spans
+                    .get(spans.partition_point(|s| s.start < start))
+                    .is_some_and(|s| s.end <= end)
+            })
+            .count();
+        if covered > best.0 {
+            best = (covered, start..end);
+        }
+    }
+    Ok(best.1)
 }

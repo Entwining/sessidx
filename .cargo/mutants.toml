@@ -39,6 +39,18 @@ exclude_re = [
   # Telling a failing plain read from undecodable compressed content needs an
   # injected I/O fault that a test cannot raise.
   'replace match guard compressed with true in read_records',
+  # Smaller pieces of a long search hit read the same matches in more rows.
+  'src/query/search\.rs:\d+:\d+: replace \* with \+$',
+  # Pieces that never advance, or one piece for the whole text, whose highlight
+  # the 100,000-match excerpt case makes quadratic: the excerpt test hangs, and
+  # the timeout is the detection.
+  'src/query/search\.rs:\d+:\d+: replace \* with /$',
+  'src/query/search\.rs:\d+:\d+: replace (< with (==|>)|\+ with \*) in pieces',
+  'replace token_boundary -> usize with (0|1)',
+  'src/query/search\.rs:\d+:\d+: replace (>= with <|- with /) in token_boundary',
+  # A text exactly one piece longer than the last piece's start adds an empty
+  # piece, which matches nothing.
+  'src/query/search\.rs:\d+:\d+: replace < with <= in pieces',
   # The handle is reused only when the path names its inode, so reopening the
   # path for every range reads the same file; reuse only saves an open per row.
   'src/query/ranges\.rs:\d+:\d+: replace match guard \*identity == \(named\.dev\(\), named\.ino\(\)\) with false in read_range',

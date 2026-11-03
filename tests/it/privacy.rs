@@ -1,4 +1,4 @@
-use crate::common::{body, indexed, indexed_files, search_hits, serial, sessidx, stream};
+use crate::common::{body, indexed, indexed_files, search_hits, serial, sessidx, stored, stream};
 use sessidx::{
     counting,
     model::Agent,
@@ -161,7 +161,7 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         let value = v.as_str().unwrap();
         let hits = search_hits(&store.db, value, &Filters::default(), 20).unwrap();
         assert!(
-            hits.iter().any(|h| body(h).contains(value)),
+            hits.iter().any(|h| stored(&store.db, h).contains(value)),
             "public identifier lost"
         );
     }
@@ -315,7 +315,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         )
         .unwrap();
         assert_eq!(hits.len(), 1);
-        assert!(body(&hits[0]).contains(value));
+        assert!(stored(&store.db, &hits[0]).contains(value));
     }
     // `sql` prints stored text as stored.
     let rows = counting::sql(
@@ -355,14 +355,14 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "/synthetic/vR9xT6qA2nL8+cP4hY0sD7fG3jK5",
     ] {
         assert!(
-            !body(&context[0]).contains(value),
+            !stored(&store.db, &context[0]).contains(value),
             "synthetic context control survived: {value}"
         );
     }
     let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20).unwrap();
     assert_eq!(input.len(), 1);
-    assert!(body(&input[0]).contains("tools.exec_command"));
-    assert!(!body(&input[0]).contains("std::fs::File::try_lock"));
+    assert!(stored(&store.db, &input[0]).contains("tools.exec_command"));
+    assert!(!stored(&store.db, &input[0]).contains("std::fs::File::try_lock"));
     let stored: String = store
         .db
         .query_row("SELECT text FROM events WHERE kind='tool_call'", [], |r| {
@@ -388,9 +388,9 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         .unwrap()
         .is_empty()
     );
-    assert!(body(&input[0]).contains("0123456789abcdef1032547698badcfe89abcdef"));
-    assert!(!body(&input[0]).contains("0xabcdef0123456789abcdef0123456789abcdef01"));
-    assert!(!body(&input[0]).contains("vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ"));
+    assert!(stored.contains("0123456789abcdef1032547698badcfe89abcdef"));
+    assert!(!stored.contains("0xabcdef0123456789abcdef0123456789abcdef01"));
+    assert!(!stored.contains("vR9xT6qA2nL8cP4hY0sD7fG3jK5mB1wZ"));
 }
 
 #[test]

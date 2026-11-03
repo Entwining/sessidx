@@ -1,4 +1,4 @@
-use crate::common::{body, indexed, indexed_files, search_hits};
+use crate::common::{body, indexed, indexed_files, search_hits, stored};
 use sessidx::{
     discovery::Root,
     model::Agent,
@@ -486,6 +486,242 @@ fn search_and_grep_pass_over_a_sessidx_call_until_its_result_is_indexed() {
     assert_eq!(grep(&store), expected);
     expected.push(("target".into(), 3));
     assert_eq!(searched(&store), expected);
+}
+
+#[test]
+fn search_shows_each_long_hit_text_around_its_matches() {
+    let w = query::EXCERPT_BYTES;
+    let pad = |n: usize| "pad ".repeat(n);
+    let cases = [
+        // The line holding the match starts within an eighth of a window.
+        (
+            "line",
+            format!("{}\n深处的  目标短语\tafter {}", pad(500), pad(200)),
+        ),
+        (
+            "distant",
+            format!(
+                "alpha {} omega {}\nalpha and omega {}",
+                pad(300),
+                pad(300),
+                pad(300)
+            ),
+        ),
+        // No window holds both terms, so the earlier one's wins.
+        (
+            "tie",
+            format!("{}tiefirst {}tiesecond {}", pad(250), pad(500), pad(300)),
+        ),
+        // Phrases are told apart by the query, not by their text: two words
+        // are not the word they spell joined, and a folded form is the same.
+        (
+            "merged",
+            format!(
+                "mergedword {}mergedword and merged word {}",
+                pad(300),
+                pad(200)
+            ),
+        ),
+        (
+            "folded",
+            format!("résumé resume {}resume foldneedle {}", pad(300), pad(200)),
+        ),
+        // Many matches of one phrase and none of the other within a window.
+        (
+            "repeats",
+            format!("{}{}repfar", "rep ".repeat(100_000), pad(300)),
+        ),
+        // At the first piece's cut, 4,096 bytes in: a phrase across it, and a
+        // token across it whose end is the term matched later.
+        (
+            "straddle",
+            format!("{}straddle across {}", pad(1022), pad(300)),
+        ),
+        (
+            "partial",
+            format!("{}abcdefghpartial {}partial", pad(1022), pad(300)),
+        ),
+        // A token longer than a piece, such as an encoded blob, across every cut.
+        (
+            "unbroken",
+            format!("blobhead {} blobtail", "z".repeat(10_000)),
+        ),
+        // Cuts inside a token: its end after a cut longer than a window, and a
+        // diacritic that unicode61 keeps inside the token.
+        (
+            "fragment",
+            format!(
+                "{}fragterm {}fragterm {}",
+                "x".repeat(4096),
+                pad(300),
+                pad(300)
+            ),
+        ),
+        (
+            "diacritic",
+            format!(
+                "{}foo\u{301}diacterm {}diacterm {}",
+                pad(1023),
+                pad(300),
+                pad(300)
+            ),
+        ),
+        // At the first piece's end, 4,608 bytes in: a token whose start is the
+        // term matched later, and a phrase that Chinese follows unspaced.
+        (
+            "prefix",
+            format!("{}prefixqzzzz {}prefixqz {}", pad(1150), pad(300), pad(300)),
+        ),
+        (
+            "cjkcut",
+            format!(
+                "{}cjkhead cjktail{}{}",
+                pad(1022),
+                "中".repeat(200),
+                pad(300)
+            ),
+        ),
+        // A vowel sign that unicode61 does not join, before a match.
+        (
+            "vowel",
+            format!("{}\u{93e}vowelterm {}", pad(300), pad(300)),
+        ),
+        // A match that fits a window only with less lead before it.
+        (
+            "longphrase",
+            format!("{}{}lpend {}", pad(300), "lp ".repeat(158), pad(300)),
+        ),
+        ("end", format!("{}endneedle", pad(500))),
+        ("short", "shortneedle brief".to_owned()),
+        // The marker lies in a piece without the match.
+        (
+            "marker",
+            format!("\u{1}{}markerneedle {}", pad(2000), pad(10)),
+        ),
+    ];
+    let transcripts: Vec<(&str, String)> = cases
+        .iter()
+        .map(|(id, text)| {
+            (*id, serde_json::json!({"type":"user","uuid":id,"sessionId":id,"timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":text}}).to_string() + "\n")
+        })
+        .collect();
+    let transcripts: Vec<(&str, &str)> = transcripts
+        .iter()
+        .map(|(id, t)| (*id, t.as_str()))
+        .collect();
+    let (_dir, store, _) = indexed_files(Agent::Claude, &transcripts);
+    let budget = Duration::from_secs(2);
+    let excerpt = |query: &str| {
+        let started = std::time::Instant::now();
+        let mut page = query::search(&store.db, query, &Filters::default(), 20, budget)
+            .unwrap()
+            .sessions;
+        assert!(started.elapsed() < budget, "{query}");
+        assert_eq!(page.len(), 1, "{query}");
+        let session = page.remove(0);
+        let whole = stored(&store.db, &session.hits[0]);
+        let shown = body(&session.hits[0]);
+        let cut = session.cut.first().map(|c| {
+            assert_eq!((c.field.as_str(), c.bytes), ("/hits/0/text", whole.len()));
+            assert!(c.kept <= w);
+            assert_eq!(&whole[c.offset..c.offset + c.kept], shown);
+            (c.offset, c.kept)
+        });
+        (whole, shown, cut)
+    };
+    let (whole, shown, cut) = excerpt("目标短语");
+    assert_eq!(cut.unwrap().0, whole.find('\n').unwrap() + 1);
+    assert!(shown.starts_with("深处的  目标短语"));
+    let (_, shown, _) = excerpt("alpha omega");
+    assert!(shown.starts_with("alpha and omega"));
+    let (whole, _, cut) = excerpt("tiefirst tiesecond");
+    assert_eq!(cut.unwrap().0, whole.find("tiefirst").unwrap() - w / 8);
+    let (whole, _, cut) = excerpt("mergedword \"merged word\"");
+    assert_eq!(
+        cut.unwrap().0,
+        whole.find("mergedword and").unwrap() - w / 8
+    );
+    let (_, shown, _) = excerpt("rep repfar");
+    assert!(shown.starts_with("rep rep"));
+    let (_, shown, _) = excerpt("resume foldneedle");
+    assert!(shown.contains("resume foldneedle"));
+    let (_, shown, _) = excerpt("\"straddle across\"");
+    assert!(shown.contains("straddle across"));
+    let (_, shown, _) = excerpt("partial");
+    assert!(shown.ends_with(" partial") && !shown.contains("abcdefgh"));
+    let (whole, shown, _) = excerpt("blobtail");
+    assert!(whole.len() > 10_000 && shown.ends_with(" blobtail"));
+    for term in ["fragterm", "diacterm", "prefixqz"] {
+        let (whole, shown, cut) = excerpt(term);
+        assert_eq!(cut.unwrap().0, whole.rfind(term).unwrap() - w / 8, "{term}");
+        assert!(shown.contains(&format!(" {term} ")), "{term}");
+    }
+    let (_, shown, _) = excerpt("\"cjkhead cjktail\"");
+    assert!(shown.contains("cjkhead cjktail"));
+    let (_, shown, _) = excerpt("vowelterm");
+    assert!(shown.contains("vowelterm"));
+    let phrase = format!("{}lpend", "lp ".repeat(158));
+    let (_, shown, _) = excerpt(&format!("\"{phrase}\""));
+    assert!(shown.contains(&phrase));
+    let (whole, shown, cut) = excerpt("endneedle");
+    let (offset, kept) = cut.unwrap();
+    assert_eq!((offset + kept, kept), (whole.len(), w));
+    assert!(shown.ends_with("endneedle"));
+    let (whole, shown, cut) = excerpt("shortneedle");
+    assert_eq!((shown, cut), (whole, None));
+    // A text holding a highlight marker shows its prefix.
+    let (_, shown, cut) = excerpt("markerneedle");
+    assert_eq!(cut.unwrap().0, 0);
+    assert!(!shown.contains("markerneedle"));
+}
+
+#[test]
+fn search_fails_rather_than_finish_its_excerpts_past_the_deadline() {
+    // Every query term matches every few bytes of one long hit, so choosing
+    // its window, after the last statement, outlasts the budget.
+    let query = "a b c d e f g h i j k l m n o p";
+    let text = format!("{query} ").repeat(60_000);
+    let line = serde_json::json!({"type":"user","uuid":"dense","sessionId":"dense","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":text}}).to_string() + "\n";
+    let (_dir, store, _) = indexed_files(Agent::Claude, &[("dense", &line)]);
+    let budget = Duration::from_secs(2);
+    let started = std::time::Instant::now();
+    let result = query::search(&store.db, query, &Filters::default(), 20, budget);
+    assert!(result.is_err() || started.elapsed() < budget);
+}
+
+#[test]
+fn search_excerpts_many_long_hits_without_stopping_early() {
+    // Enough long hits that the excerpt's statements reach SQLite's progress
+    // handler, which checks the deadline every 1,000 steps and must not stop
+    // them before it.
+    let transcripts: Vec<(String, String)> = (0..100)
+        .map(|n| {
+            let lines = (0..3)
+                .map(|k| {
+                    let text = format!("{}manyneedle {}", "pad ".repeat(200), "pad ".repeat(200));
+                    serde_json::json!({"type":"user","uuid":format!("{n}-{k}"),"sessionId":format!("many-{n}"),"timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":text}}).to_string() + "\n"
+                })
+                .collect();
+            (format!("many-{n}"), lines)
+        })
+        .collect();
+    let transcripts: Vec<(&str, &str)> = transcripts
+        .iter()
+        .map(|(id, t)| (id.as_str(), t.as_str()))
+        .collect();
+    let (_dir, store, _) = indexed_files(Agent::Claude, &transcripts);
+    let page = query::search(
+        &store.db,
+        "manyneedle",
+        &Filters::default(),
+        100,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(!page.sessions.is_empty());
+    for session in &page.sessions {
+        assert_eq!(session.cut.len(), session.hits.len());
+    }
 }
 
 #[test]
