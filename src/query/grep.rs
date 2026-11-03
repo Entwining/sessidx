@@ -1,5 +1,5 @@
 use super::{
-    Filters,
+    Filters, IN_FLIGHT_LOOKUP,
     page::{Body, COLUMNS, Coverage, Hit, PAGE_BYTES, Position, hit, line_len},
     ranges::{display_range, read_range},
     with_deadline,
@@ -37,6 +37,7 @@ pub fn scan(
         let mut stmt = db.prepare(&format!(
             "SELECT {COLUMNS} FROM event_rows e JOIN sessions s ON s.file_id=e.file_id
              WHERE e.file_id=? AND (e.line_no,e.ordinal)>(?,?) AND e.line_role_first=1 AND {events}
+              AND NOT {IN_FLIGHT_LOOKUP}
              ORDER BY e.line_no,e.ordinal"
         ))?;
         let mut source = None;

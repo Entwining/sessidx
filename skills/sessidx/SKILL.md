@@ -35,7 +35,7 @@ A `writer_busy` refresh means another process, such as a running `sessidx index`
 3. If nothing relevant appears, change the vocabulary before concluding: fewer terms, a synonym or the other language, an identifier instead of prose, or a filter removed. Search covers messages, tool inputs, and the first 2 KiB of tool outputs.
 4. For exact strings or regexes deeper in tool outputs, or every occurrence rather than the best sessions, use `sessidx grep 'REGEX'` (case-insensitive with `(?i)`; there is no `-i`) with at least one narrowing filter (`--session`, `--cwd`, `--since`/`--until`, or `--agent`). Narrow until `end.complete` is true before reporting that something is absent, and report absence only for the scope that completed.
 
-The current conversation can be indexed too. Exclude it only by a session ID or path you know is yours; recency, directory, and matching text do not identify it, because an older session or a subagent can repeat the request. Report the session's agent, ID, path, and the `path:line` evidence you read, and say when the answer rests on an incomplete search.
+The current conversation can be indexed too. `search` and `grep` pass over a source line holding a `sessidx` call until its transcript holds the call's result, so the running lookup does not match itself, but the conversation's earlier messages and finished lookups do. Exclude it only by a session ID or path you know is yours; recency, directory, and matching text do not identify it, because an older session or a subagent can repeat the request. Report the session's agent, ID, path, and the `path:line` evidence you read, and say when the answer rests on an incomplete search.
 
 ## Count behavior
 

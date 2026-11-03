@@ -1,5 +1,5 @@
 use super::{
-    Filters,
+    Filters, IN_FLIGHT_LOOKUP,
     page::{Body, COLUMNS, Cut, Hit, PAGE_BYTES, fit, hit, line_len},
     with_deadline,
 };
@@ -136,6 +136,7 @@ fn rank(db: &Connection, query: &str, filters: &Filters, limit: usize) -> Result
           SELECT e.file_id,e.id,e.ts,bm25(fts) AS score
           FROM event_rows e JOIN sessions s ON s.file_id=e.file_id
           JOIN fts ON fts.rowid=e.id WHERE {clause} {listed} AND fts MATCH ?
+            AND NOT {IN_FLIGHT_LOOKUP}
         ), all_heads AS MATERIALIZED (
           SELECT file_id,min(score) AS score,max(ts) AS ts,count(*) AS n,{order} AS position
           FROM matches GROUP BY file_id

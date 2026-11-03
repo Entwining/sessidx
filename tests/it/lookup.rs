@@ -402,6 +402,93 @@ fn grep_and_show_return_each_line_once_per_role() {
 }
 
 #[test]
+fn search_and_grep_pass_over_a_sessidx_call_until_its_result_is_indexed() {
+    let call = |id: &str, command: &str| {
+        serde_json::json!({"type":"assistant","uuid":id,"sessionId":"issuer","timestamp":"2026-10-02T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash","input":{"command":command}}]}}).to_string()+"\n"
+    };
+    let result = |id: &str| {
+        serde_json::json!({"type":"user","uuid":format!("{id}-result"),"sessionId":"issuer","timestamp":"2026-10-02T00:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":"done"}]}}).to_string()+"\n"
+    };
+    let message = |id: &str, text: &str| {
+        serde_json::json!({"type":"user","uuid":id,"sessionId":"target","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":text}}).to_string()+"\n"
+    };
+    // The match shares its line number with the running lookup in another
+    // transcript, and a third transcript holds that lookup's result.
+    let target = [
+        message("t1", "first"),
+        message("t2", "second"),
+        message("t3", "echoneedle happened here"),
+    ]
+    .concat();
+    // A finished mixed call, then the running lookup beside another running call.
+    let issuer = [
+        call(
+            "done",
+            "rg echoneedle src; sessidx search echoneedle --agent claude",
+        ),
+        result("done"),
+        call("running", "sessidx search 'echoneedle' | jq -c ."),
+        call("beside", "rg echoneedle docs"),
+    ]
+    .concat();
+    let (_dir, mut store, roots) = indexed_files(
+        Agent::Claude,
+        &[
+            ("issuer", &issuer),
+            ("target", &target),
+            ("elsewhere", &result("running")),
+        ],
+    );
+    let lines = |hits: &[query::Hit]| {
+        let mut lines = hits
+            .iter()
+            .map(|h| (h.session_id.clone(), h.line_no))
+            .collect::<Vec<_>>();
+        lines.sort();
+        lines
+    };
+    let grep = |store: &sessidx::store::Store| {
+        let filters = Filters {
+            session: Some("issuer".into()),
+            ..Filters::default()
+        };
+        let (hits, _) = query::scan(
+            &store.db,
+            "echoneedle",
+            &filters,
+            20,
+            None,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        lines(&hits)
+    };
+    let searched = |store: &sessidx::store::Store| {
+        lines(&search_hits(&store.db, "echoneedle", &Filters::default(), 20).unwrap())
+    };
+    let issuer_lines = |lines: &[i64]| {
+        lines
+            .iter()
+            .map(|&l| ("issuer".to_owned(), l as u64))
+            .collect::<Vec<_>>()
+    };
+    let mut expected = issuer_lines(&[1, 4]);
+    assert_eq!(grep(&store), expected);
+    expected.push(("target".into(), 3));
+    assert_eq!(searched(&store), expected);
+    fs::write(
+        roots[0].path.join("issuer.jsonl"),
+        issuer + &result("running"),
+    )
+    .unwrap();
+    store.refresh(&roots, false, None).unwrap();
+    let mut expected = issuer_lines(&[1, 3, 4]);
+    assert_eq!(grep(&store), expected);
+    expected.push(("target".into(), 3));
+    assert_eq!(searched(&store), expected);
+}
+
+#[test]
 fn ranked_search_pages_sessions_before_selecting_best_hits() {
     let message = |session: &str, id: usize, ts: &str, text: &str| {
         serde_json::json!({"type":"user","uuid":format!("{session}-{id}"),"sessionId":session,"timestamp":ts,"message":{"role":"user","content":text}}).to_string()+"\n"

@@ -139,6 +139,14 @@ impl Filters {
     }
 }
 
+/// Whether the source line of event `e` holds a `sessidx` tool call whose
+/// result its transcript does not hold yet, such as the call running the
+/// lookup itself, which its own refresh indexed. Search and grep pass such a
+/// line over. Rule: docs/formats.md `in_flight_lookup`.
+pub(crate) const IN_FLIGHT_LOOKUP: &str = "EXISTS (SELECT 1 FROM event_rows c JOIN commands k ON k.event_id=c.id
+  WHERE c.file_id=e.file_id AND c.line_no=e.line_no AND k.program='sessidx'
+  AND NOT EXISTS (SELECT 1 FROM event_rows r WHERE r.call_id=c.call_id AND r.kind='tool_result' AND r.file_id=c.file_id))";
+
 /// The transcript a session selector names. Claude subagent IDs are unique
 /// only within their parent session, so an ID shared by several transcripts is
 /// refused with their paths rather than merged.
