@@ -4,7 +4,7 @@ This is the contract that callers, including the bundled agent skill, rely on: w
 
 ## Output and exit codes
 
-Every command emits JSON Lines on stdout, except help/version text and the help that `sessidx` with no arguments prints, which exits 2. Data records carry `type`: `session` for search (with `hits`), `hit` for grep, `record` for show, `count`, `row` for SQL (columns inside `data`, preserving a column named `type`), `index`, or `doctor`. Select data before using `jq`, for example `jq -c 'select(.type == "record") | .record.message'`.
+Every command emits JSON Lines on stdout, except help/version text, the help that `sessidx` with no arguments prints, which exits 2, and the skill that `skill show` prints. Data records carry `type`: `session` for search (with `hits`), `hit` for grep, `record` for show, `count`, `row` for SQL (columns inside `data`, preserving a column named `type`), `index`, `doctor`, or `link` for skill install. Select data before using `jq`, for example `jq -c 'select(.type == "record") | .record.message'`.
 
 One final `end` record contains `complete`, `stale`, `next`, `searched`, `unavailable_ranges`, and refresh coverage in `refresh`. A result limit, the page size, a deadline, an unavailable range, or a stale refresh makes `complete=false`; parse errors and deferred tails are reported in `refresh` without changing it. `stale` is `false` when the command's refresh reached every source before it answered, `true` when it did not, and `null` in an error's `end`.
 
@@ -17,6 +17,7 @@ The data lines of a `search`, `grep`, or `show` page total at most 24 KiB, so th
 - `aggregate_rows` (`count`) and `sql_rows` (`sql`).
 - `source_records` (`index`).
 - `diagnostic` (`doctor`), which counts none.
+- `skill_links` (`skill install`).
 
 `refresh` reports:
 
@@ -99,6 +100,10 @@ Cells and column names are printed as stored, and text was redacted when it was 
 ### doctor
 
 `doctor` names each count after the rows it counts, next to the population it belongs to: `files` and `incomplete_files`, `records` and `parse_errors` (records that did not parse, and compressed content that did not decode), `sessions` and `sessions_with_unknown_kind`, `events` and `canonical_events`, `tool_events` and `tool_events_without_model` (stored tool calls and results, inherited copies included; `count --by model` reports the canonical ones without a model as `unknown`), `shell_calls` and `shell_calls_unparsed`, and `denials` and `denials_with_unknown_reason`. A session count is not a human-conversation denominator.
+
+### skill
+
+`skill show` prints the agent skill this version ships, `skills/sessidx/SKILL.md`, as Markdown. `skill install` links `~/.claude/skills/sessidx`, which Claude Code reads, and `~/.agents/skills/sessidx`, which Codex and Pi read, to the skill a package installs at `PREFIX/share/sessidx/skills/sessidx` beside `PREFIX/bin/sessidx`, taking the binary's path as it was run without resolving links. Run through Homebrew's `bin` link, that is the skill under Homebrew's `share` link, so the skill changes together with the binary on every upgrade. It writes one `link` record per link with its `path` and `target`, then an `end` with `complete=true`, `stale=null`, and no refresh coverage. An existing link is replaced, including when both paths are one link, as when `~/.claude/skills` links to `~/.agents/skills`. A file or directory at either path fails with an error that names it and stays in place, as does any link made before it. Without a packaged skill, as after `cargo install`, `skill install` fails; install the skill as the README describes. Neither command reads logs or the index.
 
 ## Refresh
 

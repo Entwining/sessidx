@@ -14,6 +14,7 @@ use sessidx::{
 };
 use sha2::{Digest, Sha256};
 use std::{
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -105,6 +106,19 @@ enum Command {
     },
     /// Report parse errors and the unknown part of each counted population
     Doctor,
+    /// Print or install the agent skill this version ships
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillCommand {
+    /// Print the skill as Markdown
+    Show,
+    /// Link ~/.claude/skills/sessidx and ~/.agents/skills/sessidx to the skill packaged beside this binary
+    Install,
 }
 
 fn root(s: &str) -> Result<Root, String> {
@@ -290,6 +304,15 @@ fn run(cli: Cli) -> Result<i32> {
         Command::Sql { query } => sql(&path, &roots, &query),
         Command::Index { full } => index(&path, &roots, full),
         Command::Doctor => doctor(&path, &roots),
+        Command::Skill {
+            command: SkillCommand::Show,
+        } => {
+            io::stdout().lock().write_all(SKILL.as_bytes())?;
+            Ok(0)
+        }
+        Command::Skill {
+            command: SkillCommand::Install,
+        } => install_skill(&home),
     }
 }
 
@@ -533,6 +556,50 @@ fn index(path: &Path, roots: &[Root], full: bool) -> Result<i32> {
         report.records,
     )?;
     Ok(if report.stale { 2 } else { 0 })
+}
+
+const SKILL: &str = include_str!("../skills/sessidx/SKILL.md");
+
+/// The binary's path is taken as it was run, not resolved, so that run through
+/// Homebrew's `bin` link the skill links point through its `share` link and
+/// follow upgrades.
+fn install_skill(home: &Path) -> Result<i32> {
+    let exe = std::env::current_exe()?;
+    let source = exe
+        .parent()
+        .and_then(Path::parent)
+        .context("the binary has no parent directory")?
+        .join("share/sessidx/skills/sessidx");
+    anyhow::ensure!(
+        source.is_dir(),
+        "no skill is packaged at {}; skill install links the skill a package such as Homebrew's installs beside the binary, so install the skill as the README describes instead",
+        source.display()
+    );
+    let dirs = [".claude/skills", ".agents/skills"].map(|dir| home.join(dir));
+    for dir in &dirs {
+        let link = dir.join("sessidx");
+        if let Ok(meta) = fs::symlink_metadata(&link) {
+            anyhow::ensure!(
+                meta.file_type().is_symlink(),
+                "{} exists and is not a link; remove it, then run sessidx skill install again",
+                link.display()
+            );
+            fs::remove_file(&link)?;
+        }
+        fs::create_dir_all(dir)?;
+        std::os::unix::fs::symlink(&source, &link)?;
+    }
+    for dir in &dirs {
+        emit(
+            "link",
+            json!({"path": dir.join("sessidx"), "target": source}),
+        )?;
+    }
+    emit(
+        "end",
+        json!({"complete":true,"stale":null,"next":null,"searched":{"unit":"skill_links","records":dirs.len(),"bytes":0,"returned":dirs.len()},"unavailable_ranges":0}),
+    )?;
+    Ok(0)
 }
 
 fn fail(message: &str) -> io::Result<()> {

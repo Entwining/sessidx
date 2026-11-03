@@ -61,14 +61,15 @@ pi install git:github.com/Entwining/sessidx
 
 Update it with `pi update git:github.com/Entwining/sessidx`.
 
-### Homebrew's copy
+### Homebrew
 
-A Homebrew install also puts the skill from its release at `$(brew --prefix sessidx)/share/sessidx/skills/sessidx`, so it matches the installed binary through upgrades. Link it into the skills directory an agent reads, such as `~/.claude/skills` for Claude Code or `~/.agents/skills` for Codex and Pi:
+A Homebrew install includes the skill from the same release. Link it into the skills directories that Claude Code (`~/.claude/skills`), Codex, and Pi (`~/.agents/skills`) read, in place of the installs above:
 
 ```sh
-mkdir -p ~/.agents/skills
-ln -s "$(brew --prefix sessidx)/share/sessidx/skills/sessidx" ~/.agents/skills/sessidx
+sessidx skill install
 ```
+
+The links point into Homebrew's package, so the skill changes together with the binary on every upgrade. `sessidx skill show` prints the same skill.
 
 ## Use it directly
 
