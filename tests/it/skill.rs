@@ -34,6 +34,7 @@ fn skill_show_prints_the_shipped_skill() {
         &[],
         &["skill", "show"],
     )
+    .current_dir(dir.path())
     .output()
     .unwrap();
     assert_eq!(out.status.code(), Some(0));
@@ -59,7 +60,11 @@ fn skill_install_links_both_directories_through_the_unresolved_prefix() {
     }
     let end = records.last().unwrap();
     assert_eq!(end["complete"], true);
+    assert_eq!(end.get("stale"), Some(&serde_json::Value::Null));
+    assert!(end.get("refresh").is_none());
+    assert_eq!(end["searched"]["unit"], "skill_paths");
     assert_eq!(end["searched"]["returned"], 2);
+    assert_eq!(end["searched"]["records"], 2);
 }
 
 #[test]
@@ -67,7 +72,6 @@ fn skill_install_accepts_claude_skills_linked_to_agents_skills() {
     let dir = tempfile::tempdir().unwrap();
     let prefix = package(dir.path());
     let home = dir.path().join("home");
-    fs::create_dir_all(home.join(".agents/skills")).unwrap();
     fs::create_dir_all(home.join(".claude")).unwrap();
     symlink("../.agents/skills", home.join(".claude/skills")).unwrap();
 
@@ -88,12 +92,13 @@ fn skill_install_leaves_a_skill_directory_in_place() {
     fs::write(copy.join("SKILL.md"), "older copy").unwrap();
 
     let records = stream(&install(&prefix.join("bin/sessidx"), &home), 2);
-    let error = records[0]["error"].as_str().unwrap();
+    let error = records.last().unwrap()["error"].as_str().unwrap();
     assert!(error.contains(copy.to_str().unwrap()), "{error}");
     assert_eq!(
         fs::read_to_string(copy.join("SKILL.md")).unwrap(),
         "older copy"
     );
+    assert!(fs::symlink_metadata(home.join(".agents/skills/sessidx")).is_err());
 }
 
 #[test]

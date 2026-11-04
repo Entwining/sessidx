@@ -9,7 +9,7 @@ allowed-tools: Bash(sessidx:*) Bash(jq:*) Read
 
 ## Read the output contract
 
-Every command writes JSON Lines to stdout: data records with a `type` field, then exactly one `end` record. Judge the result by `end`, not by the exit code alone:
+Every command this skill uses writes JSON Lines to stdout: data records with a `type` field, then exactly one `end` record. Judge the result by `end`, not by the exit code alone:
 
 - `end.complete=false` means a result limit, the page size, a deadline, an unavailable range, or a stale refresh cut coverage. An empty incomplete result is not evidence of absence.
 - `end.stale=false` means the command's refresh reached every log before it answered, and `true` that it could not.

@@ -230,18 +230,21 @@ fn emit(kind: &str, value: Value) -> Result<()> {
     Ok(())
 }
 
+/// `refresh` is `None` for a command that runs no refresh, whose `stale` is
+/// then null.
 fn end(
-    refresh: &Refresh,
+    refresh: Option<&Refresh>,
     coverage: &Coverage,
     cursor: Option<String>,
     unit: &str,
     returned: usize,
 ) -> Result<()> {
-    let stale = refresh.stale;
-    emit(
-        "end",
-        json!({"complete": !coverage.incomplete && !stale, "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges,"refresh":refresh}),
-    )
+    let stale = refresh.map(|r| r.stale);
+    let mut record = json!({"complete": !coverage.incomplete && stale != Some(true), "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges});
+    if let Some(refresh) = refresh {
+        record["refresh"] = json!(refresh);
+    }
+    emit("end", record)
 }
 
 /// Writes a query's data records and its `end` record, and returns its exit
@@ -249,7 +252,7 @@ fn end(
 fn finish<T: Serialize>(
     kind: &str,
     records: &[T],
-    refresh: &Refresh,
+    refresh: Option<&Refresh>,
     coverage: &Coverage,
     cursor: Option<String>,
     unit: &str,
@@ -392,7 +395,7 @@ fn search(
     finish(
         "session",
         &sessions,
-        &refresh,
+        Some(&refresh),
         &coverage,
         cursor,
         "session_hits",
@@ -434,7 +437,7 @@ fn grep(
     finish(
         "hit",
         &hits,
-        &refresh,
+        Some(&refresh),
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
             after: Some(after),
@@ -469,7 +472,7 @@ fn show(
     finish(
         "record",
         &hits,
-        &refresh,
+        Some(&refresh),
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
             after: Some(after),
@@ -495,7 +498,7 @@ fn count(
     finish(
         "count",
         &rows,
-        &refresh,
+        Some(&refresh),
         &Coverage {
             records: rows.len(),
             ..Coverage::default()
@@ -511,7 +514,7 @@ fn doctor(path: &Path, roots: &[Root]) -> Result<i32> {
     finish(
         "doctor",
         &[counting::doctor(&db)?],
-        &refresh,
+        Some(&refresh),
         &Coverage::default(),
         None,
         "diagnostic",
@@ -527,7 +530,7 @@ fn sql(path: &Path, roots: &[Root], query: &str) -> Result<i32> {
     finish(
         "row",
         &rows,
-        &refresh,
+        Some(&refresh),
         &Coverage {
             records: rows.len(),
             ..Coverage::default()
@@ -546,7 +549,7 @@ fn index(path: &Path, roots: &[Root], full: bool) -> Result<i32> {
     let report = store.refresh(roots, full, None)?;
     emit("index", serde_json::to_value(&report)?)?;
     end(
-        &report,
+        Some(&report),
         &Coverage {
             records: report.records,
             ..Coverage::default()
@@ -575,7 +578,8 @@ fn install_skill(home: &Path) -> Result<i32> {
         "no skill is packaged at {}; skill install links the skill a package such as Homebrew's installs beside the binary, so install the skill as the README describes instead",
         source.display()
     );
-    let dirs = [".claude/skills", ".agents/skills"].map(|dir| home.join(dir));
+    let dirs = [".agents/skills", ".claude/skills"].map(|dir| home.join(dir));
+    // Both paths are checked before either changes, so a refusal changes nothing.
     for dir in &dirs {
         let link = dir.join("sessidx");
         if let Ok(meta) = fs::symlink_metadata(&link) {
@@ -584,22 +588,31 @@ fn install_skill(home: &Path) -> Result<i32> {
                 "{} exists and is not a link; remove it, then run sessidx skill install again",
                 link.display()
             );
+        }
+    }
+    // `~/.claude/skills` can be a link to `~/.agents/skills`, so that one is made first.
+    let mut links = Vec::new();
+    for dir in &dirs {
+        let link = dir.join("sessidx");
+        if fs::symlink_metadata(&link).is_ok() {
             fs::remove_file(&link)?;
         }
-        fs::create_dir_all(dir)?;
-        std::os::unix::fs::symlink(&source, &link)?;
+        fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+        std::os::unix::fs::symlink(&source, &link)
+            .with_context(|| format!("cannot link {}", link.display()))?;
+        links.push(json!({"path": link, "target": source}));
     }
-    for dir in &dirs {
-        emit(
-            "link",
-            json!({"path": dir.join("sessidx"), "target": source}),
-        )?;
-    }
-    emit(
-        "end",
-        json!({"complete":true,"stale":null,"next":null,"searched":{"unit":"skill_links","records":dirs.len(),"bytes":0,"returned":dirs.len()},"unavailable_ranges":0}),
-    )?;
-    Ok(0)
+    finish(
+        "link",
+        &links,
+        None,
+        &Coverage {
+            records: links.len(),
+            ..Coverage::default()
+        },
+        None,
+        "skill_paths",
+    )
 }
 
 fn fail(message: &str) -> io::Result<()> {

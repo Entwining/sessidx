@@ -69,11 +69,11 @@ A Homebrew install includes the skill from the same release. Link it into the sk
 sessidx skill install
 ```
 
-The links point into Homebrew's package, so the skill changes together with the binary on every upgrade. `sessidx skill show` prints the same skill.
+The links point into Homebrew's package, so the skill changes together with the binary on every upgrade. `sessidx skill show` prints the same skill. After `brew uninstall sessidx`, remove the two links with `rm -f ~/.agents/skills/sessidx ~/.claude/skills/sessidx`.
 
 ## Use it directly
 
-Every command writes JSON Lines for `jq`. The examples below run on a small synthetic history, [`tests/fixtures/readme`](tests/fixtures/readme), and a test checks that the output shown here is what sessidx prints for it. To find the discussion behind a commit:
+Every command other than `skill show` writes JSON Lines for `jq`. The examples below run on a small synthetic history, [`tests/fixtures/readme`](tests/fixtures/readme), and a test checks that the output shown here is what sessidx prints for it. To find the discussion behind a commit:
 
 ```console
 $ sessidx search 'Redis SQLite' | jq -c 'select(.type == "session") | .hits[] | {role, text}'
@@ -93,7 +93,7 @@ $ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, 
 {"agent":"pi","calls":1,"failed":0,"succeeded":1,"outcome_unknown":0}
 ```
 
-The last line of every command is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the 24 KiB page size, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
+The last line of every command that writes JSON Lines is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the 24 KiB page size, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
 
 | Command | Use it to |
 | --- | --- |
