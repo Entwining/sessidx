@@ -2,6 +2,16 @@
 
 This is the contract that callers, including the bundled agent skill, rely on: what each command reads and returns, its output records, and its exit codes. Each option's meaning is in `sessidx COMMAND --help`.
 
+| Command | Use it to |
+| --- | --- |
+| `search 'TERMS'` | Rank sessions by relevance, with up to three best hits each |
+| `grep 'REGEX' --agent codex` | Return every match within a scope narrowed by session, directory, time, or agent |
+| `show REF` | Open a hit's `path:line`, a session ID, or a `codex://threads/ID` link |
+| `count commands --program rg` | Count shell command sites by agent, model, role, week, or session kind |
+| `sql 'SELECT ...'` | Run one read-only query over the [schema](../src/schema.sql) |
+| `doctor` | Report parse errors and the unknown part of each counted population |
+| `index --full` | Rebuild the index, as a schema change requires |
+
 ## Output and exit codes
 
 Every command emits JSON Lines on stdout, except help/version text, the help that `sessidx` with no arguments prints, which exits 2, and the skill that `skill show` prints. Data records carry `type`: `session` for search (with `hits`), `hit` for grep, `record` for show, `count`, `row` for SQL (columns inside `data`, preserving a column named `type`), `index`, `doctor`, or `link` for skill install. Select data before using `jq`, for example `jq -c 'select(.type == "record") | .record.message'`.
@@ -103,7 +113,7 @@ Cells and column names are printed as stored, and text was redacted when it was 
 
 ### skill
 
-`skill show` prints the agent skill this version ships, `skills/sessidx/SKILL.md`, as Markdown. `skill install` links `~/.claude/skills/sessidx`, which Claude Code reads, and `~/.agents/skills/sessidx`, which Codex and Pi read, to the skill a package installs at `PREFIX/share/sessidx/skills/sessidx` beside `PREFIX/bin/sessidx`, taking the binary's path as it was run without resolving links. Run through Homebrew's `bin` or `opt` link, that is a skill path under the same link, so the skill changes together with the binary on every upgrade; run by its versioned `Cellar` path, it links that version. It checks both paths before changing either: a file or directory at either path fails with an error that names it, and neither path changes. It then replaces or creates both links, also when `~/.claude/skills` links to a `~/.agents/skills` that does not exist yet, and writes a `link` record with its `path` and `target` for each, then an `end` with `complete=true`. Without a packaged skill, as after `cargo install`, `skill install` fails; install the skill as the README describes. Neither command reads logs or the index.
+`skill show` prints the agent skill this version ships, `skills/sessidx/SKILL.md`, as Markdown. `skill install` links `~/.claude/skills/sessidx`, which Claude Code reads, and `~/.agents/skills/sessidx`, which Codex and Pi read, to the skill a package installs at `PREFIX/share/sessidx/skills/sessidx` beside `PREFIX/bin/sessidx`, taking the binary's path as it was run without resolving links. Run through Homebrew's `bin` or `opt` link, that is a skill path under the same link, so the skill changes together with the binary on every upgrade; run by its versioned `Cellar` path, it links that version. It checks both paths before changing either: a file or directory at either path fails with an error that names it, and neither path changes. It then replaces or creates both links, also when `~/.claude/skills` links to a `~/.agents/skills` that does not exist yet, and writes a `link` record with its `path` and `target` for each, then an `end` with `complete=true`. Without a packaged skill, as after `cargo install`, `skill install` fails; use one of the [plugin or package installs](install.md#agent-skills) instead. Neither command reads logs or the index.
 
 ## Refresh
 
