@@ -1,4 +1,4 @@
-//! Measures sessidx on this machine's own session logs, for a real-corpus claim
+//! Measures `sessidx` on this machine's own session logs, for a real-corpus claim
 //! in a pull request or a release:
 //!
 //! ```sh
@@ -16,7 +16,7 @@
 //! Each binary builds its own scratch index from the real roots under
 //! `/usr/bin/time -l`, the candidate first. The workload is each verb's most
 //! recent invocations that this index itself recorded with a tool result that
-//! is not a recognized denial, replayed unchanged, so it follows how sessidx is
+//! is not a recognized denial, replayed unchanged, so it follows how `sessidx` is
 //! used rather than what a measurer picks; a result shows that the shell line
 //! ran, not that this invocation in it did. Each transcript supplies at most
 //! one, its most recent that a more recent transcript has not already
