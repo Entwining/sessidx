@@ -16,7 +16,8 @@ The architecture can change; these goals do not.
 
 | File | Owns |
 | --- | --- |
-| `README.md` | What sessidx is for, how to install it, a first use, and where each document lives |
+| `README.md` | What sessidx is for, lookup and counting examples, and the shortest path to installing it |
+| `docs/install.md` | Source builds, index setup and upgrades, history retention, and agent skill installation |
 | `docs/cli.md` | Commands, output records, exit codes, and refresh: the contract callers rely on |
 | `--help` text (`src/main.rs`, `query::Filters`) | What each option means |
 | `skills/sessidx/SKILL.md` | When an agent should use sessidx and how it reads the results |

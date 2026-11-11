@@ -28,7 +28,7 @@ It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`
 
 Each query first indexes new and changed logs within a two-second budget. Nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete.
 
-An upgrade that changes how logs are read or indexed also leaves results incomplete until `sessidx index` runs. An upgrade that changes the index's tables says in its release notes to run `sessidx index --full`. The [refresh contract](cli.md#refresh) defines coverage and recovery.
+After an upgrade changes how logs are parsed, query refreshes reindex the earlier parser's files within their budget. Results stay incomplete until that work finishes. Run `sessidx index` to finish it without a budget and compact the index when needed. An upgrade that changes the index's tables says in its release notes to run `sessidx index --full`. The [refresh contract](cli.md#refresh) defines coverage and recovery.
 
 ## Keep history searchable
 
