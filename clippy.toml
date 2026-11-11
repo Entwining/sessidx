@@ -1,11 +1,11 @@
 allow-unwrap-in-tests = true
 disallowed-methods = [
-  { path = "std::env::var", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
-  { path = "std::env::var_os", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
-  { path = "std::env::vars", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
-  { path = "std::env::vars_os", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
-  { path = "std::process::Command::new", reason = "sessidx never spawns; tests spawn only through the launchers in tests/it/common.rs, which hold serial(), and examples/measure spawns the binaries it measures" },
+  { path = "std::env::var", reason = "Sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::env::var_os", reason = "Sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::env::vars", reason = "Sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::env::vars_os", reason = "Sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "std::process::Command::new", reason = "Sessidx never spawns; tests spawn only through the launchers in tests/it/common.rs, which hold serial(), and examples/measure spawns the binaries it measures" },
 ]
 disallowed-macros = [
-  { path = "core::option_env", reason = "sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
+  { path = "core::option_env", reason = "Sessidx has no environment-variable switches; see Decisions to keep in AGENTS.md" },
 ]

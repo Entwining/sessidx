@@ -1,4 +1,4 @@
-# sessidx
+# Sessidx
 
 Search and count your Claude Code, Codex, and Pi history in one local SQLite index. Use it from your shell or let your agent look up earlier work.
 
@@ -53,7 +53,7 @@ Queries refresh the index within a two-second budget. Nothing runs in the backgr
 
 ## Your logs stay local
 
-sessidx makes no network connections and never writes to the source logs. The index can be rebuilt from them.
+Sessidx makes no network connections and never writes to the source logs. The index can be rebuilt from them.
 
 Redaction is heuristic. Keep the database as private as the logs themselves; the [privacy limits](docs/design.md#privacy-and-limits) describe what it stores and what redaction can miss.
 
@@ -61,4 +61,4 @@ Redaction is heuristic. Keep the database as private as the logs themselves; the
 
 [Normalization rules](docs/formats.md) pair supported log variants with synthetic fixtures and regression tests. [AGENTS.md](AGENTS.md) defines the goals, roadmap, and required development checks.
 
-sessidx is [MIT licensed](LICENSE).
+Sessidx is [MIT licensed](LICENSE).

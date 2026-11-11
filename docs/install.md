@@ -1,6 +1,6 @@
 # Installation
 
-sessidx is developed and tested only on Apple Silicon macOS. Install it with Homebrew:
+Sessidx is developed and tested only on Apple Silicon macOS. Install it with Homebrew:
 
 ```sh
 brew install entwining/tap/sessidx
@@ -32,13 +32,13 @@ After an upgrade changes how logs are parsed, query refreshes reindex the earlie
 
 ## Keep history searchable
 
-When an agent deletes an old session file, sessidx drops its rows too. The session is no longer searchable.
+When an agent deletes an old session file, Sessidx drops its rows too. The session is no longer searchable.
 
 Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically), 30 days by default. Raise it to keep a longer searchable history. Transcripts of sessions you started in Claude Desktop or Cowork, or most recently continued there, are kept at any age by default.
 
 ## Agent skills
 
-The [`sessidx` skill](../skills/sessidx/SKILL.md) tells an agent when to reach for sessidx and how to read its results. Choose one installation method below. Start a new session afterwards to load it.
+The [`sessidx` skill](../skills/sessidx/SKILL.md) tells an agent when to reach for Sessidx and how to read its results. Choose one installation method below. Start a new session afterwards to load it.
 
 If you installed the skill another way before, remove that copy first. Otherwise the agent finds two and may keep the old one. The skill does not include the `sessidx` binary. The agent runs the one you installed above, so it must be on `PATH`.
 
