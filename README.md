@@ -1,79 +1,10 @@
 # sessidx
 
-sessidx indexes your local Claude Code, Codex, and Pi session logs into SQLite. You, or your agent, can then find the past session where something happened, such as the discussion behind a commit or an earlier failure, with one command instead of grepping raw JSONL, and count behavior, such as failed tool calls out of all tool calls, by agent, model, role, and week. The raw logs stay read-only and authoritative; the index can always be rebuilt from them.
+Search and count your Claude Code, Codex, and Pi history in one local SQLite index. Use it from your shell or let your agent look up earlier work.
 
-The database, `~/.cache/sessidx/index.db`, holds redacted copies of messages, tool inputs, shell argv, and the first 2 KiB of each tool output, plus exact source paths and session IDs. Redaction is heuristic ([accepted gaps](docs/design.md#privacy-and-limits)), so keep the database as private as the logs themselves. sessidx creates it readable only by you and makes no network connections; deleting `~/.cache/sessidx` removes everything it stored.
+## Find the discussion behind a commit
 
-## Install
-
-sessidx is developed and tested only on Apple Silicon macOS.
-
-```sh
-brew install entwining/tap/sessidx
-```
-
-To build from source instead, you need Rust at or above the `rust-version` in `Cargo.toml` and a C compiler for the bundled SQLite (the Xcode Command Line Tools); the code uses Unix file APIs:
-
-```sh
-cargo install --locked --git https://github.com/Entwining/sessidx --root ~/.local
-```
-
-This installs `~/.local/bin/sessidx`; put that directory on `PATH`. From a checkout, use `--path .` instead of `--git`.
-
-Then build the index once:
-
-```sh
-sessidx index
-```
-
-It reads `~/.claude/projects`, `~/.codex/sessions`, `~/.codex/archived_sessions`, and `~/.pi/agent/sessions`. A long history takes several minutes, and an interrupted build resumes from the files it finished. From then on, each query first indexes new and changed logs within a two-second budget, so nothing runs in the background. Before the first build finishes, two seconds per query cannot cover a long history, so results stay incomplete. The same holds after an upgrade that changes how logs are read or indexed until `sessidx index` runs; an upgrade that changes the index's tables says in its release notes to run `sessidx index --full`.
-
-### Keep history searchable
-
-When an agent deletes an old session file, sessidx drops its rows too, so the session is no longer searchable. Claude Code deletes transcripts older than [`cleanupPeriodDays`](https://code.claude.com/docs/en/claude-directory#cleaned-up-automatically), 30 days by default; raise it to keep a longer searchable history. Transcripts of sessions you started in Claude Desktop or Cowork, or most recently continued there, are kept at any age by default.
-
-## Use it from an agent
-
-The [`sessidx` skill](skills/sessidx/SKILL.md) tells an agent when to reach for sessidx and how to read its results. Install it for each agent with one of the methods below; start a new session afterwards to load it. If you installed the skill another way before, remove that copy first, or the agent finds two and may keep the old one. The skill does not include the `sessidx` binary: the agent runs the one you installed above, so it must be on `PATH`.
-
-### Claude Code
-
-```sh
-claude plugin install sessidx --marketplace Entwining/sessidx
-```
-
-Claude Code does not update plugins from third-party marketplaces by default. To have it update this one, run `/plugin` in a session, select `entwining` on the Marketplaces tab, and choose Enable auto-update; otherwise run `claude plugin update sessidx@entwining`.
-
-### Codex
-
-```sh
-codex plugin marketplace add Entwining/sessidx
-codex plugin add sessidx@entwining
-```
-
-Codex updates the plugin when it starts.
-
-### Pi
-
-```sh
-pi install git:github.com/Entwining/sessidx
-```
-
-Update it with `pi update git:github.com/Entwining/sessidx`.
-
-### Homebrew
-
-A Homebrew install includes the skill from the same release. Link it into the skills directories that Claude Code (`~/.claude/skills`), Codex, and Pi (`~/.agents/skills`) read, in place of the installs above:
-
-```sh
-sessidx skill install
-```
-
-The links point into Homebrew's package, so the skill changes together with the binary on every upgrade. `sessidx skill show` prints the same skill. After `brew uninstall sessidx`, remove the two links with `rm -f ~/.agents/skills/sessidx ~/.claude/skills/sessidx`.
-
-## Use it directly
-
-Every command other than `skill show` writes JSON Lines for `jq`. The examples below run on a small synthetic history, [`tests/fixtures/readme`](tests/fixtures/readme), and a test checks that the output shown here is what sessidx prints for it. To find the discussion behind a commit:
+`search` ranks sessions and returns their best hits. Each hit points back to its source record. A test reproduces both examples from a [synthetic history](tests/fixtures/readme).
 
 ```console
 $ sessidx search 'Redis SQLite' | jq -c 'select(.type == "session") | .hits[] | {role, text}'
@@ -82,9 +13,11 @@ $ sessidx search 'Redis SQLite' | jq -c 'select(.type == "session") | .hits[] | 
 {"role":"assistant","text":"Decision: switch the session cache from Redis to SQLite with WAL, because the deployment is single-host and Redis adds an extra failure point."}
 ```
 
-`search` returns one record per session with its best hits. Each hit also carries a `ref`, the `path:line` of its record in the session log: `sessidx show REF` prints the records around it, and `sessidx show SESSION_ID` pages through the whole session.
+`sessidx show REF` opens the records around a hit's `path:line`. For exhaustive matching, [`grep` scans original logs within a scope you choose](docs/cli.md#grep-and-show).
 
-Counts are named for what they count, and they add up: every tool call `failed`, `succeeded`, or has an unknown outcome, which is never taken for success.
+## Count what your agents did
+
+Count shell command sites, tool failures, denials, token usage, and compactions. Group results by agent, model, role, week, or session kind.
 
 ```console
 $ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, calls, failed, succeeded, outcome_unknown}'
@@ -93,28 +26,39 @@ $ sessidx count failures --by agent | jq -c 'select(.type == "count") | {agent, 
 {"agent":"pi","calls":1,"failed":0,"succeeded":1,"outcome_unknown":0}
 ```
 
-The last line of every command that writes JSON Lines is an `end` record. Check its `complete` field before reading an empty result as absence: a result limit, the 24 KiB page size, the two-second deadline, a source range that changed since indexing, or an index still catching up makes it `false`.
+Unknown outcomes stay separate from successes. The [count definitions](docs/cli.md#count) name each population and what lies outside it.
 
-| Command | Use it to |
-| --- | --- |
-| `search 'TERMS'` | Rank sessions by relevance, with up to three best hits each |
-| `grep 'REGEX' --agent codex` | Return every match within a scope narrowed by session, directory, time, or agent |
-| `show REF` | Open a hit's `path:line`, a session ID, or a `codex://threads/ID` link |
-| `count commands --program rg` | Count shell commands, tool failures, or denials by agent, model, role, week, or session kind |
-| `sql 'SELECT ...'` | Run one read-only query over the [schema](src/schema.sql) |
-| `doctor` | Report parse errors and the unknown part of each counted population |
-| `index --full` | Rebuild the index, as a schema change requires |
+## Let your agent search its history
 
-[docs/cli.md](docs/cli.md) is the full contract, and `sessidx COMMAND --help` lists each command's options.
+The [`sessidx` skill](skills/sessidx/SKILL.md) teaches agents when to look up past work and how to read the results. Homebrew ships it with the binary; [plugin and package installs](docs/install.md#agent-skills) are also available.
 
-## Documentation
+## Get started
 
-- [docs/cli.md](docs/cli.md): commands, output records, exit codes, and refresh behavior.
-- [docs/design.md](docs/design.md): storage, refresh, privacy, counting units, and known limits.
-- [docs/formats.md](docs/formats.md): each normalization rule with its synthetic fixture and regression test.
-- [skills/sessidx/SKILL.md](skills/sessidx/SKILL.md): how an agent uses sessidx and reads its results.
-- [AGENTS.md](AGENTS.md): goals, decisions to keep, the roadmap, and how to change and validate the code.
+Developed and tested only on Apple Silicon macOS.
 
-## License
+```sh
+brew install entwining/tap/sessidx
+sessidx index
+```
 
-[MIT](LICENSE)
+If you have an older skill copy, [remove it first](docs/install.md#agent-skills). Install the bundled skill for Claude Code, Codex, and Pi:
+
+```sh
+sessidx skill install
+```
+
+Start a new agent session to load the skill. The [installation guide](docs/install.md) covers source builds, upgrades, and keeping old sessions searchable.
+
+Queries refresh the index within a two-second budget. Nothing runs in the background. Results are JSON Lines for `jq`; check the final [`end.complete` field](docs/cli.md#output-and-exit-codes) before treating an empty result as absence.
+
+## Your logs stay local
+
+sessidx makes no network connections and never writes to the source logs. The index can be rebuilt from them.
+
+Redaction is heuristic. Keep the database as private as the logs themselves; the [privacy limits](docs/design.md#privacy-and-limits) describe what it stores and what redaction can miss.
+
+## Contributing
+
+[Normalization rules](docs/formats.md) pair supported log variants with synthetic fixtures and regression tests. [AGENTS.md](AGENTS.md) defines the goals, roadmap, and required development checks.
+
+sessidx is [MIT licensed](LICENSE).
