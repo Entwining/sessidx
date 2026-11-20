@@ -50,7 +50,7 @@ struct Page {
 enum Command {
     /// Ranked full-text lookup
     Search {
-        /// Terms joined with AND; quote a phrase to keep its word order
+        /// Terms joined with AND, where a bare OR, AND, or NOT is an error; quote a phrase to keep its word order
         query: String,
         #[command(flatten)]
         filters: Filters,

@@ -36,20 +36,29 @@ const PIECE_BYTES: usize = 8 * EXCERPT_BYTES;
 const OPEN: char = '\u{1}';
 const CLOSE: char = '\u{2}';
 
-/// The quoted FTS5 phrases of a search query, which a match holds all of.
+/// The quoted FTS5 phrases of a search query, which a match holds all of. A
+/// bare `OR`, `AND`, or `NOT` fails, since it reads as an operator. Rule:
+/// docs/formats.md `search_operator_words`.
 fn fts_phrases(query: &str) -> Result<Vec<String>> {
     anyhow::ensure!(!query.trim().is_empty(), "search query is empty");
-    Ok(SEARCH_TOKENS
+    SEARCH_TOKENS
         .captures_iter(query)
         .map(|c| {
+            if let Some(word) = c.get(2).map(|m| m.as_str())
+                && matches!(word, "OR" | "AND" | "NOT")
+            {
+                anyhow::bail!(
+                    "search terms are joined with AND, so {word} is not an operator; run one search per alternative, or quote the word as \"{word}\" to search for it"
+                );
+            }
             let term = c
                 .get(1)
                 .or_else(|| c.get(2))
                 .expect("one token alternative matched")
                 .as_str();
-            format!("\"{}\"", spaced_cjk(term).replace('"', "\"\""))
+            Ok(format!("\"{}\"", spaced_cjk(term).replace('"', "\"\"")))
         })
-        .collect())
+        .collect()
 }
 
 /// The FTS5 expression that `search` matches, which `sql` offers as

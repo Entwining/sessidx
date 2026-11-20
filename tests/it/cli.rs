@@ -532,6 +532,35 @@ fn sql_counts_chinese_words_through_fts_query() {
 }
 
 #[test]
+fn search_and_fts_query_refuse_bare_operator_words() {
+    let serial = serial();
+    let (_dir, store, roots) = three_agents();
+    let refused = |args: &[&str], word: &str| {
+        let records = stream(
+            &sessidx(&serial, &store.path, &roots, args)
+                .output()
+                .unwrap(),
+            2,
+        );
+        let error = records[0]["error"].as_str().unwrap().to_owned();
+        for part in [
+            "joined with AND".to_owned(),
+            "run one search per alternative".to_owned(),
+            format!("quote the word as \"{word}\""),
+        ] {
+            assert!(error.contains(&part), "{error}");
+        }
+    };
+    for word in ["OR", "AND", "NOT"] {
+        refused(&["search", &format!("sharedneedle {word} other")], word);
+    }
+    refused(
+        &["sql", "SELECT fts_query('sharedneedle OR other') AS q"],
+        "OR",
+    );
+}
+
+#[test]
 fn sql_reads_without_holding_the_writer_lock() {
     let serial = serial();
     let (_dir, store, roots) = three_agents();
