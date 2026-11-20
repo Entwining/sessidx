@@ -18,6 +18,11 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
     {
         return vec![e];
     }
+    if typ == "attachment"
+        && let Some(e) = queued_prompt(v)
+    {
+        return vec![e];
+    }
     // Claude compaction boundaries: tests/fixtures/usage-claude.jsonl.
     if typ == "system" && v["subtype"] == "compact_boundary" {
         let metadata = &v["compactMetadata"];
@@ -166,6 +171,33 @@ fn diagnostics(v: &Value) -> Option<Event> {
     let mut e = Event::new("tool", EventKind::ToolOutput, "attachment.type");
     crate::normalize::output_prefix(&mut e, &Value::Array(messages));
     e.native_id = native_id(v, "uuid");
+    e.ts = timestamp(v);
+    Some(e)
+}
+
+/// A prompt the user typed while the agent was busy. Rule: docs/formats.md
+/// `claude_queued_prompt`.
+fn queued_prompt(v: &Value) -> Option<Event> {
+    let a = &v["attachment"];
+    let origin = a.pointer("/origin/kind");
+    if a["type"] != "queued_command"
+        || a["commandMode"] != "prompt"
+        || origin.is_some_and(|kind| kind != "human")
+    {
+        return None;
+    }
+    let mut e = Event::new(
+        "user",
+        EventKind::Message,
+        if origin.is_some() {
+            "attachment.origin.kind"
+        } else {
+            "attachment.commandMode"
+        },
+    );
+    e.kind_source = "attachment.type";
+    e.text = Some(Redacted::new(&message_text(&a["prompt"])));
+    e.native_id = native_id(a, "source_uuid").or_else(|| native_id(v, "uuid"));
     e.ts = timestamp(v);
     Some(e)
 }

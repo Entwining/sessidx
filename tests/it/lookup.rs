@@ -15,6 +15,51 @@ use std::{
 };
 
 #[test]
+fn a_prompt_queued_by_a_person_is_a_user_message_found_by_search() {
+    let (_dir, mut store, _) = indexed(
+        Agent::Claude,
+        &[
+            r#"{"type":"queue-operation","operation":"enqueue","sessionId":"session","content":"queued alpha phrase"}"#,
+            r#"{"type":"attachment","uuid":"att-1","sessionId":"session","attachment":{"type":"queued_command","prompt":"queued alpha phrase","commandMode":"prompt","origin":{"kind":"human"},"source_uuid":"src-1"}}"#,
+            r#"{"type":"attachment","uuid":"att-2","sessionId":"session","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"queued beta phrase"}],"commandMode":"prompt"}}"#,
+            r#"{"type":"attachment","uuid":"att-3","sessionId":"session","attachment":{"type":"queued_command","prompt":"queued gamma phrase","commandMode":"prompt","origin":{"kind":"peer"}}}"#,
+            r#"{"type":"attachment","uuid":"att-4","sessionId":"session","attachment":{"type":"queued_command","prompt":"queued delta phrase","commandMode":"task-notification"}}"#,
+            r#"{"type":"user","uuid":"src-1","sessionId":"session","message":{"role":"user","content":"queued alpha phrase"}}"#,
+            r#"{"type":"user","uuid":"user-2","sessionId":"session","message":{"role":"user","content":"queued beta phrase"}}"#,
+        ]
+        .map(|line| format!("{line}\n"))
+        .concat(),
+    );
+    let messages: Vec<(i64, String, i64)> = store
+        .db
+        .prepare("SELECT line_no,role_source,canonical FROM events WHERE kind='message' AND role='user' ORDER BY line_no")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        messages,
+        [
+            (2, "attachment.origin.kind".into(), 1),
+            (3, "attachment.commandMode".into(), 1),
+            (6, "message.role".into(), 0),
+            (7, "message.role".into(), 1),
+        ]
+    );
+    let lines = |store: &mut sessidx::store::Store, query: &str| {
+        search_hits(&mut store.db, query, &Filters::default(), 20)
+            .unwrap()
+            .into_iter()
+            .map(|hit| hit.line_no)
+            .collect::<Vec<_>>()
+    };
+    assert!(lines(&mut store, "alpha").contains(&2));
+    assert!(lines(&mut store, "gamma").is_empty());
+    assert!(lines(&mut store, "delta").is_empty());
+}
+
+#[test]
 fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
     let (_dir, mut store, _) = indexed_files(Agent::Codex, &[]);
     store
