@@ -2,7 +2,7 @@ use crate::{
     model::Agent,
     redaction::{Label, Redacted, is_run_char},
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use jiff::Timestamp;
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
@@ -38,14 +38,16 @@ pub fn label(v: &Value, key: &str) -> Option<Label> {
 
 pub fn timestamp(v: &Value) -> Option<String> {
     let value = v.get("timestamp")?;
-    if let Some(n) = value.as_i64() {
-        return DateTime::<Utc>::from_timestamp_millis(n)
-            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true));
-    }
-    DateTime::parse_from_rfc3339(value.as_str()?).ok().map(|t| {
-        t.with_timezone(&Utc)
-            .to_rfc3339_opts(SecondsFormat::Millis, true)
-    })
+    let time = match value.as_i64() {
+        Some(n) => Timestamp::from_millisecond(n).ok()?,
+        None => value.as_str()?.parse().ok()?,
+    };
+    Some(stored_time(time))
+}
+
+/// A time as the index stores it: UTC, cut to whole milliseconds.
+pub fn stored_time(time: Timestamp) -> String {
+    format!("{time:.3}")
 }
 
 pub fn text(v: &Value) -> String {

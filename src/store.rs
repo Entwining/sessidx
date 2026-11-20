@@ -30,7 +30,7 @@ pub const SCHEMA_VERSION: i64 = 14;
 /// redaction, outcomes, denials and shell sites. A file indexed by another
 /// version is reindexed like a changed file, so that a parser change reaches
 /// every row without a rebuild. Rule: docs/formats.md `parser_version`.
-pub const PARSER_VERSION: i64 = 5;
+pub const PARSER_VERSION: i64 = 6;
 
 #[derive(Default, Debug, Serialize)]
 pub struct Refresh {

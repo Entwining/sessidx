@@ -4,8 +4,12 @@ use crate::{
     store::{DAILY_COUNTS, PROGRAM_COUNTS, Rollup},
 };
 use anyhow::Result;
-use chrono::{NaiveDate, NaiveTime};
 use clap::ValueEnum;
+use jiff::{
+    ToSpan as _,
+    civil::{Date, Time},
+    tz::Offset,
+};
 use rusqlite::{
     Connection,
     fallible_iterator::FallibleIterator,
@@ -133,7 +137,7 @@ pub fn count(
             for (op, day) in [(">=", from), ("<", to)] {
                 if let Some(day) = day {
                     days.push(format!("day{op}?"));
-                    args.push(Value::Text(day.format("%Y-%m-%d").to_string()));
+                    args.push(Value::Text(day.to_string()));
                 }
             }
             parts.push(format!(
@@ -264,19 +268,19 @@ type Bounds<T> = (Option<T>, Option<T>);
 /// The whole UTC days inside the window, which `daily_counts` answers, and the
 /// parts of a day at either edge as timestamp ranges, which the events answer.
 /// Rule: docs/formats.md `daily_counts_window`.
-fn days_and_edges(filters: &Filters) -> (Option<Bounds<NaiveDate>>, Vec<Bounds<String>>) {
+fn days_and_edges(filters: &Filters) -> (Option<Bounds<Date>>, Vec<Bounds<String>>) {
     // Whole days run from the first midnight at or after --since to the last
     // at or before --until; a bound already at midnight leaves an empty edge.
     let whole_from = filters.since.map(|t| {
-        let day = t.date_naive();
-        if t.time() == NaiveTime::MIN {
-            day
+        let since = Offset::UTC.to_datetime(t);
+        if since.time() == Time::midnight() {
+            since.date()
         } else {
-            day + chrono::Days::new(1)
+            since.date().saturating_add(1.day())
         }
     });
-    let whole_to = filters.until.map(|t| t.date_naive());
-    let stamp = |day: NaiveDate| day.format("%Y-%m-%dT00:00:00.000Z").to_string();
+    let whole_to = filters.until.map(|t| Offset::UTC.to_datetime(t).date());
+    let stamp = |day: Date| format!("{day}T00:00:00.000Z");
     let mut whole_days = None;
     let mut edges = Vec::new();
     if let (Some(from), Some(to)) = (whole_from, whole_to)

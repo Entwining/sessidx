@@ -78,9 +78,10 @@ mod timing;
 mod workload;
 
 use anyhow::{Context, Result, bail, ensure};
-use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
+use jiff::Timestamp;
 use serde_json::{Value, json};
+use sessidx::normalize::stored_time;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
@@ -110,10 +111,10 @@ struct Args {
     runs: u32,
     /// Take commands recorded at or after this UTC date or RFC 3339 timestamp
     #[arg(long, value_name = "TIME", value_parser = sessidx::query::date)]
-    since: Option<DateTime<Utc>>,
+    since: Option<Timestamp>,
     /// Take commands recorded before this UTC date or RFC 3339 timestamp, such as a window a change was not tuned on
     #[arg(long, value_name = "TIME", value_parser = sessidx::query::date)]
-    until: Option<DateTime<Utc>>,
+    until: Option<Timestamp>,
     /// Session root to index instead of the defaults; repeat for each root
     #[arg(long = "root", value_name = "AGENT=PATH")]
     roots: Vec<String>,
@@ -260,7 +261,7 @@ fn header(args: &Args, binaries: &[Binary]) -> Result<Value> {
     }
     Ok(json!({
         "type": "header",
-        "date": Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "date": format!("{:.0}", Timestamp::now()),
         "commit": output("git", &["rev-parse", "HEAD"])?,
         "binaries": identities,
         "chip": output("sysctl", &["-n", "machdep.cpu.brand_string"])?,
@@ -408,7 +409,7 @@ fn run(binary: &Binary, roots: &[String], args: &[String]) -> Result<Run> {
 /// Appends `n` user messages with fresh identifiers to the synthetic Claude transcript.
 fn append(path: &Path, appended: &mut usize, n: usize) -> Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let ts = stored_time(Timestamp::now());
     for _ in 0..n {
         *appended += 1;
         let record = json!({

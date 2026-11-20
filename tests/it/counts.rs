@@ -3,6 +3,7 @@ use sessidx::{
     counting::{self, By, Metric},
     discovery::Root,
     model::{Agent, SessionKind, name},
+    normalize::stored_time,
     query::{Filters, Role},
     store::Store,
 };
@@ -301,13 +302,7 @@ fn counts_equal_the_public_views_over_copied_history() {
         let window = [(">=", since), ("<", until)]
             .iter()
             .filter_map(|(op, t)| {
-                t.map(|t| {
-                    let t: chrono::DateTime<chrono::Utc> = t.parse().unwrap();
-                    format!(
-                        " AND e.ts{op}'{}'",
-                        t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                    )
-                })
+                t.map(|t| format!(" AND e.ts{op}'{}'", stored_time(t.parse().unwrap())))
             })
             .collect::<String>();
         let call = "EXISTS(SELECT 1 FROM commands cp WHERE cp.event_id=e.id AND cp.program='rg')";

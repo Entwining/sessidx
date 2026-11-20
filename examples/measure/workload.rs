@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use brush_parser::word::WordPiece;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -27,8 +27,8 @@ pub struct Candidates {
 /// `docs/formats.md`) can name a copy of the call other than the first.
 pub fn workload(
     db: &Path,
-    since: Option<DateTime<Utc>>,
-    until: Option<DateTime<Utc>>,
+    since: Option<Timestamp>,
+    until: Option<Timestamp>,
 ) -> Result<Vec<(&'static str, Candidates)>> {
     let window = sessidx::query::Filters {
         since,

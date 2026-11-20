@@ -4,11 +4,18 @@ mod ranges;
 mod search;
 mod show;
 
-use crate::model::{Agent, SessionKind, name};
+use crate::{
+    model::{Agent, SessionKind, name},
+    normalize::stored_time,
+};
 use anyhow::{Context, Result};
-use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use clap::{Args, ValueEnum};
 pub use grep::scan;
+use jiff::{
+    Timestamp,
+    civil::{Date, Time},
+    tz::Offset,
+};
 pub use page::{Body, CURSOR_MISMATCH, Coverage, Cut, Hit, Position};
 use rusqlite::{Connection, types::Value};
 pub use search::{EXCERPT_BYTES, SEARCH_PAGE_SESSIONS, SearchPage, Session, search};
@@ -41,10 +48,10 @@ pub struct Filters {
     pub session_kind: Option<SessionKind>,
     /// Only events at or after this RFC 3339 time or UTC YYYY-MM-DD date
     #[arg(long, value_name = "TIME", value_parser = date)]
-    pub since: Option<DateTime<Utc>>,
+    pub since: Option<Timestamp>,
     /// Only events before this RFC 3339 time or UTC YYYY-MM-DD date
     #[arg(long, value_name = "TIME", value_parser = date)]
-    pub until: Option<DateTime<Utc>>,
+    pub until: Option<Timestamp>,
     /// Only sessions whose working directory is DIR or below it
     #[arg(long, value_name = "DIR")]
     pub cwd: Option<String>,
@@ -101,14 +108,12 @@ impl Filters {
 
     /// `--since` in the stored timestamp format.
     pub fn since(&self) -> Option<String> {
-        self.since
-            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true))
+        self.since.map(stored_time)
     }
 
     /// `--until` in the stored timestamp format.
     pub fn until(&self) -> Option<String> {
-        self.until
-            .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true))
+        self.until.map(stored_time)
     }
 
     /// The filters on sessions `s`: agent, kind, selector, and directory.
@@ -187,14 +192,12 @@ pub(super) fn unmatched(selector: &str) -> anyhow::Error {
 }
 
 /// Parses `--since` and `--until`: RFC 3339, or a UTC date.
-pub fn date(s: &str) -> Result<DateTime<Utc>> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.with_timezone(&Utc));
+pub fn date(s: &str) -> Result<Timestamp> {
+    if let Ok(time) = s.parse() {
+        return Ok(time);
     }
-    Ok(NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .context("date must be RFC 3339 or YYYY-MM-DD")?
-        .and_time(NaiveTime::MIN)
-        .and_utc())
+    let day = Date::strptime("%Y-%m-%d", s).context("date must be RFC 3339 or YYYY-MM-DD")?;
+    Ok(Offset::UTC.to_timestamp(day.to_datetime(Time::midnight()))?)
 }
 
 /// Runs `work` with SQLite interrupting any statement still running at
