@@ -1,3 +1,4 @@
+use crate::common::indexed;
 use rusqlite::OptionalExtension;
 use sessidx::{discovery::Root, model::Agent, store::Store};
 use std::{
@@ -601,4 +602,48 @@ fn appended_rows_enter_the_rollups_once() {
         .query_row("SELECT n FROM upserts", [], |r| r.get(0))
         .unwrap();
     assert_eq!(upserts, groups);
+}
+
+#[test]
+fn a_tool_result_joins_its_call_through_the_events_view_by_primary_key() {
+    let (_dir, store, _) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
+    let join = "SELECT r.call_id, c.kind, c.call_id FROM events r JOIN events c ON c.id=r.call_event_id WHERE r.kind='tool_result'";
+    let pairs: Vec<(String, String, String)> = store
+        .db
+        .prepare(join)
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    let results: i64 = store
+        .db
+        .query_row(
+            "SELECT count(*) FROM event_rows WHERE kind='tool_result' AND call_event_id IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(results > 0);
+    assert_eq!(pairs.len() as i64, results);
+    for (result, kind, call) in &pairs {
+        assert_eq!((kind.as_str(), call), ("tool_call", result));
+    }
+    let plan = store
+        .db
+        .prepare(&format!("EXPLAIN QUERY PLAN {join}"))
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(3))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("USING INTEGER PRIMARY KEY (rowid=?)")),
+        "{plan:?}"
+    );
+    assert!(
+        !plan.iter().any(|step| step.contains("MATERIALIZE")),
+        "{plan:?}"
+    );
 }

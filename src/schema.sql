@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS event_texts (
 -- The body columns are subqueries so that a query that does not name them never reads them.
 CREATE VIEW IF NOT EXISTS events AS
  SELECT e.id,s.agent,s.session_id,s.path,e.line_no,e.ts,e.role,e.kind,e.model,e.tool,
- CASE WHEN e.call_id IS NULL THEN NULL ELSE lower(hex(e.call_id)) END AS call_id,e.ok,e.exit_code,
+ CASE WHEN e.call_id IS NULL THEN NULL ELSE lower(hex(e.call_id)) END AS call_id,e.call_event_id,e.ok,e.exit_code,
  (SELECT text FROM event_texts WHERE event_id=e.id) AS text,
  coalesce((SELECT truncated FROM event_texts WHERE event_id=e.id),0) AS text_truncated,
  e.role_source,e.kind_source,e.model_source,e.ok_source,
@@ -143,7 +143,7 @@ CREATE TRIGGER IF NOT EXISTS events_delete AFTER DELETE ON event_rows BEGIN DELE
 -- once. Rule: docs/formats.md `claude_fragment_text`.
 CREATE VIEW IF NOT EXISTS canonical_events AS
  SELECT e.id,s.agent,s.session_id,s.path,e.line_no,e.ts,e.role,e.kind,e.model,e.tool,
- CASE WHEN e.call_id IS NULL THEN NULL ELSE lower(hex(e.call_id)) END AS call_id,e.ok,e.exit_code,
+ CASE WHEN e.call_id IS NULL THEN NULL ELSE lower(hex(e.call_id)) END AS call_id,e.call_event_id,e.ok,e.exit_code,
  CASE WHEN e.native_id IS NOT NULL AND e.kind='message' THEN coalesce(
   (SELECT group_concat(t.text,char(10) ORDER BY f.line_no,f.ordinal)
    FROM event_rows f JOIN event_texts t ON t.event_id=f.id
