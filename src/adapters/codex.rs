@@ -132,7 +132,7 @@ fn response_item(v: &Value, p: &Value, s: &mut State) -> Vec<Event> {
                     .unwrap_or(&Value::Null),
             );
             e.command = e.tool.as_deref().and_then(|t| shell(t, &args));
-            if matches!(e.tool.as_deref(), Some("exec" | "functions.exec")) {
+            if matches!(e.tool.as_deref(), Some("exec")) {
                 e.sites = args
                     .as_str()
                     .map(crate::code_mode::sites)

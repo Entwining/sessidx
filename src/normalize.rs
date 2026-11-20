@@ -148,7 +148,7 @@ pub fn shell(tool: &str, args: &Value) -> Option<String> {
     if !is_shell_tool(tool) {
         return None;
     }
-    if tool.rsplit('.').next() == Some("shell") {
+    if tool == "shell" {
         args.get("command").and_then(Value::as_array).map(|a| {
             a.iter()
                 .filter_map(Value::as_str)
@@ -163,7 +163,7 @@ pub fn shell(tool: &str, args: &Value) -> Option<String> {
 
 pub fn is_shell_tool(tool: &str) -> bool {
     matches!(
-        tool.rsplit('.').next().unwrap_or(tool),
+        tool,
         "Bash" | "bash" | "exec_command" | "shell_command" | "shell"
     )
 }
