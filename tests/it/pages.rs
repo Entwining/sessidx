@@ -1,6 +1,6 @@
 use crate::common::{indexed_files, serial, sessidx, stream};
 use serde_json::{Value, json};
-use sessidx::model::Agent;
+use sessidx::{model::Agent, query::EXCERPT_BYTES, redaction};
 use std::fs;
 
 /// The page size docs/cli.md promises.
@@ -112,8 +112,37 @@ fn show_pages_continue_inside_a_record_and_move_whole_records() {
     }
 }
 
+/// The redacted JSON text grep shows a part of for a source line.
+fn displayed(line: &str) -> String {
+    let mut record: Value = serde_json::from_str(line).unwrap();
+    redaction::redact_value(&mut record);
+    record.to_string()
+}
+
+/// Asserts that a located grep hit shows `display` whole when it fits an
+/// excerpt, and otherwise the excerpt around `needle` with its `cut`.
+fn assert_excerpt(hit: &Value, display: &str, needle: &str) {
+    assert!(hit.get("record").is_none() && hit.get("part").is_none());
+    assert!(hit.get("match_located").is_none(), "{hit}");
+    let text = hit["text"].as_str().unwrap();
+    if display.len() <= EXCERPT_BYTES {
+        assert_eq!(text, display);
+        assert!(hit.get("cut").is_none(), "{hit}");
+        return;
+    }
+    assert!(text.contains(needle), "{text}");
+    let cut = &hit["cut"];
+    assert_eq!(cut.as_array().unwrap().len(), 1);
+    assert_eq!(cut[0]["field"], "/text");
+    assert_eq!(cut[0]["bytes"], display.len());
+    assert_eq!(cut[0]["kept"], text.len());
+    assert!(text.len() <= EXCERPT_BYTES && text.len() > EXCERPT_BYTES - 4);
+    let offset = cut[0]["offset"].as_u64().unwrap() as usize;
+    assert_eq!(display.get(offset..offset + text.len()), Some(text));
+}
+
 #[test]
-fn grep_cuts_a_record_whose_match_lies_past_the_page() {
+fn grep_shows_a_record_larger_than_a_page_around_its_match() {
     let serial = serial();
     let text = transcript();
     let (_dir, store, roots) = indexed_files(Agent::Claude, &[("pages", &text)]);
@@ -130,20 +159,70 @@ fn grep_cuts_a_record_whose_match_lies_past_the_page() {
     let rows = stream(&out, 0);
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["line_no"], 1);
-    assert!(rows[0].get("record").is_none());
-    assert_eq!(rows[0]["cut"][0]["field"], "/part");
-    assert!(!rows[0]["part"].as_str().unwrap().contains("tailneedle"));
+    let display = displayed(text.lines().next().unwrap());
+    assert!(display.len() > PAGE);
+    assert_excerpt(&rows[0], &display, "tailneedle");
     assert_eq!(rows[1]["complete"], true);
 }
 
 #[test]
-fn grep_moves_a_record_that_does_not_fit_to_the_next_page() {
+fn grep_shows_a_short_record_whole_and_cuts_on_character_boundaries() {
     let serial = serial();
-    let text = transcript();
+    // Three-byte characters surround each long record's match, and the
+    // window's lead, 64 bytes, starts inside one in two of them.
+    let lines: Vec<String> = [
+        "short utfneedle".to_owned(),
+        format!("{}utfneedle{}", "词".repeat(1000), "语".repeat(1000)),
+        format!("{} utfneedle{}", "词".repeat(1001), "语".repeat(1001)),
+        format!("{}utfneedle{}", "词".repeat(1002), "语".repeat(1002)),
+    ]
+    .iter()
+    .enumerate()
+    .map(|(i, content)| json!({"type":"user","uuid":format!("u{i}"),"sessionId":"utf","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":content}}).to_string())
+    .collect();
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("utf", &(lines.join("\n") + "\n"))]);
+    let path = roots[0].path.join("utf.jsonl").display().to_string();
+    let rows = stream(
+        &sessidx(
+            &serial,
+            &store.path,
+            &roots,
+            &["grep", "utfneedle", "--session", &path],
+        )
+        .output()
+        .unwrap(),
+        0,
+    );
+    assert_eq!(rows.len(), lines.len() + 1);
+    for (row, line) in rows.iter().zip(&lines) {
+        assert_excerpt(row, &displayed(line), "utfneedle");
+    }
+    assert!(rows[0].get("cut").is_none());
+    // A long record's excerpt leads into its match by an eighth of a window,
+    // less the part of a character that does not fit.
+    for row in &rows[1..lines.len()] {
+        let lead = row["text"].as_str().unwrap().find("utfneedle").unwrap();
+        assert!(
+            lead <= EXCERPT_BYTES / 8 && lead > EXCERPT_BYTES / 8 - 3,
+            "{lead}"
+        );
+    }
+}
+
+#[test]
+fn grep_moves_a_hit_that_does_not_fit_to_the_next_page() {
+    let serial = serial();
+    let text: String = (0..60)
+        .map(|i| {
+            let record = json!({"type":"user","uuid":format!("u{i}"),"sessionId":"pages","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":format!("pairneedle {}", "c".repeat(1000))}});
+            format!("{record}\n")
+        })
+        .collect();
     let (_dir, store, roots) = indexed_files(Agent::Claude, &[("pages", &text)]);
     let path = roots[0].path.join("pages.jsonl").display().to_string();
     let pages = |args: &[&str], exit| {
-        let mut pages: Vec<Vec<Value>> = Vec::new();
+        // Each page's rows with the byte length of each line.
+        let mut pages: Vec<(Vec<Value>, Vec<usize>)> = Vec::new();
         let mut cursor = None;
         loop {
             assert!(pages.len() < 50, "paging does not advance");
@@ -158,27 +237,39 @@ fn grep_moves_a_record_that_does_not_fit_to_the_next_page() {
                 .unwrap();
             within_page(&out.stdout);
             let rows = stream(&out, exit);
+            let sizes = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(|l| l.len() + 1)
+                .collect();
             cursor = rows.last().unwrap()["next"].as_str().map(str::to_owned);
-            pages.push(rows);
+            pages.push((rows, sizes));
             if cursor.is_none() {
                 return pages;
             }
         }
     };
-    let searched = |pages: &[Vec<Value>], key: &str| -> u64 {
+    let searched = |pages: &[(Vec<Value>, Vec<usize>)], key: &str| -> u64 {
         pages
             .iter()
-            .map(|p| p.last().unwrap()["searched"][key].as_u64().unwrap())
+            .map(|(p, _)| p.last().unwrap()["searched"][key].as_u64().unwrap())
             .sum()
     };
-    let lines = |pages: &[Vec<Value>]| -> Vec<Vec<u64>> {
-        pages
-            .iter()
-            .map(|p| p.iter().filter_map(|r| r["line_no"].as_u64()).collect())
-            .collect()
-    };
-    let grep = pages(&["grep", "[cd]{100}", "--session", &path], 0);
-    assert_eq!(lines(&grep), [vec![3], vec![4]]);
+    let grep = pages(
+        &["grep", "pairneedle", "--session", &path, "--limit", "1000"],
+        0,
+    );
+    assert!(grep.len() > 2);
+    let lines: Vec<u64> = grep
+        .iter()
+        .flat_map(|(p, _)| p.iter().filter_map(|r| r["line_no"].as_u64()))
+        .collect();
+    assert_eq!(lines, (1..=60).collect::<Vec<_>>());
+    // A page ends only where the next page's first hit would not fit it.
+    for pair in grep.windows(2) {
+        let (rows, sizes) = &pair[0];
+        let data = sizes[..rows.len() - 1].iter().sum::<usize>();
+        assert!(data + pair[1].1[0] > PAGE, "{data} bytes");
+    }
     // Each source range is counted on the page that returns or passes it.
     let all = pages(&["grep", "absentneedle", "--session", &path], 1);
     for key in ["records", "bytes"] {
@@ -193,24 +284,46 @@ fn a_page_of_exactly_24_kib_stays_whole() {
     let file = roots[0].path.join("exact.jsonl");
     let path = file.display().to_string();
     let target = format!("{path}:1");
-    for args in [
-        vec!["show", &target, "--around", "0"],
-        vec!["grep", "fitneedle", "--session", &path],
-    ] {
-        let page = |filler: usize| {
-            let record = json!({"type":"user","uuid":"x1","sessionId":"exact","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":format!("fitneedle {}", "x".repeat(filler))}});
-            fs::write(&file, format!("{record}\n")).unwrap();
-            let out = sessidx(&serial, &store.path, &roots, &args)
-                .output()
-                .unwrap();
-            (within_page(&out.stdout), stream(&out, 0))
-        };
-        let (short, rows) = page(1000);
-        let (exact, filled) = page(1000 + PAGE - short);
-        assert_eq!(exact, PAGE, "{args:?}");
-        assert_eq!(filled.len(), rows.len(), "{args:?}");
-        assert!(filled.iter().all(|r| r.get("cut").is_none()), "{args:?}");
-    }
+    let record = |n: usize, filler: usize| {
+        json!({"type":"user","uuid":format!("x{n:02}"),"sessionId":"exact","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":format!("fitneedle {}", "x".repeat(filler))}}).to_string()
+    };
+    let page = |args: &[&str], fillers: &[usize]| {
+        let lines: String = fillers
+            .iter()
+            .enumerate()
+            .map(|(n, &filler)| record(n, filler) + "\n")
+            .collect();
+        fs::write(&file, lines).unwrap();
+        let out = sessidx(&serial, &store.path, &roots, args)
+            .output()
+            .unwrap();
+        (within_page(&out.stdout), stream(&out, 0))
+    };
+    // One show record fills the page.
+    let show = ["show", &target, "--around", "0"];
+    let (short, rows) = page(&show, &[1000]);
+    let (exact, filled) = page(&show, &[1000 + PAGE - short]);
+    assert_eq!(exact, PAGE);
+    assert_eq!(filled.len(), rows.len());
+    assert!(filled.iter().all(|r| r.get("cut").is_none()));
+    // Grep hits fill it, each shown whole up to a full excerpt.
+    let grep = ["grep", "fitneedle", "--session", &path, "--limit", "1000"];
+    let room = EXCERPT_BYTES - displayed(&record(0, 0)).len();
+    let (short, rows) = page(&grep, &[0; 40]);
+    let mut missing = PAGE - short;
+    let fillers: Vec<usize> = (0..40)
+        .map(|_| {
+            let filler = missing.min(room);
+            missing -= filler;
+            filler
+        })
+        .collect();
+    assert_eq!(missing, 0);
+    assert!(fillers.contains(&room));
+    let (exact, filled) = page(&grep, &fillers);
+    assert_eq!(exact, PAGE);
+    assert_eq!(filled.len(), rows.len());
+    assert!(filled.iter().all(|r| r.get("cut").is_none()));
 }
 
 #[test]

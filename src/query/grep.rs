@@ -1,7 +1,8 @@
 use super::{
     Filters, IN_FLIGHT_LOOKUP,
-    page::{Body, COLUMNS, Coverage, Hit, PAGE_BYTES, Position, hit, line_len},
+    page::{Body, COLUMNS, Coverage, Cut, Hit, PAGE_BYTES, Position, hit, line_len},
     ranges::{display_range, read_range},
+    search::{EXCERPT_BYTES, match_window},
     with_deadline,
 };
 use anyhow::{Context, Result};
@@ -67,18 +68,14 @@ pub fn scan(
                     Ok(bytes) => {
                         coverage.bytes += bytes.len() as u64;
                         if pattern.is_match(&String::from_utf8_lossy(&bytes)) {
-                            item.body = Body::Record {
-                                record: display_range(&bytes)?,
-                            };
-                            if used + line_len(&item, "hit") > PAGE_BYTES {
-                                // The next page starts with this hit.
-                                if !hits.is_empty() {
-                                    coverage.records -= 1;
-                                    coverage.bytes -= bytes.len() as u64;
-                                    cursor = previous;
-                                    return Ok(true);
-                                }
-                                item.fit("hit", 0)?;
+                            excerpt(&mut item, display_range(&bytes)?.to_string(), &pattern);
+                            // The next page starts with a hit that does not
+                            // fit after others; one alone is shown whole.
+                            if !hits.is_empty() && used + line_len(&item, "hit") > PAGE_BYTES {
+                                coverage.records -= 1;
+                                coverage.bytes -= bytes.len() as u64;
+                                cursor = previous;
+                                return Ok(true);
                             }
                             used += line_len(&item, "hit");
                             hits.push(item);
@@ -100,6 +97,33 @@ pub fn scan(
         coverage.continuation = Some(cursor);
     }
     Ok((hits, coverage))
+}
+
+/// Gives `item` the redacted record text `display`, whole when it fits
+/// [`EXCERPT_BYTES`], and otherwise the window around the first match of
+/// `pattern` in it, or its prefix when redaction or re-serialization left no
+/// match there. Rule: docs/formats.md `grep_excerpt`.
+fn excerpt(item: &mut Hit, display: String, pattern: &Regex) {
+    let found = pattern.find(&display).map(|m| m.range());
+    let match_located = found.is_some();
+    let text = if display.len() <= EXCERPT_BYTES {
+        display
+    } else {
+        let window = found.map_or(0..display.floor_char_boundary(EXCERPT_BYTES), |m| {
+            match_window(&display, m)
+        });
+        item.cut = vec![Cut {
+            field: "/text".to_owned(),
+            bytes: display.len(),
+            offset: window.start,
+            kept: window.len(),
+        }];
+        display[window].to_owned()
+    };
+    item.body = Body::Excerpt {
+        text,
+        match_located,
+    };
 }
 
 /// The file IDs of the transcripts `filters` selects, from `first` on, in order.

@@ -33,16 +33,36 @@ pub struct Hit {
 /// page resumes after this position.
 pub type Position = (i64, i64, i64);
 
-/// What a hit carries of its event: the indexed text for ranked lookup, the
-/// whole source record, parsed and redacted, for grep and show, or part of
-/// that record's JSON text when it does not fit a page alone.
+/// What a hit carries of its event: the indexed text for ranked lookup; for
+/// grep, the redacted source record's JSON text or the part of it around the
+/// first match, with `match_located` false when the match is not in that text;
+/// for show, the whole source record, parsed and redacted, or part of its JSON
+/// text when it does not fit a page alone.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum Body {
-    Text { text: String, truncated: bool },
-    Record { record: Json },
-    Part { part: String },
-    Unavailable { unavailable: String },
+    Text {
+        text: String,
+        truncated: bool,
+    },
+    Excerpt {
+        text: String,
+        #[serde(skip_serializing_if = "is_true")]
+        match_located: bool,
+    },
+    Record {
+        record: Json,
+    },
+    Part {
+        part: String,
+    },
+    Unavailable {
+        unavailable: String,
+    },
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Hit {

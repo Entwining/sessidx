@@ -174,7 +174,7 @@ pub fn events(h: Agent, fixture: &str) -> (State, Vec<Event>) {
 /// A hit's body as one string: its indexed text, or its source record's JSON text.
 pub fn body(hit: &query::Hit) -> String {
     match &hit.body {
-        query::Body::Text { text, .. } => text.clone(),
+        query::Body::Text { text, .. } | query::Body::Excerpt { text, .. } => text.clone(),
         query::Body::Record { record } => record.to_string(),
         query::Body::Part { part } => part.clone(),
         query::Body::Unavailable { unavailable } => unavailable.clone(),

@@ -248,6 +248,49 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 }
 
 #[test]
+fn grep_keeps_a_hit_whose_match_redaction_removed_and_marks_it() {
+    let serial = serial();
+    let values: serde_json::Value =
+        serde_json::from_str(include_str!("../fixtures/privacy.json")).unwrap();
+    let secret = values["unmarked"].as_str().unwrap();
+    let line = |uuid: &str, content: String| {
+        serde_json::json!({"type":"user","uuid":uuid,"sessionId":"redacted","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":content}}).to_string() + "\n"
+    };
+    let data = line("short", format!("needle {secret}"))
+        + &line("long", format!("needle {secret} {}", "pad ".repeat(200)));
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("redacted", &data)]);
+    let out = sessidx(
+        &serial,
+        &store.path,
+        &roots,
+        &["grep", secret, "--session", "redacted"],
+    )
+    .output()
+    .unwrap();
+    assert!(
+        !out.stdout
+            .windows(secret.len())
+            .any(|b| b == secret.as_bytes()),
+        "canary leaked to grep output"
+    );
+    let rows = stream(&out, 0);
+    assert_eq!(rows.len(), 3);
+    for row in &rows[..2] {
+        assert_eq!(row["match_located"], false, "{row}");
+        assert!(row["text"].as_str().unwrap().contains("needle"), "{row}");
+    }
+    assert!(rows[0].get("cut").is_none());
+    // The longer record shows its prefix.
+    let text = rows[1]["text"].as_str().unwrap();
+    let cut = &rows[1]["cut"][0];
+    assert_eq!(cut["field"], "/text");
+    assert_eq!(cut["offset"], 0);
+    assert_eq!(cut["kept"], text.len());
+    assert!(text.len() > query::EXCERPT_BYTES - 4 && text.len() <= query::EXCERPT_BYTES);
+    assert!(cut["bytes"].as_u64().unwrap() > query::EXCERPT_BYTES as u64);
+}
+
+#[test]
 fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
     let (_, mut store, _) = indexed_files(
         Agent::Claude,

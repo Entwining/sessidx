@@ -19,9 +19,10 @@ static SEARCH_TOKENS: LazyLock<Regex> =
 static TOKENIZE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"tokenize='[^']*'").expect("static regex is valid"));
 
-/// The most bytes of a hit's text that a search page shows, around its
-/// matches: larger shows more context and fits fewer sessions on a page. Rule:
-/// docs/formats.md `search_excerpt`.
+/// The most bytes of a search hit's text, or of a grep hit's record text,
+/// that a page shows around its matches: larger shows more context and fits
+/// fewer sessions or hits on a page. Rules: docs/formats.md `search_excerpt`
+/// and `grep_excerpt`.
 pub const EXCERPT_BYTES: usize = 512;
 
 /// The most bytes of a hit's text that one FTS5 `highlight` call reads. Its
@@ -430,12 +431,10 @@ fn align(text: &str, highlighted: &str) -> Option<Vec<Range<usize>>> {
 }
 
 /// The range of at most [`EXCERPT_BYTES`] of `text` holding the most query
-/// phrases, given each phrase's spans in order, starting at the line before
-/// its first match when that line starts within an eighth of a window, and
-/// otherwise an eighth of a window before it, or less when the match would not
-/// fit after that. The earliest wins a tie, and the prefix is the window when
-/// nothing matched. Fails as interrupted once `deadline` passes, as the
-/// statements before it do.
+/// phrases, given each phrase's spans in order, placed as [`match_window`]
+/// places it for each match. The earliest wins a tie, and the prefix is the
+/// window when nothing matched. Fails as interrupted once `deadline` passes, as
+/// the statements before it do.
 fn window(
     text: &str,
     phrases: &[Vec<Range<usize>>],
@@ -457,18 +456,7 @@ fn window(
                 None,
             ));
         }
-        let room = EXCERPT_BYTES.saturating_sub(last - first);
-        let lead = text.ceil_char_boundary(first.saturating_sub(room.min(EXCERPT_BYTES / 8)));
-        let start = text[lead..first].rfind('\n').map_or(lead, |i| lead + i + 1);
-        // A window that would pass the end shows the end's full width instead.
-        let (start, end) = if start + EXCERPT_BYTES >= text.len() {
-            (
-                text.ceil_char_boundary(text.len() - EXCERPT_BYTES),
-                text.len(),
-            )
-        } else {
-            (start, text.floor_char_boundary(start + EXCERPT_BYTES))
-        };
+        let Range { start, end } = match_window(text, first..last);
         // A phrase's spans end in the order they start, so its first from `start` ends first.
         let covered = phrases
             .iter()
@@ -483,4 +471,22 @@ fn window(
         }
     }
     Ok(best.1)
+}
+
+/// The range of at most [`EXCERPT_BYTES`] of `text`, which is longer, shown for a
+/// match at `found`: from the line before the match when that line starts
+/// within an eighth of a window, and otherwise an eighth of a window before
+/// it, or less when the match would not fit after that.
+pub(super) fn match_window(text: &str, found: Range<usize>) -> Range<usize> {
+    let room = EXCERPT_BYTES.saturating_sub(found.len());
+    let lead = text.ceil_char_boundary(found.start.saturating_sub(room.min(EXCERPT_BYTES / 8)));
+    let start = text[lead..found.start]
+        .rfind('\n')
+        .map_or(lead, |i| lead + i + 1);
+    // A window that would pass the end shows the end's full width instead.
+    if start + EXCERPT_BYTES >= text.len() {
+        text.ceil_char_boundary(text.len() - EXCERPT_BYTES)..text.len()
+    } else {
+        start..text.floor_char_boundary(start + EXCERPT_BYTES)
+    }
 }
