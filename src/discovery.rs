@@ -31,14 +31,19 @@ pub struct Discovered {
     pub missing_roots: Vec<String>,
 }
 
+/// Each root that does not exist, as the `AGENT=PATH` that `--root` accepts.
+pub fn missing_roots(roots: &[Root]) -> Vec<String> {
+    roots
+        .iter()
+        .filter(|root| !root.path.exists())
+        .map(|root| format!("{}={}", name(root.agent), root.path.display()))
+        .collect()
+}
+
 pub fn files(roots: &[Root]) -> Result<Discovered> {
     let mut files = Vec::new();
-    let mut missing_roots = Vec::new();
-    for root in roots {
-        if !root.path.exists() {
-            missing_roots.push(format!("{}={}", name(root.agent), root.path.display()));
-            continue;
-        }
+    let missing_roots = missing_roots(roots);
+    for root in roots.iter().filter(|root| root.path.exists()) {
         for entry in WalkDir::new(&root.path).follow_links(false) {
             let entry = entry.context("session discovery failed")?;
             if entry.file_type().is_file()

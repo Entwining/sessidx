@@ -181,12 +181,28 @@ fn partial_tail_is_deferred_without_staleness_and_resumes_once() {
 
 #[test]
 fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
-    let (_dir, mut store, roots) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
+    let (_dir, mut store, roots) = indexed(
+        Agent::Codex,
+        &format!("{}{{unparsable\n", include_str!("../fixtures/codex.jsonl")),
+    );
+    let absent = Root {
+        agent: Agent::Pi,
+        path: roots[0].path.join("absent"),
+    };
     let lock = store.lock(None).unwrap().unwrap();
     let busy = store
-        .refresh(&roots, false, Some(Duration::from_secs(2)))
+        .refresh(
+            &[roots[0].clone(), absent.clone()],
+            false,
+            Some(Duration::from_secs(2)),
+        )
         .unwrap();
     assert!(busy.stale && busy.writer_busy);
+    assert_eq!(busy.parse_errors, 1);
+    assert_eq!(
+        busy.missing_roots,
+        [format!("pi={}", absent.path.display())]
+    );
     drop(lock);
     let location = roots[0].path.join("token=synthetic-location-key.jsonl");
     fs::rename(roots[0].path.join("session.jsonl"), &location).unwrap();

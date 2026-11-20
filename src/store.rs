@@ -91,9 +91,18 @@ impl Store {
     ) -> Result<Refresh> {
         let deadline = budget.map(|d| Instant::now() + d);
         let Some(_lock) = self.lock(deadline)? else {
+            // Nothing is indexed without the lock, but the report still
+            // describes the roots and the committed index.
+            let parse_errors = if schema_version(&self.db, true)? == SCHEMA_VERSION {
+                parse_errors(&self.db)?
+            } else {
+                0
+            };
             return Ok(Refresh {
                 stale: true,
                 writer_busy: true,
+                missing_roots: discovery::missing_roots(roots),
+                parse_errors,
                 ..Refresh::default()
             });
         };
@@ -200,11 +209,7 @@ impl Store {
                 .context("the index is built and answers queries, but compacting it failed; compaction needs free disk space up to twice the database size, and `sessidx index` runs it again")?;
             self.db.execute("UPDATE index_identity SET written=0", [])?;
         }
-        report.parse_errors =
-            self.db
-                .query_row("SELECT coalesce(sum(parse_errors),0) FROM files", [], |r| {
-                    r.get(0)
-                })?;
+        report.parse_errors = parse_errors(&self.db)?;
         Ok(report)
     }
 
@@ -257,6 +262,14 @@ impl Store {
         }
         Ok(())
     }
+}
+
+fn parse_errors(db: &Connection) -> Result<u64> {
+    Ok(
+        db.query_row("SELECT coalesce(sum(parse_errors),0) FROM files", [], |r| {
+            r.get(0)
+        })?,
+    )
 }
 
 /// Whether more than half of the indexed records were written since the index
