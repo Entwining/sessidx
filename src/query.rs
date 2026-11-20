@@ -205,12 +205,12 @@ pub fn date(s: &str) -> Result<Timestamp> {
 /// removed after an error too, because a caller may query the connection past
 /// the deadline, as `search` does to choose its recovery.
 pub(crate) fn with_deadline<T>(
-    db: &Connection,
+    db: &mut Connection,
     deadline: Instant,
-    work: impl FnOnce() -> Result<T>,
+    work: impl FnOnce(&Connection) -> Result<T>,
 ) -> Result<Option<T>> {
     db.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
-    let result = work();
+    let result = work(db);
     db.progress_handler(0, None::<fn() -> bool>)?;
     match result {
         Ok(value) => Ok(Some(value)),

@@ -17,7 +17,7 @@ use std::{
 
 #[test]
 fn counts_select_by_program_and_shared_filters_and_sql_is_read_only() {
-    let (_dir, store, roots) = indexed_files(
+    let (_dir, mut store, roots) = indexed_files(
         Agent::Claude,
         &[("claude-fixture", include_str!("../fixtures/claude.jsonl"))],
     );
@@ -106,10 +106,10 @@ fn counts_select_by_program_and_shared_filters_and_sql_is_read_only() {
             assert!(row.values().filter_map(|v| v.as_i64()).all(|n| n == 0));
         }
     }
-    assert!(counting::sql(&store.db, "DELETE FROM events").is_err());
-    assert!(counting::sql(&store.db, "SELECT 1; DELETE FROM events").is_err());
-    assert!(counting::sql(&store.db, "WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
-    let duplicate = counting::sql(&store.db, "SELECT 1 AS id, 2 AS id");
+    assert!(counting::sql(&mut store.db, "DELETE FROM events").is_err());
+    assert!(counting::sql(&mut store.db, "SELECT 1; DELETE FROM events").is_err());
+    assert!(counting::sql(&mut store.db, "WITH x AS (SELECT 1) SELECT * FROM x").is_ok());
+    let duplicate = counting::sql(&mut store.db, "SELECT 1 AS id, 2 AS id");
     assert!(
         duplicate
             .unwrap_err()
@@ -126,7 +126,7 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         "{\"type\":\"user\",\"sessionId\":\"doctor\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"bad\",\"is_error\":true,\"content\":\"DENIED: synthetic policy\"}]}}\n",
         "{\"type\":\"future-shape\"}\n{invalid\n{\"partial\":"
     );
-    let (_, store, _) = indexed(Agent::Claude, data);
+    let (_, mut store, _) = indexed(Agent::Claude, data);
     let d = counting::doctor(&store.db).unwrap();
     for (key, expected) in [
         ("files", 1),
@@ -147,24 +147,25 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
         assert_eq!(d[key], expected, "{key}");
     }
     let excess = counting::sql(
-        &store.db,
+        &mut store.db,
         "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10001) SELECT x FROM n",
     );
     assert!(excess.unwrap_err().to_string().contains("10000 rows"));
     let start = std::time::Instant::now();
-    let err = counting::sql(&store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
+    let err = counting::sql(&mut store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
     assert_eq!(
         err.to_string(),
         "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
     );
-    let overflow = counting::sql(&store.db, "SELECT abs(-9223372036854775808) AS n").unwrap_err();
+    let overflow =
+        counting::sql(&mut store.db, "SELECT abs(-9223372036854775808) AS n").unwrap_err();
     assert!(
         overflow.to_string().contains("integer overflow"),
         "{overflow}"
     );
     assert!(start.elapsed() < std::time::Duration::from_secs(4));
     assert_eq!(
-        counting::sql(&store.db, "SELECT 1 AS n").unwrap()[0]["n"],
+        counting::sql(&mut store.db, "SELECT 1 AS n").unwrap()[0]["n"],
         1
     );
 }
@@ -563,13 +564,13 @@ fn count_rows_partition_their_population() {
 
 #[test]
 fn whole_days_are_counted_from_daily_counts_not_events() {
-    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
-    let calls = |program: Option<&str>, filters: &Filters| {
+    let (_dir, mut store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let calls = |store: &Store, program: Option<&str>, filters: &Filters| {
         counting::count(&store.db, Metric::Failures, &[], program, filters).unwrap()[0]["calls"]
             .as_i64()
             .unwrap()
     };
-    let indexed_calls = [None, Some("rg")].map(|p| calls(p, &Filters::default()));
+    let indexed_calls = [None, Some("rg")].map(|p| calls(&store, p, &Filters::default()));
     // 200,000 canonical `rg` calls on one earlier day, with their daily rows.
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<200000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,ts,role,role_source,kind,kind_source,model,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,'2020-01-01T12:00:00.000Z',r.role,r.role_source,r.kind,r.kind_source,r.model,r.model_source,r.ok_source,1,1,'none' FROM n JOIN event_rows r ON r.id=(SELECT min(id) FROM event_rows WHERE kind='tool_call');
      INSERT INTO daily_counts SELECT file_id,'2020-01-01',kind,role,model,1,200000,0,0,0,0,0,0,200000,0,200000,0,0 FROM event_rows WHERE id=(SELECT min(id) FROM event_rows WHERE kind='tool_call');
@@ -608,7 +609,7 @@ fn whole_days_are_counted_from_daily_counts_not_events() {
         })
     {
         steps.store(0, Ordering::Relaxed);
-        assert_eq!(calls(program, &filters), expected, "{program:?}");
+        assert_eq!(calls(&store, program, &filters), expected, "{program:?}");
         let work = steps.load(Ordering::Relaxed);
         // One callback per 100 virtual machine instructions; a pass over the
         // 200,000 calls costs thousands.

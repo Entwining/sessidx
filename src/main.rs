@@ -319,11 +319,20 @@ fn run(cli: Cli) -> Result<i32> {
     }
 }
 
-/// Each lookup refreshes within the budget; callers then read one SQLite
-/// snapshot (a transaction on the store) so all records and cursor fingerprints agree.
+/// Each lookup refreshes within the budget.
 fn refreshed(path: &Path, roots: &[Root]) -> Result<(Store, Refresh)> {
     let mut store = Store::open(path)?;
     let refresh = store.refresh(roots, false, Some(sessidx::BUDGET))?;
+    Ok((store, refresh))
+}
+
+/// A refreshed store whose connection then reads one SQLite snapshot, so all
+/// records and cursor fingerprints agree. The transaction is begun in SQL and
+/// ends with the connection: a transaction guard borrows the connection, and
+/// setting a query's deadline needs it exclusively.
+fn refreshed_snapshot(path: &Path, roots: &[Root]) -> Result<(Store, Refresh)> {
+    let (store, refresh) = refreshed(path, roots)?;
+    store.db.execute_batch("BEGIN")?;
     Ok((store, refresh))
 }
 
@@ -334,11 +343,11 @@ fn search(
     mut filters: Filters,
     page: Page,
 ) -> Result<i32> {
-    let (store, refresh) = refreshed(path, roots)?;
-    let db = store.db.unchecked_transaction()?;
+    let (mut store, refresh) = refreshed_snapshot(path, roots)?;
+    let db = &mut store.db;
     let request = json!(["search_sessions", path, query, filters]);
     // Only the frozen sessions not yet returned matter to later pages.
-    let mut snapshot = snapshot(&db, page.cursor.as_deref(), &request, |c| {
+    let mut snapshot = snapshot(db, page.cursor.as_deref(), &request, |c| {
         let unvisited = c
             .search_order
             .as_deref()
@@ -357,7 +366,7 @@ fn search(
         .as_ref()
         .map(|order| order.iter().skip(offset).copied().collect());
     filters.search_order = remaining.clone();
-    let found = query::search(&db, query, &filters, page.limit, sessidx::BUDGET)?;
+    let found = query::search(db, query, &filters, page.limit, sessidx::BUDGET)?;
     if snapshot.search_order.is_none() {
         snapshot.search_order = found.order;
         snapshot.search_matched = found.matched_sessions;
@@ -413,12 +422,12 @@ fn grep(
         filters.narrowed(),
         "grep requires a narrowing filter: add --since, --until, --cwd, --session, or --agent"
     );
-    let (store, refresh) = refreshed(path, roots)?;
-    let db = store.db.unchecked_transaction()?;
+    let (mut store, refresh) = refreshed_snapshot(path, roots)?;
+    let db = &mut store.db;
     let request = json!(["grep", path, pattern, filters]);
     // Files are read in ID order, so a change matters only from the file the
     // cursor stopped in, and only to a file that held events then.
-    let snapshot = snapshot(&db, page.cursor.as_deref(), &request, |c| {
+    let snapshot = snapshot(db, page.cursor.as_deref(), &request, |c| {
         Ok(db.query_row(
             "SELECT EXISTS(SELECT 1 FROM index_changes WHERE id>? AND first_event_id<=? AND file_id>=?)",
             [c.revision, c.high_water, c.after.map_or(0, |a| a.0)],
@@ -427,7 +436,7 @@ fn grep(
     })?;
     filters.high_water = Some(snapshot.high_water);
     let (hits, coverage) = query::scan(
-        &db,
+        db,
         pattern,
         &filters,
         page.limit,
@@ -455,13 +464,13 @@ fn show(
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<i32> {
-    let (store, refresh) = refreshed(path, roots)?;
-    let db = store.db.unchecked_transaction()?;
+    let (store, refresh) = refreshed_snapshot(path, roots)?;
+    let db = &store.db;
     let request = json!(["show", path, target, around]);
     // A replaced transcript has a new file ID, which `show_snapshot` refuses.
-    let snapshot = snapshot(&db, cursor, &request, |_| Ok(false))?;
+    let snapshot = snapshot(db, cursor, &request, |_| Ok(false))?;
     let (hits, coverage) = query::show_snapshot(
-        &db,
+        db,
         target,
         around,
         limit,
@@ -492,9 +501,9 @@ fn count(
     filters: &Filters,
 ) -> Result<i32> {
     counting::check(metric, by, program, filters)?;
-    let (store, refresh) = refreshed(path, roots)?;
-    let db = store.db.unchecked_transaction()?;
-    let rows = counting::count(&db, metric, by, program, filters)?;
+    let (store, refresh) = refreshed_snapshot(path, roots)?;
+    let db = &store.db;
+    let rows = counting::count(db, metric, by, program, filters)?;
     finish(
         "count",
         &rows,
@@ -509,11 +518,11 @@ fn count(
 }
 
 fn doctor(path: &Path, roots: &[Root]) -> Result<i32> {
-    let (store, refresh) = refreshed(path, roots)?;
-    let db = store.db.unchecked_transaction()?;
+    let (store, refresh) = refreshed_snapshot(path, roots)?;
+    let db = &store.db;
     finish(
         "doctor",
-        &[counting::doctor(&db)?],
+        &[counting::doctor(db)?],
         Some(&refresh),
         &Coverage::default(),
         None,
@@ -522,8 +531,8 @@ fn doctor(path: &Path, roots: &[Root]) -> Result<i32> {
 }
 
 fn sql(path: &Path, roots: &[Root], query: &str) -> Result<i32> {
-    let (store, refresh) = refreshed(path, roots)?;
-    let rows: Vec<Value> = counting::sql(&store.db, query)?
+    let (mut store, refresh) = refreshed(path, roots)?;
+    let rows: Vec<Value> = counting::sql(&mut store.db, query)?
         .into_iter()
         .map(|row| json!({"data":row}))
         .collect();

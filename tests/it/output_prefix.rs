@@ -21,19 +21,19 @@ fn tool_output_prefix_is_bounded_and_raw_tail_remains_reachable() {
             Agent::Pi => "/message/content/0/text",
         };
         *record.pointer_mut(field).unwrap() = serde_json::json!(text);
-        let (_dir, store, _) = indexed(h, &(record.to_string() + "\n"));
-        let hits = search_hits(&store.db, "outputneedle", &Filters::default(), 20).unwrap();
+        let (_dir, mut store, _) = indexed(h, &(record.to_string() + "\n"));
+        let hits = search_hits(&mut store.db, "outputneedle", &Filters::default(), 20).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].role, "tool");
         assert!(truncated(&hits[0]));
         assert_eq!(stored(&store.db, &hits[0]), prefix);
         assert!(
-            search_hits(&store.db, "tailoutside", &Filters::default(), 20)
+            search_hits(&mut store.db, "tailoutside", &Filters::default(), 20)
                 .unwrap()
                 .is_empty()
         );
         let (raw, c) = query::scan(
-            &store.db,
+            &mut store.db,
             "tailoutside",
             &Filters {
                 agent: vec![h],
@@ -74,11 +74,11 @@ fn diagnostic_attachments_are_tool_outputs_without_creating_results() {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/output-prefix.json")).unwrap();
     let data = format!("{}\n{}\n", fixture[3]["record"], fixture[4]["record"]);
-    let (_dir, store, _) = indexed(Agent::Claude, &data);
-    let hits = search_hits(&store.db, "diagnosticneedle", &Filters::default(), 20).unwrap();
+    let (_dir, mut store, _) = indexed(Agent::Claude, &data);
+    let hits = search_hits(&mut store.db, "diagnosticneedle", &Filters::default(), 20).unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(
-        search_hits(&store.db, "cSpell", &Filters::default(), 20)
+        search_hits(&mut store.db, "cSpell", &Filters::default(), 20)
             .unwrap()
             .len(),
         1

@@ -352,7 +352,7 @@ fn usage_counts_equal_the_public_views() {
 
 #[test]
 fn usage_count_work_follows_its_records() {
-    let (_dir, store, _) = indexed_files(
+    let (_dir, mut store, _) = indexed_files(
         Agent::Claude,
         &[
             (

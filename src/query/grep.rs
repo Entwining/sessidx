@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 /// events after `after`, a transcript at a time in file ID order, until `limit`
 /// hits or `budget`. Rule: docs/formats.md `grep_traversal`.
 pub fn scan(
-    db: &Connection,
+    db: &mut Connection,
     pattern: &str,
     filters: &Filters,
     limit: usize,
@@ -29,7 +29,7 @@ pub fn scan(
     let mut coverage = Coverage::default();
     let mut cursor = after.unwrap_or((0, 0, 0));
     // Whether the page stopped before the end of the selection.
-    let stopped = with_deadline(db, deadline, || -> Result<bool> {
+    let stopped = with_deadline(db, deadline, |db| -> Result<bool> {
         let pattern = Regex::new(pattern).context("invalid grep regex")?;
         let files = selected_files(db, filters, cursor.0)?;
         let (events, event_args) = filters.event_sql();

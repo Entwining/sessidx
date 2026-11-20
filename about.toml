@@ -6,6 +6,10 @@ ignore-build-dependencies = true
 ignore-dev-dependencies = true
 private = { ignore = true }
 
+# Its BSD-2-Clause part is the decoders for legacy formats, which the `legacy` feature builds and this build leaves off.
+[zstd-sys]
+accepted = ["BSD-2-Clause"]
+
 # The crate's expression omits the Unicode data its tables are generated from.
 [regex-syntax.clarify]
 license = "(MIT OR Apache-2.0) AND Unicode-DFS-2016"

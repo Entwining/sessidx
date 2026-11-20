@@ -66,13 +66,13 @@ fn reference(dir: &Path) -> Store {
     store
 }
 
-fn grepped(store: &Store, pattern: &str) -> Vec<String> {
+fn grepped(store: &mut Store, pattern: &str) -> Vec<String> {
     let filters = Filters {
         agent: vec![Agent::Codex],
         ..Filters::default()
     };
     let (hits, coverage) = query::scan(
-        &store.db,
+        &mut store.db,
         pattern,
         &filters,
         20,
@@ -98,14 +98,14 @@ fn a_compressed_rollout_is_indexed_shown_and_grepped_under_its_plain_path() {
     let refresh = store.refresh(&roots, false, None).unwrap();
     assert_eq!(refresh.parse_errors, 0);
     assert_eq!(files(&store), [plain.to_str().unwrap()]);
-    let reference = reference(dir.path());
+    let mut reference = reference(dir.path());
     assert_eq!(snapshot(&store), snapshot(&reference));
     let records = shown(&store, "codex-fixture");
     assert!(records.iter().any(|r| r.contains("太长")));
     assert_eq!(records, shown(&reference, "codex-fixture"));
-    let hits = grepped(&store, "太长");
+    let hits = grepped(&mut store, "太长");
     assert!(!hits.is_empty());
-    assert_eq!(hits, grepped(&reference, "太长"));
+    assert_eq!(hits, grepped(&mut reference, "太长"));
     // Decoded size differs from the compressed file's size, which must not make
     // every later refresh reindex it.
     assert_eq!(store.refresh(&roots, false, None).unwrap().files_changed, 0);

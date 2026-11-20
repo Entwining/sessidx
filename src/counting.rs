@@ -463,10 +463,10 @@ pub fn doctor(db: &Connection) -> Result<Json> {
     }))
 }
 
-pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
+pub fn sql(db: &mut Connection, sql: &str) -> Result<Vec<Json>> {
     db.execute_batch("PRAGMA query_only=ON;")?;
     let deadline = Instant::now() + crate::BUDGET;
-    let result = with_deadline(db, deadline, || {
+    let result = with_deadline(db, deadline, |db| {
         let mut batch = rusqlite::Batch::new(db, sql);
         let mut stmt = batch.next()?.ok_or_else(|| anyhow::anyhow!("empty SQL"))?;
         anyhow::ensure!(batch.next()?.is_none(), "sql accepts exactly one statement");
@@ -482,7 +482,6 @@ pub fn sql(db: &Connection, sql: &str) -> Result<Vec<Json>> {
         );
         let names = stmt
             .column_names()
-            .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
         anyhow::ensure!(

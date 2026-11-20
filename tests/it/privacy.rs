@@ -152,14 +152,14 @@ fn synthetic_secret_canaries_absent_from_storage_and_lookup_outputs() {
         "user",
         serde_json::json!({"role":"user","content":format!("needle {}",fixture["identifiers"].as_array().unwrap().iter().map(|v|v.as_str().unwrap()).collect::<Vec<_>>().join(" "))}),
     );
-    let (dir, store, roots) = indexed_files(Agent::Claude, &[("canary-session", &data)]);
+    let (dir, mut store, roots) = indexed_files(Agent::Claude, &[("canary-session", &data)]);
     assert_canaries_absent_from_storage(
         dir.path(),
         &values.iter().map(String::as_str).collect::<Vec<_>>(),
     );
     for v in fixture["identifiers"].as_array().unwrap() {
         let value = v.as_str().unwrap();
-        let hits = search_hits(&store.db, value, &Filters::default(), 20).unwrap();
+        let hits = search_hits(&mut store.db, value, &Filters::default(), 20).unwrap();
         assert!(
             hits.iter().any(|h| stored(&store.db, h).contains(value)),
             "public identifier lost"
@@ -249,7 +249,7 @@ fn adversarial_hex_fragments_basic_and_passphrase_canaries_are_removed() {
 
 #[test]
 fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
-    let (_, store, _) = indexed_files(
+    let (_, mut store, _) = indexed_files(
         Agent::Claude,
         &[("identifiers", include_str!("../fixtures/identifiers.jsonl"))],
     );
@@ -308,7 +308,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         "/synthetic/vR9xT6qA2nL8cP4hY0sD7f/",
     ] {
         let hits = search_hits(
-            &store.db,
+            &mut store.db,
             &format!("identifierneedle {value}"),
             &Filters::default(),
             20,
@@ -319,7 +319,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
     }
     // `sql` prints stored text as stored.
     let rows = counting::sql(
-        &store.db,
+        &mut store.db,
         "SELECT ts FROM events WHERE session_id='identifiers' AND ts IS NOT NULL",
     )
     .unwrap();
@@ -327,7 +327,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
         rows,
         [serde_json::json!({"ts": "2026-10-08T15:23:34.928Z"})]
     );
-    let context = search_hits(&store.db, "contextneedle", &Filters::default(), 20).unwrap();
+    let context = search_hits(&mut store.db, "contextneedle", &Filters::default(), 20).unwrap();
     assert_eq!(context.len(), 1);
     for value in [
         "0123456789abcdef1032547698badcfe89abcdef",
@@ -359,7 +359,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
             "synthetic context control survived: {value}"
         );
     }
-    let input = search_hits(&store.db, "identifierinput", &Filters::default(), 20).unwrap();
+    let input = search_hits(&mut store.db, "identifierinput", &Filters::default(), 20).unwrap();
     assert_eq!(input.len(), 1);
     assert!(stored(&store.db, &input[0]).contains("tools.exec_command"));
     assert!(!stored(&store.db, &input[0]).contains("std::fs::File::try_lock"));
@@ -380,7 +380,7 @@ fn body_identifiers_are_searchable_and_credential_context_stays_redacted() {
     );
     assert!(
         search_hits(
-            &store.db,
+            &mut store.db,
             "identifierinput 0xabcdef0123456789abcdef0123456789abcdef01",
             &Filters::default(),
             20
@@ -433,9 +433,9 @@ fn path_and_version_structure_never_exempts_random_pieces() {
 
 #[test]
 fn pi_sections_share_the_native_message_and_are_redacted() {
-    let (dir, store, _) = indexed(Agent::Pi, include_str!("../fixtures/pi-sections.jsonl"));
+    let (dir, mut store, _) = indexed(Agent::Pi, include_str!("../fixtures/pi-sections.jsonl"));
     for term in ["contentneedle", "sectionneedle", "TypeSafe", "sectiontail"] {
-        let hits = search_hits(&store.db, term, &Filters::default(), 20).unwrap();
+        let hits = search_hits(&mut store.db, term, &Filters::default(), 20).unwrap();
         assert_eq!(hits.len(), 1, "{term}");
         assert_eq!(hits[0].role, "system");
     }
@@ -455,9 +455,9 @@ fn pi_sections_share_the_native_message_and_are_redacted() {
 fn scan_matches_original_ranges_before_redacting_display() {
     let token = "zQ8vN2rK7xP4mT9aF6wH3cS5uD1jL0eB_yGqR1";
     let data=serde_json::json!({"type":"user","uuid":"scan-before-redaction","sessionId":"scan-private","message":{"role":"user","content":format!("needle {token}")}}).to_string()+"\n";
-    let (_dir, store, _) = indexed_files(Agent::Claude, &[("scan-private", &data)]);
+    let (_dir, mut store, _) = indexed_files(Agent::Claude, &[("scan-private", &data)]);
     let (hits, c) = query::scan(
-        &store.db,
+        &mut store.db,
         token,
         &Filters {
             session: Some("scan-private".into()),
@@ -641,9 +641,9 @@ fn native_identifiers_and_cwd_remain_queryable_with_body_entropy_redaction() {
     let session = "rollout-2026-05-01T10-30-00-syntheticId7QwX9rTbM3k";
     let cwd = "/synthetic/Code/GitHub/project-with-native-identifiers";
     let data=serde_json::json!({"type":"session_meta","payload":{"id":session,"cwd":cwd}}).to_string()+"\n"+&serde_json::json!({"type":"turn_context","payload":{"model":"claude-haiku-4-5-20251001"}}).to_string()+"\n"+&serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"needle"}]}}).to_string()+"\n";
-    let (_, store, _) = indexed(Agent::Codex, &data);
+    let (_, mut store, _) = indexed(Agent::Codex, &data);
     let hits = search_hits(
-        &store.db,
+        &mut store.db,
         "needle",
         &Filters {
             session: Some(session.into()),

@@ -143,7 +143,7 @@ pub fn three_agents() -> (tempfile::TempDir, Store, Vec<Root>) {
 }
 
 pub fn search_hits(
-    db: &rusqlite::Connection,
+    db: &mut rusqlite::Connection,
     query: &str,
     filters: &Filters,
     limit: usize,

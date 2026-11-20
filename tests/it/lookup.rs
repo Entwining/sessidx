@@ -16,7 +16,7 @@ use std::{
 
 #[test]
 fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
-    let (_dir, store, _) = indexed_files(Agent::Codex, &[]);
+    let (_dir, mut store, _) = indexed_files(Agent::Codex, &[]);
     store
         .db
         .execute_batch(include_str!("../fixtures/session-paths.sql"))
@@ -144,7 +144,7 @@ fn transcript_path_access_is_indexed_and_counts_stay_per_transcript() {
 
 #[test]
 fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
-    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, mut store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let filters = Filters {
         session: Some("session".into()),
         ..Filters::default()
@@ -179,7 +179,7 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,role,role_source,kind,kind_source,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source,1,1,CASE WHEN r.kind='tool_call' THEN 'none' END FROM n JOIN event_rows r ON r.id=1;").unwrap();
     // No event has the developer role, so the first step reads every row.
     let (hits, coverage) = query::scan(
-        &store.db,
+        &mut store.db,
         "absent",
         &Filters {
             role: Some(query::Role::Developer),
@@ -198,11 +198,11 @@ fn session_access_uses_indexes_and_grep_bounds_the_first_sqlite_step() {
 
 #[test]
 fn search_work_follows_its_matches_not_the_history() {
-    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, mut store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<1000000) INSERT INTO event_rows(file_id,line_no,byte_off,byte_len,ordinal,raw_hash,role,role_source,kind,kind_source,model_source,ok_source,line_role_first,canonical,call_ok_source) SELECT r.file_id,n.i+100,r.byte_off,r.byte_len,0,r.raw_hash,r.role,r.role_source,r.kind,r.kind_source,r.model_source,r.ok_source,1,1,CASE WHEN r.kind='tool_call' THEN 'none' END FROM n JOIN event_rows r ON r.id=1;").unwrap();
     // A scan of the 1,000,000 rows that cannot match exceeds the budget.
     let found = query::search(
-        &store.db,
+        &mut store.db,
         "太长",
         &Filters::default(),
         20,
@@ -214,21 +214,27 @@ fn search_work_follows_its_matches_not_the_history() {
 
 #[test]
 fn lookup_cjk_latin_filters_and_show_references() {
-    let (_dir, store, _) = indexed_files(
+    let (_dir, mut store, _) = indexed_files(
         Agent::Claude,
         &[("claude-fixture", include_str!("../fixtures/claude.jsonl"))],
     );
     let filters = Filters::default();
     assert_eq!(
-        search_hits(&store.db, "太长", &filters, 20).unwrap().len(),
+        search_hits(&mut store.db, "太长", &filters, 20)
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(
-        search_hits(&store.db, "Latin", &filters, 20).unwrap().len(),
+        search_hits(&mut store.db, "Latin", &filters, 20)
+            .unwrap()
+            .len(),
         1
     );
     assert_eq!(
-        search_hits(&store.db, "Lat", &filters, 20).unwrap().len(),
+        search_hits(&mut store.db, "Lat", &filters, 20)
+            .unwrap()
+            .len(),
         0
     );
     let fts_body: Option<String> = store
@@ -240,7 +246,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
     assert!(fts_body.is_none());
     assert!(
         search_hits(
-            &store.db,
+            &mut store.db,
             "Latin",
             &Filters {
                 agent: vec![Agent::Pi],
@@ -252,7 +258,7 @@ fn lookup_cjk_latin_filters_and_show_references() {
         .is_empty()
     );
     let hits = search_hits(
-        &store.db,
+        &mut store.db,
         "Latin",
         &Filters {
             cwd: Some("/synthetic".into()),
@@ -283,10 +289,10 @@ fn lookup_cjk_latin_filters_and_show_references() {
 
 #[test]
 fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() {
-    let (dir, store, _) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
+    let (dir, mut store, _) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
     assert!(
         query::scan(
-            &store.db,
+            &mut store.db,
             "exited",
             &Filters::default(),
             20,
@@ -316,13 +322,23 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
         role: Some(sessidx::query::Role::Tool),
         ..Filters::default()
     };
-    assert!(query::scan(&store.db, "(", &filters, 20, None, Duration::from_secs(2)).is_err());
+    assert!(
+        query::scan(
+            &mut store.db,
+            "(",
+            &filters,
+            20,
+            None,
+            Duration::from_secs(2)
+        )
+        .is_err()
+    );
     let path = dir.path().join("logs/session.jsonl");
     let mut bytes = fs::read(&path).unwrap();
     bytes[0] = b'!';
     fs::write(&path, &bytes).unwrap();
     let (hits, coverage) = query::scan(
-        &store.db,
+        &mut store.db,
         "exited",
         &filters,
         20,
@@ -337,7 +353,7 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
     bytes[off + 1] = b'!';
     fs::write(&path, bytes).unwrap();
     let (hits, coverage) = query::scan(
-        &store.db,
+        &mut store.db,
         "exited",
         &filters,
         20,
@@ -369,7 +385,7 @@ fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() 
 #[test]
 fn grep_and_show_return_each_line_once_per_role() {
     // Line 1's single tool_use block is indexed as an assistant message and a tool call.
-    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, mut store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     let lines = |hits: &[query::Hit]| {
         hits.iter()
             .map(|h| (h.line_no, h.role.clone()))
@@ -390,7 +406,7 @@ fn grep_and_show_return_each_line_once_per_role() {
         ..Filters::default()
     };
     let (hits, _) = query::scan(
-        &store.db,
+        &mut store.db,
         "call-c",
         &filters,
         20,
@@ -447,13 +463,13 @@ fn search_and_grep_pass_over_a_sessidx_call_until_its_result_is_indexed() {
         lines.sort();
         lines
     };
-    let grep = |store: &sessidx::store::Store| {
+    let grep = |store: &mut sessidx::store::Store| {
         let filters = Filters {
             session: Some("issuer".into()),
             ..Filters::default()
         };
         let (hits, _) = query::scan(
-            &store.db,
+            &mut store.db,
             "echoneedle",
             &filters,
             20,
@@ -463,8 +479,8 @@ fn search_and_grep_pass_over_a_sessidx_call_until_its_result_is_indexed() {
         .unwrap();
         lines(&hits)
     };
-    let searched = |store: &sessidx::store::Store| {
-        lines(&search_hits(&store.db, "echoneedle", &Filters::default(), 20).unwrap())
+    let searched = |store: &mut sessidx::store::Store| {
+        lines(&search_hits(&mut store.db, "echoneedle", &Filters::default(), 20).unwrap())
     };
     let issuer_lines = |lines: &[i64]| {
         lines
@@ -473,9 +489,9 @@ fn search_and_grep_pass_over_a_sessidx_call_until_its_result_is_indexed() {
             .collect::<Vec<_>>()
     };
     let mut expected = issuer_lines(&[1, 4]);
-    assert_eq!(grep(&store), expected);
+    assert_eq!(grep(&mut store), expected);
     expected.push(("target".into(), 3));
-    assert_eq!(searched(&store), expected);
+    assert_eq!(searched(&mut store), expected);
     fs::write(
         roots[0].path.join("issuer.jsonl"),
         issuer + &result("running"),
@@ -483,9 +499,9 @@ fn search_and_grep_pass_over_a_sessidx_call_until_its_result_is_indexed() {
     .unwrap();
     store.refresh(&roots, false, None).unwrap();
     let mut expected = issuer_lines(&[1, 3, 4]);
-    assert_eq!(grep(&store), expected);
+    assert_eq!(grep(&mut store), expected);
     expected.push(("target".into(), 3));
-    assert_eq!(searched(&store), expected);
+    assert_eq!(searched(&mut store), expected);
 }
 
 #[test]
@@ -609,11 +625,11 @@ fn search_shows_each_long_hit_text_around_its_matches() {
         .iter()
         .map(|(id, t)| (*id, t.as_str()))
         .collect();
-    let (_dir, store, _) = indexed_files(Agent::Claude, &transcripts);
+    let (_dir, mut store, _) = indexed_files(Agent::Claude, &transcripts);
     let budget = Duration::from_secs(2);
-    let excerpt = |query: &str| {
+    let mut excerpt = |query: &str| {
         let started = std::time::Instant::now();
-        let mut page = query::search(&store.db, query, &Filters::default(), 20, budget)
+        let mut page = query::search(&mut store.db, query, &Filters::default(), 20, budget)
             .unwrap()
             .sessions;
         assert!(started.elapsed() < budget, "{query}");
@@ -682,10 +698,10 @@ fn search_fails_rather_than_finish_its_excerpts_past_the_deadline() {
     let query = "a b c d e f g h i j k l m n o p";
     let text = format!("{query} ").repeat(60_000);
     let line = serde_json::json!({"type":"user","uuid":"dense","sessionId":"dense","timestamp":"2026-10-01T00:00:00Z","message":{"role":"user","content":text}}).to_string() + "\n";
-    let (_dir, store, _) = indexed_files(Agent::Claude, &[("dense", &line)]);
+    let (_dir, mut store, _) = indexed_files(Agent::Claude, &[("dense", &line)]);
     let budget = Duration::from_secs(2);
     let started = std::time::Instant::now();
-    let result = query::search(&store.db, query, &Filters::default(), 20, budget);
+    let result = query::search(&mut store.db, query, &Filters::default(), 20, budget);
     assert!(result.is_err() || started.elapsed() < budget);
 }
 
@@ -709,9 +725,9 @@ fn search_excerpts_many_long_hits_without_stopping_early() {
         .iter()
         .map(|(id, t)| (id.as_str(), t.as_str()))
         .collect();
-    let (_dir, store, _) = indexed_files(Agent::Claude, &transcripts);
+    let (_dir, mut store, _) = indexed_files(Agent::Claude, &transcripts);
     let page = query::search(
-        &store.db,
+        &mut store.db,
         "manyneedle",
         &Filters::default(),
         100,
@@ -750,7 +766,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     .unwrap();
     store.refresh(&roots, false, None).unwrap();
     let first = query::search(
-        &store.db,
+        &mut store.db,
         "groupneedle",
         &Filters::default(),
         2,
@@ -767,7 +783,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
         ["crowded", "older"]
     );
     let next = query::search(
-        &store.db,
+        &mut store.db,
         "groupneedle",
         &Filters {
             search_order: Some(order[2..].to_vec()),
@@ -798,7 +814,7 @@ fn ranked_search_pages_sessions_before_selecting_best_hits() {
     });
     store.refresh(&roots, false, None).unwrap();
     let all = query::search(
-        &store.db,
+        &mut store.db,
         "groupneedle",
         &Filters::default(),
         20,
@@ -835,7 +851,7 @@ fn grep_reads_each_range_from_its_own_file() {
         ..Filters::default()
     };
     let (hits, coverage) = query::scan(
-        &store.db,
+        &mut store.db,
         "needle",
         &filters,
         10,
@@ -885,7 +901,7 @@ fn cwd_filter_selects_the_directory_and_children_but_not_a_prefix_sibling() {
             cwd: Some(cwd.into()),
             ..Filters::default()
         };
-        let mut sessions: Vec<_> = search_hits(&store.db, "cwdneedle", &filters, 20)
+        let mut sessions: Vec<_> = search_hits(&mut store.db, "cwdneedle", &filters, 20)
             .unwrap()
             .into_iter()
             .map(|h| h.session_id)
@@ -913,10 +929,10 @@ fn search_terms_are_literal_phrases_joined_with_and() {
     })
     .collect();
     let files: Vec<(&str, &str)> = data.iter().map(|(s, c)| (*s, c.as_str())).collect();
-    let (_dir, store, _) = indexed_files(Agent::Claude, &files);
-    let sessions = |q: &str| {
+    let (_dir, mut store, _) = indexed_files(Agent::Claude, &files);
+    let mut sessions = |q: &str| {
         let mut found: Vec<_> = query::search(
-            &store.db,
+            &mut store.db,
             q,
             &Filters::default(),
             20,
@@ -951,7 +967,7 @@ fn search_terms_are_literal_phrases_joined_with_and() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
     let empty = query::search(
-        &store.db,
+        &mut store.db,
         " \t",
         &Filters::default(),
         20,
@@ -1014,7 +1030,7 @@ fn grep_reads_only_the_selected_transcripts() {
         },
     ] {
         let (hits, coverage) = query::scan(
-            &store.db,
+            &mut store.db,
             "grepneedle",
             &filters,
             20,
@@ -1028,23 +1044,17 @@ fn grep_reads_only_the_selected_transcripts() {
 
 #[test]
 fn search_stops_at_its_budget_with_a_recovery_instruction() {
-    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (_dir, mut store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
     store.db.execute_batch("WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000) INSERT INTO fts(rowid,text) SELECT (SELECT max(id) FROM event_rows)+i,'busyword' FROM n;").unwrap();
-    let interrupted = || {
-        let error = query::search(
-            &store.db,
-            "busyword",
-            &Filters::default(),
-            20,
-            Duration::ZERO,
-        )
-        .err()
-        .unwrap();
+    let interrupted = |db: &mut rusqlite::Connection| {
+        let error = query::search(db, "busyword", &Filters::default(), 20, Duration::ZERO)
+            .err()
+            .unwrap();
         format!("{error:#}")
     };
     // The unbudgeted refresh compacted the index, so only a cold read or the
     // number of matches can explain the overrun.
-    let error = interrupted();
+    let error = interrupted(&mut store.db);
     assert!(
         error.starts_with("search exceeded 0 seconds; search again")
             && error.ends_with("add distinctive terms"),
@@ -1056,7 +1066,7 @@ fn search_stops_at_its_budget_with_a_recovery_instruction() {
         .db
         .execute_batch("UPDATE index_identity SET written=(SELECT sum(lines_indexed) FROM files)")
         .unwrap();
-    let error = interrupted();
+    let error = interrupted(&mut store.db);
     assert!(
         error.starts_with("search exceeded 0 seconds; most of the index")
             && error.contains("run `sessidx index`"),
@@ -1065,7 +1075,7 @@ fn search_stops_at_its_budget_with_a_recovery_instruction() {
     // Only an interrupt gets the deadline instruction; other failures keep theirs.
     store.db.execute_batch("DROP TABLE fts").unwrap();
     let error = query::search(
-        &store.db,
+        &mut store.db,
         "busyword",
         &Filters::default(),
         20,

@@ -61,7 +61,7 @@ fn incremental_append_truncate_replace_equals_rebuild_and_exact_pointers() {
         clean.refresh(&roots, true, None).unwrap();
         assert_eq!(got, snapshot(&clean));
         let matches = sessidx::query::search(
-            &store.db,
+            &mut store.db,
             "太长",
             &sessidx::query::Filters::default(),
             20,
@@ -213,11 +213,19 @@ fn writer_lock_budget_missing_root_and_scan_cursor_are_visible() {
         agent: vec![Agent::Codex],
         ..Filters::default()
     };
-    let (hits, c) = query::scan(&store.db, ".", &filters, 1, None, Duration::from_secs(2)).unwrap();
+    let (hits, c) = query::scan(
+        &mut store.db,
+        ".",
+        &filters,
+        1,
+        None,
+        Duration::from_secs(2),
+    )
+    .unwrap();
     assert_eq!(hits.len(), 1);
     assert!(c.incomplete && c.continuation.is_some());
     let (next, _) = query::scan(
-        &store.db,
+        &mut store.db,
         ".",
         &filters,
         20,

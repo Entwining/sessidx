@@ -110,14 +110,15 @@ pub struct SearchPage {
 /// frozen order in `filters.search_order`, ranks only the transcripts it
 /// lists, in that order. The query stops at `budget`.
 pub fn search(
-    db: &Connection,
+    db: &mut Connection,
     query: &str,
     filters: &Filters,
     limit: usize,
     budget: Duration,
 ) -> Result<SearchPage> {
     let deadline = Instant::now() + budget;
-    if let Some(page) = with_deadline(db, deadline, || rank(db, query, filters, limit, deadline))? {
+    if let Some(page) = with_deadline(db, deadline, |db| rank(db, query, filters, limit, deadline))?
+    {
         return Ok(page);
     }
     // Filters apply after each match is read, so they do not shorten the
@@ -286,7 +287,7 @@ fn excerpt(
         .find(&schema)
         .context("the fts table names its tokenizer")?
         .as_str();
-    let scratch = Connection::open_in_memory()?;
+    let mut scratch = Connection::open_in_memory()?;
     scratch.progress_handler(1000, Some(move || Instant::now() >= deadline))?;
     scratch.execute_batch(&format!(
         "CREATE VIRTUAL TABLE excerpt USING fts5(text, {tokenize})"
