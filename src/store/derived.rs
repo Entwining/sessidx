@@ -59,7 +59,8 @@ pub(super) fn settle(tx: &Transaction<'_>, first: Option<i64>) -> Result<()> {
            CASE WHEN sum(r.ok=0 AND r.ok_source='flag')>0 THEN 'flag'
                 WHEN sum(r.ok=0 AND r.ok_source='text')>0 THEN 'text'
                 WHEN sum(r.ok_source='flag')>0 THEN 'flag'
-                WHEN sum(r.ok_source='text')>0 THEN 'text' ELSE 'none' END AS source
+                WHEN sum(r.ok_source='text')>0 THEN 'text'
+                WHEN sum(r.ok_source='default')>0 THEN 'default' ELSE 'none' END AS source
           FROM temp.dirty_calls d LEFT JOIN event_rows r ON r.call_id=d.call_id AND r.kind='tool_result'
            AND r.file_id IN (SELECT file_id FROM sessions WHERE agent=d.agent AND session_id=d.session_id)
           GROUP BY d.agent,d.session_id,d.call_id)

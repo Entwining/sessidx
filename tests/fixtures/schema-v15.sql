@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS event_rows (
  line_role_first INTEGER NOT NULL CHECK(line_role_first IN (0,1)),
  canonical INTEGER NOT NULL CHECK(canonical IN (0,1)),
  call_ok INTEGER CHECK(call_ok IS NULL OR (kind='tool_call' AND call_ok IN (0,1))),
- call_ok_source TEXT CHECK((kind='tool_call')=(call_ok_source IS NOT NULL) AND call_ok_source IN ('flag','text','none')),
+ call_ok_source TEXT CHECK((kind='tool_call')=(call_ok_source IS NOT NULL) AND call_ok_source IN ('flag','text','default','none')),
  call_event_id INTEGER CHECK(call_event_id IS NULL OR kind='tool_result'),
  UNIQUE(file_id,line_no,ordinal)
 );

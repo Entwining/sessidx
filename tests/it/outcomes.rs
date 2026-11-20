@@ -119,6 +119,71 @@ fn successful_stdout_guard_examples_are_not_denials() {
 }
 
 #[test]
+fn an_unflagged_claude_result_succeeds_unless_a_flag_or_denial_says_otherwise() {
+    let (_, store, _) = indexed(
+        Agent::Claude,
+        &[
+            r#"{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"plain","name":"Read","input":{}}]}}"#,
+            r#"{"type":"user","sessionId":"s","toolUseResult":null,"message":{"content":[{"type":"tool_result","tool_use_id":"plain","content":"DENIED: quoted guard text"}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"later-failure","name":"Read","input":{}}]}}"#,
+            r#"{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"later-failure","content":"partial"}]}}"#,
+            r#"{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"later-failure","is_error":true,"content":"failed"}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"malformed","name":"Read","input":{}}]}}"#,
+            r#"{"type":"user","sessionId":"s","message":{"content":[{"type":"tool_result","tool_use_id":"malformed","is_error":"yes","content":"text"}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"denied","name":"Bash","input":{"command":"rg word"}}]}}"#,
+            r#"{"type":"user","sessionId":"s","toolDenialKind":"user-rejected","message":{"content":[{"type":"tool_result","tool_use_id":"denied","content":"rejected"}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"content":[{"type":"tool_use","id":"no-result","name":"Read","input":{}}]}}"#,
+            r#"{"type":"assistant","sessionId":"s","message":{"content":[{"type":"server_tool_use","id":"advice","name":"advisor","input":{}},{"type":"advisor_tool_result","tool_use_id":"advice","content":"advice"}]}}"#,
+        ]
+        .map(|line| format!("{line}\n"))
+        .concat(),
+    );
+    let mut stmt = store
+        .db
+        .prepare("SELECT tool,ok,ok_source FROM call_outcomes ORDER BY line_no")
+        .unwrap();
+    let outcomes = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<i64>>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        outcomes,
+        [
+            ("Read".into(), Some(1), "default".into()),
+            ("Read".into(), Some(0), "flag".into()),
+            ("Read".into(), None, "none".into()),
+            ("Bash".into(), None, "none".into()),
+            ("Read".into(), None, "none".into()),
+        ]
+    );
+    let advice: (Option<i64>, String) = store
+        .db
+        .query_row(
+            "SELECT ok,ok_source FROM events WHERE kind='server_tool_result'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(advice, (None, "none".into()));
+    let denials: Vec<String> = store
+        .db
+        .prepare("SELECT source FROM denials")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(denials, ["user_rejected"]);
+}
+
+#[test]
 fn claude_hook_check_errors_respect_native_success_flags() {
     let (_, store, _) = indexed(Agent::Claude, include_str!("../fixtures/hook-check.jsonl"));
     let mut stmt = store

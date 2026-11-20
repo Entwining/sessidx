@@ -27,7 +27,8 @@ const OUTCOMES: &str = "SELECT c.id,
  (SELECT CASE WHEN sum(r.ok=0 AND r.ok_source='flag')>0 THEN 'flag'
               WHEN sum(r.ok=0 AND r.ok_source='text')>0 THEN 'text'
               WHEN sum(r.ok_source='flag')>0 THEN 'flag'
-              WHEN sum(r.ok_source='text')>0 THEN 'text' ELSE 'none' END
+              WHEN sum(r.ok_source='text')>0 THEN 'text'
+              WHEN sum(r.ok_source='default')>0 THEN 'default' ELSE 'none' END
   FROM sessions rs JOIN event_rows r ON r.file_id=rs.file_id
   WHERE rs.agent=cs.agent AND rs.session_id=cs.session_id AND r.call_id=c.call_id AND r.kind='tool_result')
  FROM event_rows c JOIN sessions cs ON cs.file_id=c.file_id WHERE c.kind='tool_call'";

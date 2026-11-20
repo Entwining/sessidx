@@ -262,6 +262,11 @@ fn tool_result(v: &Value, b: &Value, bt: &str) -> Event {
     crate::outcomes::classify(&mut e, &b["content"], Agent::Claude);
     crate::normalize::output_prefix(&mut e, &b["content"]);
     tool_denial(&mut e, v);
+    // Rule: docs/formats.md `claude_flag`.
+    if bt == "tool_result" && b.get("is_error").is_none() && e.denials.is_empty() {
+        e.ok = Some(true);
+        e.ok_source = "default";
+    }
     e
 }
 
