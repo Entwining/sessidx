@@ -14,7 +14,7 @@ This is the contract that callers, including the bundled agent skill, rely on: w
 
 ## Output and exit codes
 
-Every command emits JSON Lines on stdout, except help/version text, the help that `sessidx` with no arguments prints, which exits 2, and the skill that `skill show` prints. Data records carry `type`: `session` for search (with `hits`), `hit` for grep, `record` for show, `count`, `row` for SQL (columns inside `data`, preserving a column named `type`), `index`, `doctor`, or `link` for skill install. Select data before using `jq`, for example `jq -c 'select(.type == "record") | .record.message'`.
+Every command emits JSON Lines on stdout, except help/version text, the help that `sessidx` with no arguments prints, which exits 2, and the skill that `skill show` prints. Data records carry `type`: `session` for search (with `hits`), `hit` for grep, `record` for show, `count`, `row` for SQL (columns inside `data`, preserving a column named `type`), `index`, `doctor`, or `link` for skill install. Select data before using `jq` and pass the `end` record through, for example `jq -c 'if .type == "record" then .record.message else . end'`.
 
 One final `end` record contains `complete`, `stale`, `next`, `searched`, `unavailable_ranges`, and refresh coverage in `refresh`. A result limit, the page size, a deadline, an unavailable range, or a stale refresh makes `complete=false`; parse errors and deferred tails are reported in `refresh` without changing it. `stale` is `false` when the command's refresh reached every source before it answered, `true` when it did not, and `null` in an error's `end` and in that of `skill install`, which runs no refresh; neither has `refresh`.
 
