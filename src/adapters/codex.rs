@@ -1,6 +1,6 @@
 use crate::{
     model::{Agent, Compaction, Event, EventKind, Request, Route, SessionKind, State, Usage},
-    normalize::{arguments, hash, label, native_id, shell, text, timestamp},
+    normalize::{arguments, label, native_id, shell, text, timestamp},
     redaction::{Label, Redacted},
 };
 use serde_json::Value;
@@ -20,7 +20,7 @@ pub fn parse(v: &Value, s: &mut State) -> Vec<Event> {
             }
             Vec::new()
         }
-        "response_item" => response_item(v, p, s),
+        "response_item" => response_item(v, p),
         // Codex request usage: tests/fixtures/usage-codex.jsonl.
         "token_usage_record" => {
             s.codex_usage_records = true;
@@ -96,15 +96,9 @@ fn session_meta(p: &Value, s: &mut State) {
         s.session_kind_source = "session_meta.source".into();
         s.identified = true;
     }
-    if let Some(base) = p.get("base_instructions") {
-        let content = text(base);
-        if !content.is_empty() {
-            s.instruction_hash = Some(hash(content.as_bytes()));
-        }
-    }
 }
 
-fn response_item(v: &Value, p: &Value, s: &mut State) -> Vec<Event> {
+fn response_item(v: &Value, p: &Value) -> Vec<Event> {
     let typ = p["type"].as_str().unwrap_or("");
     let mut e = match typ {
         "message" => {
@@ -112,12 +106,6 @@ fn response_item(v: &Value, p: &Value, s: &mut State) -> Vec<Event> {
             let mut e = Event::new(role, EventKind::Message, "payload.role");
             e.kind_source = "payload.type";
             let content = text(&p["content"]);
-            if s.instruction_hash.is_none()
-                && role == "user"
-                && content.starts_with("# AGENTS.md instructions")
-            {
-                s.instruction_hash = Some(hash(content.as_bytes()));
-            }
             e.text = Some(Redacted::new(&content));
             e
         }

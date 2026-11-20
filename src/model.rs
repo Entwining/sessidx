@@ -86,7 +86,6 @@ pub struct State {
     pub cwd: Label,
     pub model: Option<Label>,
     pub model_source: String,
-    pub instruction_hash: Option<Digest>,
     /// Whether this Codex rollout has written a `token_usage_record`, and the
     /// running total of its last `token_count`. Rule: docs/formats.md
     /// `codex_token_count_request`.

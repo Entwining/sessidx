@@ -59,7 +59,7 @@ Next: nothing is scheduled. Codex rate-limit snapshots and a `count usage --by r
 
 Later: cheaper refreshes when nothing changed. Every refresh walks all the session roots and checks each transcript, so it gets slower as history grows, even when nothing is new; `docs/design.md` has the figures from both machines. Pick this up once the `warm` p50 of `count` or `show` in a `measure` run passes 0.5 s on either machine, a quarter of the two-second budget. Until then, neither of the two ideas so far pays for itself. FSEvents history could tell discovery what changed, but macOS can drop events, so the walk would have to stay as a fallback, leaving two discovery paths to maintain. Reading `files` in one scan instead of looking up each transcript saves only about 23 ms on the M4 Mac mini at 9,096 transcripts.
 
-Not planned: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, cost accounting, Claude and Pi loaded-instruction attribution, and Pi branch reconstruction.
+Not planned: semantic search (one of thirteen lookup misses was a wording mismatch; the other misses came from unindexed data, redaction, ranking, or evaluation-setup errors), an MCP server, a TUI, cost accounting, loaded-instruction attribution, and Pi branch reconstruction.
 
 ## Changing the CLI
 

@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS sessions (
  file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
  agent TEXT NOT NULL, session_id TEXT NOT NULL, parent_id TEXT,
  session_kind TEXT NOT NULL, session_kind_source TEXT NOT NULL,
- path TEXT NOT NULL, cwd TEXT NOT NULL, started_at TEXT, instruction_hash TEXT,
+ path TEXT NOT NULL, cwd TEXT NOT NULL, started_at TEXT,
  min_ts TEXT, max_ts TEXT
 );
 -- min_ts and max_ts bound the file's event timestamps, so that a time-filtered grep
@@ -223,4 +223,4 @@ CREATE TABLE IF NOT EXISTS daily_program_counts (
 CREATE UNIQUE INDEX IF NOT EXISTS daily_program_counts_key ON daily_program_counts(file_id,ifnull(day,x''),kind,role,ifnull(model,x''),program);
 CREATE INDEX IF NOT EXISTS daily_program_counts_program ON daily_program_counts(program,kind,day);
 CREATE INDEX IF NOT EXISTS daily_program_counts_empty ON daily_program_counts(file_id) WHERE events=0;
-PRAGMA user_version=14;
+PRAGMA user_version=15;

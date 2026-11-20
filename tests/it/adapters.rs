@@ -5,7 +5,6 @@ use sessidx::{
     model::{Agent, EventKind, State},
     store::Store,
 };
-use sha2::Digest;
 use std::fs;
 
 #[test]
@@ -32,12 +31,7 @@ fn claude_blocks_flags_and_synthetic_model() {
 
 #[test]
 fn codex_context_arguments_and_telemetry() {
-    let (mut s, es) = events(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
-    adapters::parse(
-        Agent::Codex,
-        &serde_json::json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\nlater fallback"}]}}),
-        &mut s,
-    );
+    let (s, es) = events(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
     assert_eq!(s.model.as_deref(), Some("gpt-fixture"));
     assert_eq!(
         es.iter()
@@ -48,10 +42,6 @@ fn codex_context_arguments_and_telemetry() {
     assert_eq!(
         es.iter().filter(|e| e.kind == EventKind::Message).count(),
         1
-    );
-    assert_eq!(
-        s.instruction_hash.as_deref(),
-        Some(hex::encode(sha2::Sha256::digest("Synthetic instruction")).as_str())
     );
     let mut history = State::default();
     adapters::parse(

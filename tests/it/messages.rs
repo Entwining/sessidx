@@ -4,7 +4,6 @@ use sessidx::{
     model::{Agent, EventKind, SessionKind, State, name},
     store::Store,
 };
-use sha2::Digest;
 use std::fs;
 
 #[test]
@@ -146,7 +145,7 @@ fn pi_empty_response_and_explicit_message_model_override() {
 }
 
 #[test]
-fn attribution_native_denials_instructions_children_and_retry_negative_control() {
+fn attribution_native_denials_children_and_retry_negative_control() {
     let fixtures: serde_json::Value =
         serde_json::from_str(include_str!("../fixtures/attribution.json")).unwrap();
     for h in [Agent::Claude, Agent::Codex, Agent::Pi] {
@@ -186,16 +185,6 @@ fn attribution_native_denials_instructions_children_and_retry_negative_control()
         } else if h == Agent::Codex {
             assert_eq!(&*s.session_id, "child-thread");
             assert_eq!(s.parent_id.as_deref(), Some("parent-thread"));
-            // The injected AGENTS.md message stands in for absent base instructions.
-            assert_eq!(
-                s.instruction_hash.as_deref(),
-                Some(
-                    hex::encode(sha2::Sha256::digest(
-                        "# AGENTS.md instructions\nSynthetic fallback instructions"
-                    ))
-                    .as_str()
-                )
-            );
             assert_eq!(es.iter().filter(|e| &*e.role == "assistant").count(), 2);
         } else {
             assert_eq!(s.parent_id.as_deref(), Some("pi-parent"));

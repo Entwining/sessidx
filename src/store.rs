@@ -25,7 +25,7 @@ use std::{
 };
 
 pub const MAX_RECORD: usize = 16 * 1024 * 1024;
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 /// The version of how records become rows: adapters, normalization,
 /// redaction, outcomes, denials and shell sites. A file indexed by another
 /// version is reindexed like a changed file, so that a parser change reaches
