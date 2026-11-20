@@ -56,6 +56,38 @@ fn native_message_fragments_empty_replies_summary_and_history_dedup() {
 }
 
 #[test]
+fn full_text_rows_hold_each_fragment_text_not_the_joined_message() {
+    let (_dir, store, _) = indexed(Agent::Claude, include_str!("../fixtures/fragments.jsonl"));
+    let rows = |sql: &str| {
+        store
+            .db
+            .prepare(sql)
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    };
+    let matched = "id IN (SELECT rowid FROM fts WHERE fts MATCH '\"visible\"')";
+    assert_eq!(
+        rows(&format!(
+            "SELECT line_no, canonical FROM events WHERE {matched}"
+        )),
+        [(2, 0)]
+    );
+    assert_eq!(
+        rows(&format!(
+            "SELECT line_no, canonical FROM canonical_events WHERE {matched}"
+        )),
+        []
+    );
+    assert_eq!(
+        rows("SELECT line_no, canonical FROM canonical_events WHERE text LIKE '%visible%'"),
+        [(1, 1)]
+    );
+}
+
+#[test]
 fn canonical_message_text_joins_its_fragments_in_the_kept_transcript() {
     let fragments = include_str!("../fixtures/fragments.jsonl");
     let resumed = format!(

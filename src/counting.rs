@@ -1,6 +1,6 @@
 use crate::{
     model::name,
-    query::{Filters, with_deadline},
+    query::{Filters, fts_query, with_deadline},
     store::{DAILY_COUNTS, PROGRAM_COUNTS, Rollup},
 };
 use anyhow::Result;
@@ -13,6 +13,7 @@ use jiff::{
 use rusqlite::{
     Connection,
     fallible_iterator::FallibleIterator,
+    functions::FunctionFlags,
     types::{Value, ValueRef},
 };
 use serde_json::{Value as Json, json};
@@ -464,6 +465,16 @@ pub fn doctor(db: &Connection) -> Result<Json> {
 }
 
 pub fn sql(db: &mut Connection, sql: &str) -> Result<Vec<Json>> {
+    // Rule: docs/formats.md `sql_fts_query`.
+    db.create_scalar_function(
+        "fts_query",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            fts_query(&ctx.get::<String>(0)?)
+                .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))
+        },
+    )?;
     db.execute_batch("PRAGMA query_only=ON;")?;
     let deadline = Instant::now() + crate::BUDGET;
     let result = with_deadline(db, deadline, |db| {
@@ -513,7 +524,7 @@ pub fn sql(db: &mut Connection, sql: &str) -> Result<Vec<Json>> {
     db.execute_batch("PRAGMA query_only=OFF;")?;
     result?.ok_or_else(|| {
         anyhow::anyhow!(
-            "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
+            "SQL exceeded two seconds; narrow it by session_id or ts, match words with `id IN (SELECT rowid FROM fts WHERE fts MATCH fts_query('WORDS'))` instead of `text LIKE`, or aggregate fewer rows"
         )
     })
 }

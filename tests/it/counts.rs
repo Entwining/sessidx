@@ -155,7 +155,7 @@ fn doctor_reports_stored_coverage_gaps_and_sql_bounds() {
     let err = counting::sql(&mut store.db,"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000000) SELECT sum(x) FROM n").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "SQL exceeded two seconds; narrow it by session_id or ts, or aggregate fewer rows"
+        "SQL exceeded two seconds; narrow it by session_id or ts, match words with `id IN (SELECT rowid FROM fts WHERE fts MATCH fts_query('WORDS'))` instead of `text LIKE`, or aggregate fewer rows"
     );
     let overflow =
         counting::sql(&mut store.db, "SELECT abs(-9223372036854775808) AS n").unwrap_err();

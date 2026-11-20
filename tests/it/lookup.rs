@@ -1,5 +1,6 @@
 use crate::common::{body, indexed, indexed_files, search_hits, stored};
 use sessidx::{
+    counting,
     discovery::Root,
     model::Agent,
     query::{self, Filters},
@@ -1021,6 +1022,55 @@ fn search_terms_are_literal_phrases_joined_with_and() {
     .err()
     .unwrap();
     assert!(format!("{empty:#}").contains("search query is empty"));
+}
+
+#[test]
+fn sql_fts_query_matches_what_search_matches() {
+    let data: Vec<(&str, String)> = [
+        ("adjacent", "alpha beta"),
+        ("apart", "beta gamma alpha"),
+        ("chinese", "部署时出现权限拒绝"),
+        ("quote", "say a b"),
+    ]
+    .iter()
+    .map(|(session, text)| {
+        let record = serde_json::json!({"type":"user","uuid":session,"sessionId":session,"message":{"role":"user","content":text}});
+        (*session, record.to_string() + "\n")
+    })
+    .collect();
+    let files: Vec<(&str, &str)> = data.iter().map(|(s, c)| (*s, c.as_str())).collect();
+    let (_dir, mut store, _) = indexed_files(Agent::Claude, &files);
+    let expression = counting::sql(
+        &mut store.db,
+        r#"SELECT fts_query('权限 "alpha beta" a"b') AS q"#,
+    )
+    .unwrap();
+    assert_eq!(expression[0]["q"], r#""权 限" AND "alpha beta" AND "a""b""#);
+    for q in ["alpha beta", "\"alpha beta\"", "权限拒绝", "拒绝", "a\"b"] {
+        let mut searched: Vec<String> = query::search(
+            &mut store.db,
+            q,
+            &Filters::default(),
+            20,
+            Duration::from_secs(2),
+        )
+        .unwrap()
+        .sessions
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect();
+        searched.sort();
+        let matched: Vec<String> = counting::sql(
+            &mut store.db,
+            &format!("SELECT DISTINCT session_id FROM events WHERE id IN (SELECT rowid FROM fts WHERE fts MATCH fts_query('{q}')) ORDER BY session_id"),
+        )
+        .unwrap()
+        .iter()
+        .map(|row| row["session_id"].as_str().unwrap().to_owned())
+        .collect();
+        assert!(!searched.is_empty(), "{q}");
+        assert_eq!(matched, searched, "{q}");
+    }
 }
 
 #[test]

@@ -77,7 +77,15 @@ Search, grep, and count share the filters listed by `--help`. Filters select res
 
 ### sql
 
-`sql` refreshes like the other queries, then runs one SELECT/WITH read-only and fails instead of returning partial success above 10,000 rows or two seconds. Query `sessions`, `events`, `canonical_events`, `call_outcomes`, `commands`, `denials`, `requests`, `request_passes`, `request_errors`, and `compactions`, defined in [`src/schema.sql`](../src/schema.sql); the other tables are index storage.
+`sql` refreshes like the other queries, then runs one SELECT/WITH read-only and fails instead of returning partial success above 10,000 rows or two seconds. Query `sessions`, `events`, `canonical_events`, `call_outcomes`, `commands`, `denials`, `requests`, `request_passes`, `request_errors`, and `compactions`, defined in [`src/schema.sql`](../src/schema.sql), and match words through `fts` as [Full-text matching](#full-text-matching) describes; the other tables are index storage.
+
+#### Full-text matching
+
+`fts` is the full-text index that `search` reads, with one row per indexed event whose `rowid` is the event's `id`. Select events by words with `id IN (SELECT rowid FROM fts WHERE fts MATCH fts_query('WORDS'))`: `fts_query` returns the expression `search` matches for the same terms, joining whitespace-separated terms with AND, keeping double-quoted phrases in order, spacing Chinese as the index stores it, and escaping quotes. A MATCH string written by hand skips that conversion, so an unspaced Chinese phrase in one matches nothing and the result is still complete. The index covers redacted messages, tool inputs, and the first 2 KiB of tool result or diagnostic attachment text, and `complete=true` covers only that: text past an output's first 2 KiB, or replaced by redaction, does not match. It matches whole tokens and phrases, not substrings, so it is not a drop-in for `LIKE`: `deny` does not match `denied`, and prefix queries such as `deny*` are not part of `fts_query`'s contract. To match a substring, use `text LIKE` within a narrowed scope such as one transcript's `file_id`. `fts.text` reads as NULL; read text from `events`. Each row holds one record's own text, so a Claude message written as several records matches on the record that holds the words, which `canonical_events` leaves out after the first; select from `events`. For example, count by agent the transcripts that mention both words:
+
+```sh
+sessidx sql "SELECT agent, count(DISTINCT file_id) AS transcripts, count(*) AS events FROM events WHERE id IN (SELECT rowid FROM fts WHERE fts MATCH fts_query('permission denied')) GROUP BY agent"
+```
 
 #### Events, outcomes, and transcripts
 
@@ -105,7 +113,7 @@ Search, grep, and count share the filters listed by `--help`. Filters select res
 
 #### Results and freshness
 
-Cells and column names are printed as stored, and text was redacted when it was indexed. Duplicate column names fail with an instruction to alias them uniquely. Its refresh indexes the caller's own running `sql` call, so a query over every session's text, such as `text LIKE`, can match that call. Narrow expensive queries to session paths or time windows.
+Cells and column names are printed as stored, and text was redacted when it was indexed. Duplicate column names fail with an instruction to alias them uniquely. Its refresh indexes the caller's own running `sql` call, so a query over every session's text, such as `text LIKE` or an `fts` match, can match that call. Narrow expensive queries to session paths or time windows.
 
 ### doctor
 

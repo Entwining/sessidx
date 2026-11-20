@@ -52,6 +52,12 @@ fn fts_phrases(query: &str) -> Result<Vec<String>> {
         .collect())
 }
 
+/// The FTS5 expression that `search` matches, which `sql` offers as
+/// `fts_query`. Rule: docs/formats.md `sql_fts_query`.
+pub fn fts_query(query: &str) -> Result<String> {
+    Ok(fts_phrases(query)?.join(" AND "))
+}
+
 /// Sessions reachable through search pagination: larger allows deeper paging
 /// and lengthens the cursor by about one integer per session.
 pub const SEARCH_PAGE_SESSIONS: usize = 100;
@@ -156,8 +162,7 @@ fn rank(
         }
         None => ("", "0"),
     };
-    let phrases = fts_phrases(query)?;
-    args.push(Value::Text(phrases.join(" AND ")));
+    args.push(Value::Text(fts_query(query)?));
     if let Some(order) = &frozen {
         args.push(Value::Text(order.clone()));
     }
@@ -223,7 +228,7 @@ fn rank(
             }),
         }
     }
-    excerpt(db, &phrases, &mut sessions, deadline)?;
+    excerpt(db, &fts_phrases(query)?, &mut sessions, deadline)?;
     paginate(&mut sessions);
     Ok(SearchPage {
         sessions,

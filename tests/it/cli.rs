@@ -498,6 +498,40 @@ fn sql_answers_after_refreshing_the_index() {
 }
 
 #[test]
+fn sql_counts_chinese_words_through_fts_query() {
+    let serial = serial();
+    let records = [
+        json!({"type":"user","uuid":"u1","sessionId":"cjk","message":{"role":"user","content":"部署时出现权限拒绝"}}),
+        json!({"type":"user","uuid":"u2","sessionId":"cjk","message":{"role":"user","content":"部署成功"}}),
+    ];
+    let content: String = records.iter().map(|r| format!("{r}\n")).collect();
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("cjk", &content)]);
+    let count = |matched: &str| {
+        let sql = format!(
+            "SELECT agent, role, count(*) AS events FROM events WHERE id IN (SELECT rowid FROM fts WHERE fts MATCH {matched}) GROUP BY agent, role"
+        );
+        let out = sessidx(&serial, &store.path, &roots, &["sql", &sql])
+            .output()
+            .unwrap();
+        let exit = out.status.code().unwrap();
+        (stream(&out, exit), exit)
+    };
+    let (rows, exit) = count("fts_query('权限拒绝')");
+    assert_eq!(exit, 0, "{rows:?}");
+    assert_eq!(
+        rows[0]["data"],
+        json!({"agent":"claude","role":"user","events":1})
+    );
+    assert_eq!(rows[1]["complete"], true);
+    // The index holds Chinese spaced, so the raw phrase matches nothing while
+    // the result is complete.
+    let (rows, exit) = count("'\"权限拒绝\"'");
+    assert_eq!(exit, 1);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["complete"], true);
+}
+
+#[test]
 fn sql_reads_without_holding_the_writer_lock() {
     let serial = serial();
     let (_dir, store, roots) = three_agents();

@@ -54,6 +54,10 @@ exclude_re = [
   # The handle is reused only when the path names its inode, so reopening the
   # path for every range reads the same file; reuse only saves an open per row.
   'src/query/ranges\.rs:\d+:\d+: replace match guard \*identity == \(named\.dev\(\), named\.ino\(\)\) with false in read_range',
+  # `fts_query`'s flags share no bit, so `^` gives the same flags; `&` gives 0,
+  # which SQLite registers as UTF-8 and which only stops it from evaluating a
+  # constant call once per statement, changing work, not results.
+  'src/counting\.rs:\d+:\d+: replace \| with (&|\^) in sql$',
   # A reader that never reports end of input hangs; the timeout is the detection.
   'replace read_record -> (io::)?Result<\(u64, bool, bool\)> with Ok\(\(1, true, (true|false)\)\)',
   # Sessidx never spawns a process and opens the lock file close-on-exec, so
