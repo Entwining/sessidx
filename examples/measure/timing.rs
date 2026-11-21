@@ -51,7 +51,13 @@ pub fn finished(seconds: f64, out: &Output) -> Option<Run> {
 /// A binary refused the invocation: it exited 2 before the query could have
 /// run out of its budget.
 fn refusal(run: &Run) -> bool {
-    run.exit == 2 && run.seconds < sessidx::BUDGET.as_secs_f64()
+    run.exit == 2 && !past_budget(run)
+}
+
+/// The run took at least the query budget, as a `grep` page that its deadline
+/// ended does: the deadline starts after the refresh.
+fn past_budget(run: &Run) -> bool {
+    run.seconds >= sessidx::BUDGET.as_secs_f64()
 }
 
 /// Keeps the first `PER_VERB` commands that no binary refuses, running each
@@ -110,6 +116,9 @@ pub fn timing(condition: &str, verb: &str, binary: &str, per_command: &[Vec<Run>
     };
     let all: Vec<&Run> = per_command.iter().flatten().collect();
     let seconds = sorted(&all);
+    let (past, within): (Vec<&Run>, Vec<&Run>) = all.iter().partition(|r| past_budget(r));
+    let past_seconds: f64 = past.iter().map(|r| r.seconds).sum();
+    let past_bytes: u64 = past.iter().map(|r| r.searched_bytes).sum();
     let count = |f: fn(&Run) -> bool| all.iter().filter(|r| f(r)).count();
     json!({
         "type": "timing",
@@ -120,6 +129,9 @@ pub fn timing(condition: &str, verb: &str, binary: &str, per_command: &[Vec<Run>
         "p50_seconds": rank(&seconds, 0.5),
         "p95_seconds": rank(&seconds, 0.95),
         "max_seconds": seconds.last(),
+        "p95_seconds_within_budget": rank(&sorted(&within), 0.95),
+        "past_budget": past.len(),
+        "past_budget_bytes_per_second": (past_seconds > 0.0).then(|| past_bytes as f64 / past_seconds),
         "command_p50_seconds": per_command
             .iter()
             .map(|c| rank(&sorted(&c.iter().collect::<Vec<_>>()), 0.5))
@@ -247,6 +259,10 @@ mod tests {
 
     #[test]
     fn timing_pools_every_run_and_partitions_runs_by_exit() {
+        let deadline = |seconds, exit, searched_bytes| Run {
+            searched_bytes,
+            ..run_of(seconds, exit)
+        };
         let mut cut = run_of(0.3, 0);
         cut.complete = false;
         cut.stale = true;
@@ -256,7 +272,11 @@ mod tests {
         cut.searched_bytes = 4096;
         let per_command = [
             vec![run_of(0.1, 0), run_of(0.2, 0), cut],
-            vec![run_of(1.0, 0), run_of(2.0, 1), run_of(3.0, 2)],
+            vec![
+                run_of(1.0, 0),
+                deadline(2.0, 1, 4000),
+                deadline(3.0, 2, 6000),
+            ],
         ];
         let t = timing("warm", "search", "candidate", &per_command);
         assert_eq!(t["runs"], 6);
@@ -270,6 +290,9 @@ mod tests {
         );
         assert_eq!(t["p50_seconds"], 0.3);
         assert_eq!(t["p95_seconds"], 3.0);
+        assert_eq!(t["p95_seconds_within_budget"], 1.0);
+        assert_eq!(t["past_budget"], 2);
+        assert_eq!(t["past_budget_bytes_per_second"], 2000.0);
         assert_eq!(t["command_p50_seconds"], json!([0.2, 2.0]));
         assert_eq!(t["incomplete"], 1);
         assert_eq!(t["stale"], 1);
@@ -277,7 +300,7 @@ mod tests {
         assert_eq!(t["records_indexed"], 20);
         assert_eq!(
             (t["returned"].clone(), t["searched_bytes"].clone()),
-            (json!(7), json!(4096))
+            (json!(7), json!(14096))
         );
     }
 

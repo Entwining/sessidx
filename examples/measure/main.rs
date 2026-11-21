@@ -69,7 +69,12 @@
 //!   the records returned and source bytes searched, summed over the runs. A
 //!   binary whose pages return more cannot be compared by seconds per run
 //!   alone: a `grep` page of excerpts holds more hits than one of whole
-//!   records, so it reads further before it fills.
+//!   records, so it reads further before it fills. Runs that took at least the
+//!   two-second query budget are also counted apart in `past_budget`, with the
+//!   source bytes they searched per second, and `p95_seconds_within_budget`
+//!   leaves them out: `grep` starts its deadline after the refresh, so a page
+//!   its deadline ended takes the refresh plus two seconds however fast the
+//!   scan is.
 //! - `agreement` per verb when a baseline is given: over the warm runs, paired
 //!   by run number so that each pair ran back to back, the commands whose data
 //!   records differed in more than half of the pairs, and those the baseline
