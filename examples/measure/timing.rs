@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use std::process::Output;
 
 /// Commands timed per verb, each from a different transcript.
-const PER_VERB: usize = 8;
+const PER_VERB: usize = 32;
 
 /// What one run of a command did, read from its exit status and output.
 #[derive(Clone)]
@@ -21,6 +21,9 @@ pub struct Run {
     stale: bool,
     files_changed: u64,
     records_indexed: u64,
+    /// `end.searched.returned` and `end.searched.bytes`.
+    returned: u64,
+    searched_bytes: u64,
 }
 
 /// The run read from a finished command's output, or None without an `end` record.
@@ -31,6 +34,7 @@ pub fn finished(seconds: f64, out: &Output) -> Option<Run> {
         .ok()
         .filter(|v| v["type"] == "end")?;
     let refresh = &end["refresh"];
+    let searched = &end["searched"];
     Some(Run {
         seconds,
         exit: out.status.code()?,
@@ -39,6 +43,8 @@ pub fn finished(seconds: f64, out: &Output) -> Option<Run> {
         stale: end["stale"] == true,
         files_changed: refresh["files_changed"].as_u64().unwrap_or(0),
         records_indexed: refresh["records"].as_u64().unwrap_or(0),
+        returned: searched["returned"].as_u64().unwrap_or(0),
+        searched_bytes: searched["bytes"].as_u64().unwrap_or(0),
     })
 }
 
@@ -125,6 +131,8 @@ pub fn timing(condition: &str, verb: &str, binary: &str, per_command: &[Vec<Run>
         "stale": count(|r| r.stale),
         "refreshed": count(|r| r.files_changed > 0),
         "records_indexed": all.iter().map(|r| r.records_indexed).sum::<u64>(),
+        "returned": all.iter().map(|r| r.returned).sum::<u64>(),
+        "searched_bytes": all.iter().map(|r| r.searched_bytes).sum::<u64>(),
     })
 }
 
@@ -169,6 +177,8 @@ mod tests {
             stale: false,
             files_changed: 0,
             records_indexed: 0,
+            returned: 0,
+            searched_bytes: 0,
         }
     }
 
@@ -242,6 +252,8 @@ mod tests {
         cut.stale = true;
         cut.files_changed = 1;
         cut.records_indexed = 20;
+        cut.returned = 7;
+        cut.searched_bytes = 4096;
         let per_command = [
             vec![run_of(0.1, 0), run_of(0.2, 0), cut],
             vec![run_of(1.0, 0), run_of(2.0, 1), run_of(3.0, 2)],
@@ -263,6 +275,10 @@ mod tests {
         assert_eq!(t["stale"], 1);
         assert_eq!(t["refreshed"], 1);
         assert_eq!(t["records_indexed"], 20);
+        assert_eq!(
+            (t["returned"].clone(), t["searched_bytes"].clone()),
+            (json!(7), json!(4096))
+        );
     }
 
     #[test]
@@ -312,13 +328,14 @@ mod tests {
         let refreshed = finished(0.1, &out("{\"type\":\"session\"}\n{\"type\":\"end\",\"complete\":false,\"next\":\"c\",\"refresh\":{\"ms\":2}}\n")).unwrap();
         let other = finished(
             0.1,
-            &out("{\"type\":\"row\"}\n{\"type\":\"end\",\"complete\":true}\n"),
+            &out("{\"type\":\"row\"}\n{\"type\":\"end\",\"complete\":true,\"searched\":{\"returned\":1,\"bytes\":300}}\n"),
         )
         .unwrap();
         assert!(!paged.complete);
         assert!(other.complete);
         assert_eq!(paged.data, refreshed.data);
         assert_ne!(paged.data, other.data);
+        assert_eq!((other.returned, other.searched_bytes), (1, 300));
         assert!(finished(0.1, &out("{\"type\":\"session\"}\n")).is_none());
     }
 }

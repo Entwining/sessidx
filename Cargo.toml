@@ -37,6 +37,10 @@ tempfile = "=3.27.0"
 name = "measure"
 test = true
 
+[[example]]
+name = "leaks"
+test = true
+
 [profile.mutants]
 inherits = "test"
 debug = "none"

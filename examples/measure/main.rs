@@ -30,14 +30,17 @@
 //! can make a refused invocation look like one that ran out; `exit_2` then
 //! shows it.
 //!
-//! Each command runs `--runs` times per binary, the binaries alternating so that
-//! drift falls on both. In the `warm` condition every command runs with nothing
-//! new to index; in the `append` condition the most recent command of each
-//! verb runs with records appended to a synthetic transcript before every
-//! pair, as when an agent queries while its own transcript grows. Run it
-//! from an ordinary shell on an otherwise idle machine: agent sandboxes break
-//! `/usr/bin/time -l`, and anything else writing session logs shows up in the
-//! refresh tallies.
+//! Each verb times up to 32 commands, each `--runs` times per binary, the
+//! binaries alternating so that drift falls on both. A percentile pooled over
+//! every run reflects the spread between commands only while no command holds
+//! 5% of the runs; a command that holds more puts the nearest-rank p95 inside
+//! its own runs, which then report its typical time. In the `warm` condition
+//! every command runs with nothing new to index; in the `append` condition the
+//! four most recent commands of each verb run with records appended to a
+//! synthetic transcript before every pair, as when an agent queries while its
+//! own transcript grows. Run it from an ordinary shell on an otherwise idle
+//! machine: agent sandboxes break `/usr/bin/time -l`, and anything else
+//! writing session logs shows up in the refresh tallies.
 //!
 //! The JSON Lines report never holds a command's text, a path, or a session ID,
 //! so it can be pasted into a pull request:
@@ -62,7 +65,11 @@
 //!   order for every binary; the runs that exited 0, 1, and 2; the runs whose
 //!   answer was not complete, a page with a cursor to continue included, since
 //!   `grep` returns one both at its limit and at its deadline; the stale runs;
-//!   and the runs that refreshed something, with the records they indexed.
+//!   the runs that refreshed something, with the records they indexed; and
+//!   the records returned and source bytes searched, summed over the runs. A
+//!   binary whose pages return more cannot be compared by seconds per run
+//!   alone: a `grep` page of excerpts holds more hits than one of whole
+//!   records, so it reads further before it fills.
 //! - `agreement` per verb when a baseline is given: over the warm runs, paired
 //!   by run number so that each pair ran back to back, the commands whose data
 //!   records differed in more than half of the pairs, and those the baseline
@@ -72,6 +79,13 @@
 //!   difference. A difference is a lead, not a verdict: a `sql` query without
 //!   `ORDER BY`, or a page both binaries cut at their deadline, can
 //!   legitimately differ.
+//! - `upgrade` when a baseline is given: the candidate on a byte copy of the
+//!   baseline's index, as a user who upgrades meets it. `first` is one
+//!   `count failures`: its exit, seconds, completeness, staleness, whether it
+//!   failed, and the `recovery` it names, `index --full` for an error naming
+//!   it and `index` for an error naming that or a refresh that stopped with a
+//!   continuation. `recovery` then holds that command's wall seconds and peak
+//!   RSS, and `after` the same query once it ran.
 //! - `end`: the load average and the run's seconds.
 
 mod timing;
@@ -84,8 +98,8 @@ use serde_json::{Value, json};
 use sessidx::normalize::stored_time;
 use sha2::{Digest, Sha256};
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Instant;
@@ -94,6 +108,9 @@ use workload::workload;
 
 /// Synthetic records appended before each pair of runs in the `append` condition.
 const APPENDED: usize = 20;
+
+/// Commands of each verb, the most recent first, timed in the `append` condition.
+const APPEND_COMMANDS: usize = 4;
 
 #[derive(Parser)]
 struct Args {
@@ -107,7 +124,7 @@ struct Args {
     #[arg(long, value_name = "DIR")]
     scratch: PathBuf,
     /// Timed runs of each command per binary
-    #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(20..))]
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(5..))]
     runs: u32,
     /// Take commands recorded at or after this UTC date or RFC 3339 timestamp
     #[arg(long, value_name = "TIME", value_parser = sessidx::query::date)]
@@ -119,6 +136,9 @@ struct Args {
     #[arg(long = "root", value_name = "AGENT=PATH")]
     roots: Vec<String>,
 }
+
+/// Each verb with the argument lists of its commands.
+type Workload = Vec<(&'static str, Vec<Vec<String>>)>;
 
 struct Binary {
     name: &'static str,
@@ -162,38 +182,7 @@ fn main() -> Result<()> {
         emit(build(b, &roots)?);
     }
 
-    let candidates = workload(&binaries[0].db, args.since, args.until)?;
-    // Bring each index up to the logs written while the binaries built, outside
-    // the refresh budget, so that the timed runs start from the same state.
-    for b in &binaries {
-        check(
-            b,
-            "index",
-            &command(&b.path)
-                .args(invocation(b, &roots, &["index".into()]))
-                .output()?,
-        )?;
-    }
-    let mut workload: Vec<(&str, Vec<Vec<String>>)> = Vec::new();
-    for (verb, list) in candidates {
-        let (kept, refused) = validate(binaries.len(), list.replayable, |b, argv| {
-            run(&binaries[b], &roots, argv)
-        })?;
-        emit(json!({
-            "type": "workload",
-            "verb": verb,
-            "commands": kept.len(),
-            "transcripts": list.transcripts,
-            "invocations": list.invocations,
-            "unreplayable": list.unreplayable,
-            "refused": binaries
-                .iter()
-                .zip(refused)
-                .map(|(b, n)| (b.name.to_owned(), n.into()))
-                .collect::<serde_json::Map<_, _>>(),
-        }));
-        workload.push((verb, kept));
-    }
+    let workload = replayed(&binaries, &roots, &args)?;
 
     for (verb, commands) in &workload {
         let runs = time(
@@ -216,7 +205,7 @@ fn main() -> Result<()> {
         }
         let runs = time(
             binaries.len(),
-            &commands[..1],
+            &commands[..commands.len().min(APPEND_COMMANDS)],
             args.runs,
             || append(&transcript, &mut appended, APPENDED),
             |b, argv| run(&binaries[b], &roots, argv),
@@ -225,12 +214,52 @@ fn main() -> Result<()> {
             emit(timing("append", verb, b.name, per_command));
         }
     }
+    if let [candidate, baseline] = &binaries[..] {
+        emit(upgrade(candidate, baseline, &args.scratch, &roots)?);
+    }
     emit(json!({
         "type": "end",
         "load_1m": load()?,
         "seconds": started.elapsed().as_secs_f64(),
     }));
     Ok(())
+}
+
+/// Each verb's recorded commands that every binary accepts, after bringing
+/// each index up to the logs written while the binaries built, outside the
+/// refresh budget, so that the timed runs start from the same state.
+fn replayed(binaries: &[Binary], roots: &[String], args: &Args) -> Result<Workload> {
+    let candidates = workload(&binaries[0].db, args.since, args.until)?;
+    for b in binaries {
+        check(
+            b,
+            "index",
+            &command(&b.path)
+                .args(invocation(b, roots, &["index".into()]))
+                .output()?,
+        )?;
+    }
+    let mut workload = Vec::new();
+    for (verb, list) in candidates {
+        let (kept, refused) = validate(binaries.len(), list.replayable, |b, argv| {
+            run(&binaries[b], roots, argv)
+        })?;
+        emit(json!({
+            "type": "workload",
+            "verb": verb,
+            "commands": kept.len(),
+            "transcripts": list.transcripts,
+            "invocations": list.invocations,
+            "unreplayable": list.unreplayable,
+            "refused": binaries
+                .iter()
+                .zip(refused)
+                .map(|(b, n)| (b.name.to_owned(), n.into()))
+                .collect::<serde_json::Map<_, _>>(),
+        }));
+        workload.push((verb, kept));
+    }
+    Ok(workload)
 }
 
 /// The session roots to index, given or the defaults, and the synthetic one.
@@ -329,20 +358,23 @@ fn check(binary: &Binary, what: &str, out: &Output) -> Result<()> {
     bail!("{} {what} failed ({}): {detail}", binary.name, out.status)
 }
 
-fn build(binary: &Binary, roots: &[String]) -> Result<Value> {
+/// Runs an `index` command under `/usr/bin/time -l`, returning its wall
+/// seconds and peak RSS bytes.
+fn timed_index(binary: &Binary, roots: &[String], args: &[&str]) -> Result<(f64, u64)> {
+    let args: Vec<String> = args.iter().map(|&a| a.to_owned()).collect();
     let out = command("/usr/bin/time")
         .arg("-l")
         .arg(&binary.path)
-        .args(invocation(
-            binary,
-            roots,
-            &["index".into(), "--full".into()],
-        ))
+        .args(invocation(binary, roots, &args))
         .output()?;
-    check(binary, "index --full", &out)?;
-    let Some((wall, rss)) = time_stats(&String::from_utf8_lossy(&out.stderr)) else {
-        bail!("/usr/bin/time -l reported no wall time or peak RSS; run outside any agent sandbox");
-    };
+    check(binary, &args.join(" "), &out)?;
+    time_stats(&String::from_utf8_lossy(&out.stderr)).context(
+        "/usr/bin/time -l reported no wall time or peak RSS; run outside any agent sandbox",
+    )
+}
+
+fn build(binary: &Binary, roots: &[String]) -> Result<Value> {
+    let (wall, rss) = timed_index(binary, roots, &["index", "--full"])?;
     let out = command(&binary.path)
         .args(invocation(binary, roots, &["doctor".into()]))
         .output()?;
@@ -358,6 +390,81 @@ fn build(binary: &Binary, roots: &[String]) -> Result<Value> {
         "seconds": wall,
         "peak_rss_bytes": rss,
     }))
+}
+
+/// The candidate on a byte copy of the baseline's index, as a user who upgrades
+/// meets it: the first query, the recovery its `end` names, and a query after.
+fn upgrade(
+    candidate: &Binary,
+    baseline: &Binary,
+    scratch: &Path,
+    roots: &[String],
+) -> Result<Value> {
+    let upgraded = Binary {
+        name: "upgraded",
+        path: candidate.path.clone(),
+        db: scratch.join("upgraded.db"),
+    };
+    // A byte copy: rewriting an APFS clone in place scatters its blocks.
+    for suffix in ["", "-wal"] {
+        let from = PathBuf::from(format!("{}{suffix}", baseline.db.display()));
+        if from.exists() {
+            io::copy(
+                &mut File::open(&from)?,
+                &mut File::create_new(format!("{}{suffix}", upgraded.db.display()))?,
+            )?;
+        }
+    }
+    let (first, recovery) = upgrade_query(&upgraded, roots)?;
+    let recovered = match recovery {
+        Some(ran) => {
+            let (seconds, rss) =
+                timed_index(&upgraded, roots, &ran.split(' ').collect::<Vec<_>>())?;
+            json!({"ran": ran, "seconds": seconds, "peak_rss_bytes": rss})
+        }
+        None => Value::Null,
+    };
+    let (after, _) = upgrade_query(&upgraded, roots)?;
+    Ok(json!({"type": "upgrade", "first": first, "recovery": recovered, "after": after}))
+}
+
+/// One `count failures` on `binary`'s index and the recovery its `end` names.
+fn upgrade_query(binary: &Binary, roots: &[String]) -> Result<(Value, Option<&'static str>)> {
+    let start = Instant::now();
+    let out = command(&binary.path)
+        .args(invocation(
+            binary,
+            roots,
+            &["count".into(), "failures".into()],
+        ))
+        .output()?;
+    let seconds = start.elapsed().as_secs_f64();
+    let end = record(&String::from_utf8_lossy(&out.stdout), "end")?;
+    let recovery = recovery(&end);
+    Ok((
+        json!({
+            "exit": out.status.code(),
+            "seconds": seconds,
+            "complete": end["complete"],
+            "stale": end["stale"],
+            "error": !end["error"].is_null(),
+            "recovery": recovery,
+        }),
+        recovery,
+    ))
+}
+
+/// The index command an `end` record asks for: its error's recovery
+/// instruction, or `index` for a refresh that left a continuation.
+fn recovery(end: &Value) -> Option<&'static str> {
+    let error = end["error"].as_str().unwrap_or_default();
+    if error.contains("index --full") {
+        Some("index --full")
+    } else if error.contains("sessidx index") || !end["refresh"]["continuation"].is_null() {
+        Some("index")
+    } else {
+        None
+    }
 }
 
 /// Wall seconds and peak RSS bytes from the stderr of macOS `/usr/bin/time -l`.
@@ -434,6 +541,32 @@ mod tests {
         assert_eq!(time_stats(stderr), Some((331.51, 236290048)));
         assert_eq!(
             time_stats("time: sysctl kern.clockrate: Operation not permitted\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_upgraded_index_names_the_recovery_its_end_record_asks_for() {
+        let end = |error: Value, continuation: Value| json!({"type": "end", "error": error, "refresh": {"continuation": continuation}});
+        let schema = end(
+            json!("database schema changed; run sessidx index --full"),
+            Value::Null,
+        );
+        assert_eq!(recovery(&schema), Some("index --full"));
+        let compact = end(
+            json!(
+                "most of the index was written since it was last compacted; run `sessidx index` to compact it"
+            ),
+            Value::Null,
+        );
+        assert_eq!(recovery(&compact), Some("index"));
+        assert_eq!(
+            recovery(&end(Value::Null, json!("/x.jsonl"))),
+            Some("index")
+        );
+        assert_eq!(recovery(&end(Value::Null, Value::Null)), None);
+        assert_eq!(
+            recovery(&end(json!("deadline exceeded"), Value::Null)),
             None
         );
     }
