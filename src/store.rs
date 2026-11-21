@@ -13,7 +13,7 @@ use derived::{delete_file, settle};
 use files::FileCoverage;
 pub use lock::WriterLock;
 pub use rollups::{DAILY_COUNTS, PROGRAM_COUNTS, Rollup};
-use rusqlite::Connection;
+use rusqlite::{Connection, config::DbConfig};
 use schema::schema_version;
 use serde::Serialize;
 use std::{
@@ -72,6 +72,9 @@ impl Store {
             .open(path)?;
         let db = Connection::open(path)?;
         db.busy_timeout(Duration::from_millis(50))?;
+        // Plans independent of bound values keep cached statements prepared.
+        // Rule: docs/formats.md `statement_reuse`.
+        db.set_db_config(DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG, true)?;
         schema_version(&db, rebuilding)?;
         Ok(Self {
             db,

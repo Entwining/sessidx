@@ -334,6 +334,37 @@ fn lookup_cjk_latin_filters_and_show_references() {
 }
 
 #[test]
+fn a_range_read_reuses_its_prepared_lookup() {
+    let (_dir, mut store, _) = indexed(Agent::Claude, include_str!("../fixtures/claude.jsonl"));
+    let (hits, coverage) = query::scan(
+        &mut store.db,
+        "absent",
+        &Filters {
+            agent: vec![Agent::Claude],
+            ..Filters::default()
+        },
+        20,
+        None,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(hits.is_empty());
+    assert!(coverage.records > 1);
+    // The statement `read_range` caches, fetched back from the cache.
+    let lookup = store
+        .db
+        .prepare_cached(
+            "SELECT f.dev,f.inode,r.raw_hash FROM event_rows r JOIN files f ON f.id=r.file_id WHERE r.id=?",
+        )
+        .unwrap();
+    assert_eq!(
+        lookup.get_status(rusqlite::StatementStatus::Run),
+        coverage.records as i32
+    );
+    assert_eq!(lookup.get_status(rusqlite::StatementStatus::RePrepare), 0);
+}
+
+#[test]
 fn scan_requires_filter_reads_only_selected_ranges_and_reports_changed_source() {
     let (dir, mut store, _) = indexed(Agent::Codex, include_str!("../fixtures/codex.jsonl"));
     assert!(
