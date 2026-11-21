@@ -51,11 +51,28 @@ pub fn stream(out: &Output, exit: i32) -> Vec<Value> {
         "{}",
         String::from_utf8_lossy(&out.stdout)
     );
-    let records: Vec<Value> = String::from_utf8_lossy(&out.stdout)
+    let mut records: Vec<Value> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(|s| serde_json::from_str(s).unwrap())
         .collect();
     assert!(!records.is_empty());
+    // A lookup page states its status first as well; the rest of a test reads
+    // the records after it. Rule: docs/formats.md `page_status`.
+    let end = records.last().unwrap().clone();
+    if end.get("error").is_none()
+        && matches!(
+            end["searched"]["unit"].as_str(),
+            Some("session_hits" | "source_ranges")
+        )
+    {
+        let begin = records.remove(0);
+        assert_eq!(begin["type"], "begin", "{begin}");
+        assert_eq!(begin["complete"], end["complete"]);
+        assert_eq!(begin["stale"], end["stale"]);
+        assert_eq!(begin["more"], !end["next"].is_null());
+        assert_eq!(begin["returned"], end["searched"]["returned"]);
+    }
+    assert!(records.iter().all(|v| v["type"] != "begin"));
     assert!(records.iter().all(|v| v["type"].is_string()));
     // A search hit names its line by `ref` and leaves the rest to its session.
     for record in records.iter().filter(|v| v["type"] == "session") {

@@ -230,6 +230,10 @@ fn emit(kind: &str, value: Value) -> Result<()> {
     Ok(())
 }
 
+fn complete(refresh: Option<&Refresh>, coverage: &Coverage) -> bool {
+    !coverage.incomplete && refresh.is_none_or(|r| !r.stale)
+}
+
 /// `refresh` is `None` for a command that runs no refresh, whose `stale` is
 /// then null.
 fn end(
@@ -239,8 +243,7 @@ fn end(
     unit: &str,
     returned: usize,
 ) -> Result<()> {
-    let stale = refresh.map(|r| r.stale);
-    let mut record = json!({"complete": !coverage.incomplete && stale != Some(true), "stale":stale,"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges});
+    let mut record = json!({"complete": complete(refresh, coverage), "stale":refresh.map(|r| r.stale),"next":cursor,"searched":{"unit":unit,"records":coverage.records,"bytes":coverage.bytes,"returned":returned},"unavailable_ranges":coverage.unavailable_ranges});
     if let Some(refresh) = refresh {
         record["refresh"] = json!(refresh);
     }
@@ -262,6 +265,24 @@ fn finish<T: Serialize>(
     }
     end(refresh, coverage, cursor, unit, records.len())?;
     Ok(i32::from(records.is_empty()))
+}
+
+/// Writes a lookup page behind a `begin` record that repeats the page's status
+/// from `end`, because agents keep the first lines of a lookup with `head` or
+/// `cut` far more often than they keep its last line.
+fn finish_page<T: Serialize>(
+    kind: &str,
+    records: &[T],
+    refresh: &Refresh,
+    coverage: &Coverage,
+    cursor: Option<String>,
+    unit: &str,
+) -> Result<i32> {
+    emit(
+        "begin",
+        json!({"complete": complete(Some(refresh), coverage), "stale": refresh.stale, "more": cursor.is_some(), "returned": records.len()}),
+    )?;
+    finish(kind, records, Some(refresh), coverage, cursor, unit)
 }
 
 fn run(cli: Cli) -> Result<i32> {
@@ -401,10 +422,10 @@ fn search(
             ..snapshot
         }),
     )?;
-    finish(
+    finish_page(
         "session",
         &sessions,
-        Some(&refresh),
+        &refresh,
         &coverage,
         cursor,
         "session_hits",
@@ -443,10 +464,10 @@ fn grep(
         snapshot.after,
         sessidx::BUDGET,
     )?;
-    finish(
+    finish_page(
         "hit",
         &hits,
-        Some(&refresh),
+        &refresh,
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
             after: Some(after),
@@ -478,10 +499,10 @@ fn show(
         snapshot.within,
         snapshot.high_water,
     )?;
-    finish(
+    finish_page(
         "record",
         &hits,
-        Some(&refresh),
+        &refresh,
         &coverage,
         encode(coverage.continuation.map(|after| Cursor {
             after: Some(after),

@@ -66,7 +66,7 @@ Not planned: semantic search (one of thirteen lookup misses was a wording mismat
 The consumer is usually an agent with a shell, so the ordinary path must be one short command and the output must compose with `jq`.
 
 - Ranked lookup (`search`) and exhaustive matching (`grep`) are different contracts and stay different verbs; ranked results are grouped by session.
-- Nothing an agent needs exists only on stderr or only in the exit code: the final `end` record carries completeness, staleness, the cursor, and any error with its recovery instruction.
+- Nothing an agent needs exists only on stderr or only in the exit code: the final `end` record carries completeness, staleness, the cursor, and any error with its recovery instruction. A lookup page also states its status first in `begin`, because agents keep a lookup's first lines more often than its last (`page_status` in `docs/formats.md`); removing it as a duplicate of `end` brings that loss back.
 - Enumerated values are validated and have no aliases: an evaluator once passed `claude_code`, got an empty result, and lost four tasks.
 - Add a flag only for a lookup that failed without it; questions the verbs do not answer go through read-only `sql`.
 

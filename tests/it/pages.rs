@@ -22,11 +22,17 @@ fn transcript() -> String {
     lines.iter().map(|l| format!("{l}\n")).collect()
 }
 
-/// Asserts the data lines fit a page and returns their total with newlines.
+/// Asserts the data lines between `begin` and `end` fit a page and returns
+/// their total with newlines.
 fn within_page(stdout: &[u8]) -> usize {
     let text = String::from_utf8_lossy(stdout);
     let lines: Vec<&str> = text.lines().collect();
-    let total = lines[..lines.len() - 1].iter().map(|l| l.len() + 1).sum();
+    // An error has no `begin`; `stream` checks where a page needs one.
+    let first = usize::from(lines[0].contains(r#""type":"begin""#));
+    let total = lines[first..lines.len() - 1]
+        .iter()
+        .map(|l| l.len() + 1)
+        .sum();
     assert!(total <= PAGE, "{total} bytes");
     total
 }
@@ -239,6 +245,7 @@ fn grep_moves_a_hit_that_does_not_fit_to_the_next_page() {
             let rows = stream(&out, exit);
             let sizes = String::from_utf8_lossy(&out.stdout)
                 .lines()
+                .skip(1)
                 .map(|l| l.len() + 1)
                 .collect();
             cursor = rows.last().unwrap()["next"].as_str().map(str::to_owned);
@@ -398,4 +405,32 @@ fn search_shows_a_session_larger_than_a_page_alone() {
     let rows = stream(&out, 0);
     assert_eq!(rows[0]["session_id"], "big");
     assert_eq!(rows.last().unwrap()["complete"], true);
+}
+
+#[test]
+fn a_lookup_cut_to_its_first_line_still_states_its_status() {
+    let serial = serial();
+    let text = transcript();
+    let (_dir, store, roots) = indexed_files(Agent::Claude, &[("pages", &text)]);
+    let path = roots[0].path.join("pages.jsonl").display().to_string();
+    for (args, more) in [
+        (
+            vec!["grep", "searchneedle", "--session", &path, "--limit", "1"],
+            true,
+        ),
+        (vec!["show", &path, "--limit", "1"], true),
+        (vec!["search", "short"], false),
+    ] {
+        let out = sessidx(&serial, &store.path, &roots, &args)
+            .output()
+            .unwrap();
+        // What `| head -n 1` leaves an agent.
+        let text = String::from_utf8_lossy(&out.stdout);
+        let first: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(first["type"], "begin", "{args:?}");
+        assert_eq!(first["complete"], !more, "{args:?}");
+        assert_eq!(first["more"], more, "{args:?}");
+        assert_eq!(first["returned"], 1, "{args:?}");
+        assert!(text.len() > text.lines().next().unwrap().len() + 1);
+    }
 }
