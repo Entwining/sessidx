@@ -9,6 +9,7 @@ use regex::Regex;
 use rusqlite::{Connection, params, params_from_iter, types::Value};
 use serde::Serialize;
 use std::{
+    collections::{BTreeMap, HashSet},
     ops::Range,
     sync::LazyLock,
     time::{Duration, Instant},
@@ -120,6 +121,18 @@ pub struct SearchPage {
     /// The file IDs of the first ranked sessions, which never name another
     /// transcript, when no order was supplied.
     pub order: Option<Vec<i64>>,
+    pub filtered_out: Option<FilteredOut>,
+}
+
+/// What the filters of a search that returned no session hid. Rule:
+/// docs/formats.md `search_filtered_out`.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct FilteredOut {
+    /// Sessions the terms match with no filter.
+    pub sessions: usize,
+    /// For each filter option given, the sessions the terms match with only
+    /// that option removed.
+    pub without: BTreeMap<&'static str, usize>,
 }
 
 /// Ranks matching sessions and returns the first `limit` of them; with a
@@ -133,8 +146,15 @@ pub fn search(
     budget: Duration,
 ) -> Result<SearchPage> {
     let deadline = Instant::now() + budget;
-    if let Some(page) = with_deadline(db, deadline, |db| rank(db, query, filters, limit, deadline))?
+    if let Some(mut page) =
+        with_deadline(db, deadline, |db| rank(db, query, filters, limit, deadline))?
     {
+        // A later page follows one that returned sessions.
+        if page.sessions.is_empty() && filters.search_order.is_none() {
+            // Out of time, the empty page still answers, without the hint.
+            page.filtered_out =
+                with_deadline(db, deadline, |db| filtered_out(db, query, filters))?.flatten();
+        }
         return Ok(page);
     }
     // Filters apply after each match is read, so they do not shorten the
@@ -246,7 +266,48 @@ fn rank(
             Some(order) if frozen.is_none() => Some(serde_json::from_str(&order)?),
             _ => None,
         },
+        filtered_out: None,
     })
+}
+
+/// Counts the sessions `query` matches without `filters`, and without each
+/// one of them; `None` when no filter was given.
+fn filtered_out(db: &Connection, query: &str, filters: &Filters) -> Result<Option<FilteredOut>> {
+    let conditions = filters.conditions(db)?;
+    if conditions.is_empty() {
+        return Ok(None);
+    }
+    // A bit per filter that a match fails.
+    let failed = conditions
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("(({}) IS NOT TRUE)*{}", c.sql, 1 << i))
+        .collect::<Vec<_>>()
+        .join("+");
+    let mut args: Vec<Value> = conditions.iter().flat_map(|c| c.args.clone()).collect();
+    args.push(Value::Text(fts_query(query)?));
+    let mut stmt = db.prepare(&format!(
+        "SELECT DISTINCT e.file_id,{failed}
+        FROM event_rows e JOIN sessions s ON s.file_id=e.file_id
+        JOIN fts ON fts.rowid=e.id WHERE fts MATCH ?
+          AND NOT {IN_FLIGHT_LOOKUP}"
+    ))?;
+    let mut sessions = HashSet::new();
+    let mut without = vec![0; conditions.len()];
+    let mut rows = stmt.query(params_from_iter(args))?;
+    while let Some(row) = rows.next()? {
+        sessions.insert(row.get::<_, i64>(0)?);
+        let failed: usize = row.get(1)?;
+        // Every match fails some filter, so one that fails a single filter
+        // puts its session in the result without that filter.
+        if failed.is_power_of_two() {
+            without[failed.trailing_zeros() as usize] += 1;
+        }
+    }
+    Ok(Some(FilteredOut {
+        sessions: sessions.len(),
+        without: conditions.iter().map(|c| c.option).zip(without).collect(),
+    }))
 }
 
 /// Keeps the sessions that fit a page; a session that does not fit after

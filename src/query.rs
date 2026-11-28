@@ -87,23 +87,12 @@ impl Filters {
 
     /// The filters on events `e` themselves: role, time, and high-water mark.
     pub fn event_sql(&self) -> (String, Vec<Value>) {
-        let mut conditions = vec!["1=1".to_owned()];
-        let mut args = Vec::new();
+        let (mut sql, mut args) = all(self.event_conditions());
         if let Some(high_water) = self.high_water {
-            conditions.push("e.id<=?".into());
+            sql.push_str(" AND e.id<=?");
             args.push(Value::Integer(high_water));
         }
-        if let Some(role) = self.role {
-            conditions.push("e.role=?".into());
-            args.push(Value::Text(name(role)));
-        }
-        for (op, value) in [(">=", self.since()), ("<", self.until())] {
-            if let Some(value) = value {
-                conditions.push(format!("e.ts{op}?"));
-                args.push(Value::Text(value));
-            }
-        }
-        (conditions.join(" AND "), args)
+        (sql, args)
     }
 
     /// `--since` in the stored timestamp format.
@@ -118,31 +107,94 @@ impl Filters {
 
     /// The filters on sessions `s`: agent, kind, selector, and directory.
     pub fn session_sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
-        let mut conditions = vec!["1=1".to_owned()];
-        let mut args = Vec::new();
-        if !self.agent.is_empty() {
-            conditions.push(format!(
-                "s.agent IN ({})",
-                vec!["?"; self.agent.len()].join(",")
-            ));
-            args.extend(self.agent.iter().map(|h| Value::Text(name(*h))));
+        Ok(all(self.session_conditions(db)?))
+    }
+
+    /// Each option given that filters events `e` themselves.
+    fn event_conditions(&self) -> Vec<Condition> {
+        let mut conditions = Vec::new();
+        if let Some(role) = self.role {
+            conditions.push(Condition {
+                option: "--role",
+                sql: "e.role=?".into(),
+                args: vec![Value::Text(name(role))],
+            });
         }
-        if let Some(kind) = self.session_kind {
-            conditions.push("s.session_kind=?".into());
-            args.push(Value::Text(name(kind)));
-        }
-        if let Some(session) = &self.session {
-            conditions.push("s.file_id=?".into());
-            args.push(Value::Integer(session_file(db, session)?));
-        }
-        if let Some(cwd) = &self.cwd {
-            conditions.push("(s.cwd=? OR substr(s.cwd,1,length(?)+1)=?||'/')".into());
-            for _ in 0..3 {
-                args.push(Value::Text(cwd.trim_end_matches('/').to_owned()));
+        for (option, op, value) in [
+            ("--since", ">=", self.since()),
+            ("--until", "<", self.until()),
+        ] {
+            if let Some(value) = value {
+                conditions.push(Condition {
+                    option,
+                    sql: format!("e.ts{op}?"),
+                    args: vec![Value::Text(value)],
+                });
             }
         }
-        Ok((conditions.join(" AND "), args))
+        conditions
     }
+
+    /// Each option given that filters sessions `s`.
+    fn session_conditions(&self, db: &Connection) -> Result<Vec<Condition>> {
+        let mut conditions = Vec::new();
+        if !self.agent.is_empty() {
+            conditions.push(Condition {
+                option: "--agent",
+                sql: format!("s.agent IN ({})", vec!["?"; self.agent.len()].join(",")),
+                args: self.agent.iter().map(|h| Value::Text(name(*h))).collect(),
+            });
+        }
+        if let Some(kind) = self.session_kind {
+            conditions.push(Condition {
+                option: "--session-kind",
+                sql: "s.session_kind=?".into(),
+                args: vec![Value::Text(name(kind))],
+            });
+        }
+        if let Some(session) = &self.session {
+            conditions.push(Condition {
+                option: "--session",
+                sql: "s.file_id=?".into(),
+                args: vec![Value::Integer(session_file(db, session)?)],
+            });
+        }
+        if let Some(cwd) = &self.cwd {
+            conditions.push(Condition {
+                option: "--cwd",
+                sql: "(s.cwd=? OR substr(s.cwd,1,length(?)+1)=?||'/')".into(),
+                args: vec![Value::Text(cwd.trim_end_matches('/').to_owned()); 3],
+            });
+        }
+        Ok(conditions)
+    }
+
+    /// Each filter option given, with the condition it puts on events `e`
+    /// joined to their sessions `s`.
+    pub(crate) fn conditions(&self, db: &Connection) -> Result<Vec<Condition>> {
+        let mut conditions = self.session_conditions(db)?;
+        conditions.extend(self.event_conditions());
+        Ok(conditions)
+    }
+}
+
+/// One condition of a query with its arguments, under the filter option that
+/// asked for it.
+pub(crate) struct Condition {
+    pub option: &'static str,
+    pub sql: String,
+    pub args: Vec<Value>,
+}
+
+/// The conjunction of `conditions`, true when there are none.
+fn all(conditions: Vec<Condition>) -> (String, Vec<Value>) {
+    let mut sql = vec!["1=1".to_owned()];
+    let mut args = Vec::new();
+    for condition in conditions {
+        sql.push(condition.sql);
+        args.extend(condition.args);
+    }
+    (sql.join(" AND "), args)
 }
 
 /// Whether the source line of event `e` holds a `sessidx` tool call whose

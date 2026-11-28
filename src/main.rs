@@ -247,6 +247,9 @@ fn end(
     if let Some(refresh) = refresh {
         record["refresh"] = json!(refresh);
     }
+    if let Some(filtered_out) = &coverage.filtered_out {
+        record["filtered_out"] = json!(filtered_out);
+    }
     emit("end", record)
 }
 
@@ -414,6 +417,7 @@ fn search(
     let coverage = Coverage {
         incomplete: more,
         records,
+        filtered_out: found.filtered_out,
         ..Coverage::default()
     };
     let cursor = encode(

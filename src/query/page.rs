@@ -1,3 +1,4 @@
+use super::search::FilteredOut;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value as Json;
@@ -98,6 +99,8 @@ pub struct Coverage {
     pub unavailable_ranges: usize,
     pub records: usize,
     pub bytes: u64,
+    /// search: what the filters of a page without sessions hid.
+    pub filtered_out: Option<FilteredOut>,
 }
 
 /// Data lines per page, in bytes. Rule: docs/formats.md `display_page`.

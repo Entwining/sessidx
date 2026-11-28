@@ -1,4 +1,4 @@
-use crate::common::{body, indexed, indexed_files, search_hits, stored};
+use crate::common::{body, indexed, indexed_files, search_hits, serial, sessidx, stored, stream};
 use sessidx::{
     counting,
     discovery::Root,
@@ -1210,4 +1210,115 @@ fn search_stops_at_its_budget_with_a_recovery_instruction() {
     .err()
     .unwrap();
     assert!(format!("{error:#}").contains("no such table"), "{error:#}");
+}
+
+#[test]
+fn a_filtered_search_without_sessions_counts_what_its_filters_hid() {
+    let serial = serial();
+    let message = |session: &str, cwd: &str, role: &str, ts: Option<&str>| {
+        let mut record = serde_json::json!({"type":role,"uuid":format!("{session}-1"),"sessionId":session,"cwd":cwd,"message":{"role":role,"content":"hintneedle"}});
+        if let Some(ts) = ts {
+            record["timestamp"] = ts.into();
+        }
+        format!("{record}\n")
+    };
+    // The lookup itself, which names its own term while it runs.
+    let running = serde_json::json!({"type":"assistant","uuid":"running","sessionId":"caller","cwd":"/x/caller","timestamp":"2026-10-03T00:00:00Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"running","name":"Bash","input":{"command":"sessidx search hintneedle --cwd /x/none"}}]}}).to_string()
+        + "\n";
+    let (_dir, mut store, roots) = indexed_files(
+        Agent::Claude,
+        &[
+            // Two matches in one session, which counts once.
+            (
+                "early",
+                &(message("early", "/x/a", "user", Some("2026-10-01T00:00:00Z"))
+                    + &message("early", "/x/a", "user", Some("2026-10-01T00:00:00Z"))
+                        .replace("early-1", "early-2")),
+            ),
+            (
+                "late",
+                &message("late", "/x/b", "assistant", Some("2026-10-05T00:00:00Z")),
+            ),
+            ("undated", &message("undated", "/x/b", "user", None)),
+            ("caller", &running),
+        ],
+    );
+    let end = |args: &[&str], exit: i32| {
+        let args = [&["search"], args].concat();
+        let out = sessidx(&serial, &store.path, &roots, &args)
+            .output()
+            .unwrap();
+        stream(&out, exit).pop().unwrap()
+    };
+    let hidden = |args: &[&str]| end(args, 1)["filtered_out"].clone();
+    assert_eq!(
+        hidden(&["hintneedle", "--cwd", "/x/none"]),
+        serde_json::json!({"sessions":3,"without":{"--cwd":3}})
+    );
+    // Each filter alone hides the sessions the other keeps.
+    assert_eq!(
+        hidden(&["hintneedle", "--cwd", "/x/a", "--role", "assistant"]),
+        serde_json::json!({"sessions":3,"without":{"--cwd":1,"--role":1}})
+    );
+    // Removing either filter alone still returns nothing.
+    assert_eq!(
+        hidden(&[
+            "hintneedle",
+            "--cwd",
+            "/x/none",
+            "--agent",
+            "pi",
+            "--agent",
+            "codex"
+        ]),
+        serde_json::json!({"sessions":3,"without":{"--agent":0,"--cwd":0}})
+    );
+    // An event without a time is outside every time window, so removing
+    // one bound does not return it.
+    assert_eq!(
+        hidden(&[
+            "hintneedle",
+            "--since",
+            "2026-11-01",
+            "--until",
+            "2026-12-01"
+        ]),
+        serde_json::json!({"sessions":3,"without":{"--since":2,"--until":0}})
+    );
+    assert_eq!(
+        hidden(&[
+            "hintneedle",
+            "--session",
+            "caller",
+            "--session-kind",
+            "unknown"
+        ]),
+        serde_json::json!({"sessions":3,"without":{"--session":3,"--session-kind":0}})
+    );
+    // The terms match nothing, so no filter is the cause.
+    assert_eq!(
+        hidden(&["absentneedle", "--cwd", "/x/a"]),
+        serde_json::json!({"sessions":0,"without":{"--cwd":0}})
+    );
+    assert!(end(&["absentneedle"], 1).get("filtered_out").is_none());
+    assert!(
+        end(&["hintneedle", "--cwd", "/x/a"], 0)
+            .get("filtered_out")
+            .is_none()
+    );
+    // A later page that returns nothing follows one that returned sessions.
+    let later = query::search(
+        &mut store.db,
+        "hintneedle",
+        &Filters {
+            cwd: Some("/x/none".into()),
+            search_order: Some(vec![1]),
+            ..Filters::default()
+        },
+        20,
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    assert!(later.sessions.is_empty());
+    assert_eq!(later.filtered_out, None);
 }
